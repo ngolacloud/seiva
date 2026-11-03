@@ -21,8 +21,13 @@
 - Membro do workspace Seiva; testes live acoplados ao outbox removidos (voltam como
   testes do relay-worker). 22 grupos de testes; clippy `--all-features` e doc `-D
   warnings` limpos.
-- **FALTA (PR à parte no DORM):** remover o `dorm-messaging` do DORM com nota de
-  redirecção (depreciação antes de remoção). E o relay-worker do Seiva (OutboxBus).
+- **Relay-worker re-homed:** o antigo `OutboxBus` (ponte outbox→broker) voltou como
+  **`seiva-outbox-relay`** — `forward`/`drain` (uma passagem) sobre o `dorm-outbox`
+  (git rev `f43d873`) + `Publisher` do `seiva-messaging`. Compila contra o DORM real;
+  excluído do workspace (git-coupled, como o gateway). O ciclo/intervalo/shutdown é o
+  runtime de workers do Seiva (por cima destas funções de 1 passagem).
+- **FALTA (PR à parte no DORM):** remover/depreciar o `dorm-messaging` no DORM com nota
+  de redirecção. ⚠️ dono activo no DORM main (`288fcbc`, 13 PRs merged).
 
 ### `UnitOfWork` por escopo + ligado ao DORM (ADR 0004, decisão do dono)
 - **Decisão #2 do dono:** o port `UnitOfWork` passa a ser **por escopo** —

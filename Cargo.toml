@@ -13,7 +13,7 @@ resolver = "2"
 # private DORM repo (a pinned git dependency), which the public CI does not have
 # without a token. It is built on its own to prove the boundary crossing until
 # the `dorm` feature wires it in (owner decision: CI token + build coupling).
-exclude = ["crates/seiva-data-dorm"]
+exclude = ["crates/seiva-data-dorm", "crates/seiva-outbox-relay"]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,
     # EventPublisher, Clock, IdGenerator. No runtime, no macros, no deps. Kept
