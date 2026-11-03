@@ -6,7 +6,29 @@
 
 ## Estado (2026-11-03)
 
-**Fundação + núcleo + macro `#[seiva::facade]` + zero-trust `[[uses]]`/`[[allow]]`.**
+**Fundação + núcleo + facade + zero-trust lint + scaffolding (`project/module new`).**
+
+### Scaffolding — `scaffold` + `seiva project new`/`module new`
+- **`scaffold`** (`delonix-seiva`): geração **pura** (`caminho → conteúdo`,
+  testável sem disco) — `project_files`, `module_files` — mais edições puras de
+  registação (`add_members_to_workspace`, `register_module_in_seiva_toml`,
+  `append_namespace_block`) e `validate_name` (snake_case ASCII). 6 testes.
+- **`seiva project new <nome>`**: gera `seiva.toml`, workspace `Cargo.toml`
+  (gerido pela CLI, com âncora de membros), `apps/<nome>-api`, `shared/kernel`,
+  `schema/<nome>.schema`, `.gitignore`, README.
+- **`seiva module new <nome>`**: gera as **5 camadas** (`facade`, `domain`,
+  `application`, `infrastructure`, `interface`) + `module.toml`, e **regista** nos
+  membros do workspace, no `seiva.toml` e com um bloco `namespace` no schema.
+  `--data external` ainda reporta não-implementado (fase da camada de dados).
+- **Provado ponta-a-ponta** (projecto gerado `shop` + módulos `notes`/`identity`):
+  - `cargo build` do workspace gerado (12 crates) → verde;
+  - **regra de camadas imposta pelo compilador**: `domain` a importar
+    `application` → `error[E0433] unresolved module` (o grafo de crates recusa);
+  - **zero-trust** no projecto gerado: `uses` sem `allow` → exit 1; com `allow` → 0;
+  - nomes inválidos (`Bad`, `order-items`) recusados.
+- **Corte honesto:** os crates gerados compilam **autónomos** (sem dep do
+  framework ainda). Ligar ao runtime (macro `#[seiva::facade]`, ports, HTTP/gRPC,
+  DI) é fase seguinte — anotado nos ficheiros gerados.
 
 ### Zero-trust de módulos — `manifest` + `lint` (1.ª fitness function)
 - **`manifest`** (`delonix-seiva`): parse tipado do `module.toml`
