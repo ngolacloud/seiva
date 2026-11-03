@@ -1,0 +1,28 @@
+# delonix-seiva — the framework crate downstream applications depend on.
+#
+# The public entrypoint of Delonix Seiva. Re-exports the ports and, as the
+# framework grows, the HTTP/gRPC runtime, the application-layer command/query
+# dispatch, the worker runtime and the macros. The DORM data layer is NOT a
+# dependency here: it enters only through the separate `seiva-data-dorm` gateway
+# behind the `dorm` feature (ADR 0001, decision 5).
+[package]
+name = "delonix-seiva"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Delonix Seiva — a Rust backend framework for robust, high-criticality systems. Only backend; DORM as the default data layer."
+
+[dependencies]
+seiva-ports = { workspace = true }
+
+[features]
+# DORM wired in by default, but as a feature so a project whose every module
+# uses an external data layer can switch it off and pull in no ORM at all. The
+# gateway crate that the feature will pull in (`seiva-data-dorm`) does not exist
+# yet; the flag is declared here now so the boundary is visible from day one.
+default = ["dorm"]
+dorm = []

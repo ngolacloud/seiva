@@ -1,0 +1,32 @@
+# seiva-cli — the installable CLI, binary `seiva`.
+#
+# Scaffolds projects and modules, runs the dev loop, and lints the architecture.
+# Like DORM's `dorm` binary, every command is a thin layer over a public library
+# function with a typed result; this crate only reads arguments and environment
+# and calls them. The command tree is declared here from day one so the shape is
+# reviewable; subcommands that are not built yet report that honestly instead of
+# faking success.
+[package]
+name = "seiva-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The Delonix Seiva CLI (binary `seiva`): scaffold projects and modules, run the dev loop, lint the architecture."
+
+[[bin]]
+name = "seiva"
+path = "src/main.rs"
+
+[dependencies]
+delonix-seiva = { workspace = true }
+clap = { workspace = true }
+
+[features]
+# Forward the data-layer toggle to the framework crate so `--no-default-features`
+# on the binary genuinely links a DORM-free build (provable via `seiva doctor`).
+default = ["dorm"]
+dorm = ["delonix-seiva/dorm"]

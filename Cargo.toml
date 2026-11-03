@@ -1,0 +1,45 @@
+# Delonix Seiva — a Rust backend framework for robust, high-criticality systems.
+#
+# Seiva is the SERVICE, DISTRIBUTION and DOMAIN layer around a data source. The
+# data source by default is DORM (the Delonix ORM, an independent product), wired
+# in only through the optional `seiva-data-dorm` gateway behind the `dorm`
+# feature. The framework CORE never depends on DORM: a project whose every module
+# uses an external data layer pulls in no ORM at all.
+#
+# Dependency is one-way: Seiva depends on DORM (by feature); DORM never on Seiva.
+[workspace]
+resolver = "2"
+members = [
+    # Trait-only boundary the application layer codes against: UnitOfWork,
+    # EventPublisher, Clock, IdGenerator. No runtime, no macros, no deps. Kept
+    # SemVer-stable by policy so a module's `application` can declare what it
+    # needs without depending on the framework.
+    "crates/seiva-ports",
+    # The framework crate: the public entrypoint downstream apps depend on.
+    "crates/delonix-seiva",
+    # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
+    # projects and modules, runs the dev loop, lints the architecture.
+    "crates/seiva-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# Dual-licensed as the Rust ecosystem is by convention, matching the Delonix
+# family (DORM, Delonix Engine), so a downstream crate can pick whichever fits.
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+
+[workspace.dependencies]
+seiva-ports = { version = "0.1.0", path = "crates/seiva-ports" }
+# default-features off here (not at the member use site): next to `workspace =
+# true` the member-level `default-features` key is ignored, so the DORM toggle
+# must be declared off at the workspace root and re-enabled by `seiva-cli`'s
+# own `dorm` feature.
+delonix-seiva = { version = "0.1.0", path = "crates/delonix-seiva", default-features = false }
+async-trait = "0.1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }

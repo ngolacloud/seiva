@@ -1,0 +1,23 @@
+# seiva-ports — the trait-only boundary the application layer codes against.
+#
+# NO runtime, NO macros, NO framework. Only trait definitions and the value
+# types their signatures need. A module's `application` crate depends on this
+# (never on `delonix-seiva`) to declare the outbound capabilities it needs; the
+# `infrastructure` crate provides implementations. Kept SemVer-stable by policy:
+# every downstream and every generated in-memory double code against it.
+[package]
+name = "seiva-ports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Trait-only ports (UnitOfWork, EventPublisher, Clock, IdGenerator) for the Delonix Seiva framework."
+
+[dependencies]
+# The single allowed dependency: async fns in traits still need boxing for
+# object safety across the `dyn Port` boundary the framework resolves. No
+# runtime, no framework, no data layer rides in through this.
+async-trait = { workspace = true }
