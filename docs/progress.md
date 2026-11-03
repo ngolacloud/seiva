@@ -6,7 +6,25 @@
 
 ## Estado (2026-11-03)
 
-**Fundação + núcleo + facade + zero-trust lint + scaffolding (`project/module new`).**
+**Fundação + núcleo + facade + zero-trust lint + scaffolding + módulo de referência ligado.**
+
+### Módulo de referência ligado ao framework — `examples/notes` (ADR 0003)
+- Módulo canónico de 5 camadas no workspace do Seiva, ligado aos crates **reais**
+  (`delonix-seiva`, `seiva-ports`, `seiva-testing`): prova de integração + alvo
+  que o gerador vai emitir. (Path-deps porque nada do Seiva está publicado ainda.)
+- **ADR 0003 (Accepted):** fixa **onde vive a implementação da fachada** — na
+  `application` (hexagonal: serviço de aplicação implementa o port de entrada),
+  porque `interface` não pode depender de `domain` e `facade` não se implementa a
+  si própria. A regra de camadas é sobre dependências **directas**. Grafo:
+  `facade→delonix-seiva`; `domain→∅`; `application→domain,facade,seiva-ports`;
+  `infrastructure→application,domain,seiva-ports`; `interface→application,facade`.
+- **Provado:** `notes-domain` (regra título não-vazio, 1 teste); `notes-application`
+  (`NotesService` implementa `Notes`, usa `IdGenerator`/`UnitOfWorkFactory`/
+  `EventPublisher`, port `NoteRepository`; 2 testes com os dublês do `seiva-testing`
+  + repo falso — sem servidor/broker/BD); facade com `#[seiva::facade]` real;
+  `infrastructure` (`InMemoryNoteRepository`); `interface` (`NotesApi<S: Notes>`).
+- **Erro mapeado na fronteira:** dentro da app, `PortResult`/`BoxError`; no trait
+  da fachada, `-> Result<_, String>` (sem vazar detalhe interno).
 
 ### Scaffolding — `scaffold` + `seiva project new`/`module new`
 - **`scaffold`** (`delonix-seiva`): geração **pura** (`caminho → conteúdo`,

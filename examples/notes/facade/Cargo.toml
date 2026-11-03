@@ -1,0 +1,11 @@
+# Facade layer of the canonical `notes` example module: the public contract.
+# May depend only on shared/kernel and the Seiva macros (ADR 0003).
+[package]
+name = "notes-facade"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+delonix-seiva = { workspace = true }

@@ -1,0 +1,13 @@
+# Infrastructure layer of the `notes` example: the repository adapter.
+# Depends on application + domain + seiva-ports. Not on interface (ADR 0003).
+[package]
+name = "notes-infrastructure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+notes-application = { path = "../application" }
+notes-domain = { path = "../domain" }
+seiva-ports = { workspace = true }

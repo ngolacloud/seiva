@@ -25,6 +25,13 @@ members = [
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
     # projects and modules, runs the dev loop, lints the architecture.
     "crates/seiva-cli",
+    # The canonical five-layer module, wired to the real framework crates: the
+    # independence/integration proof and the shape the scaffolder emits (ADR 0003).
+    "examples/notes/facade",
+    "examples/notes/domain",
+    "examples/notes/application",
+    "examples/notes/infrastructure",
+    "examples/notes/interface",
 ]
 
 [workspace.package]

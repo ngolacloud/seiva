@@ -155,6 +155,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
+name = "notes-application"
+version = "0.1.0"
+dependencies = [
+ "notes-domain",
+ "notes-facade",
+ "seiva-ports",
+ "seiva-testing",
+ "tokio",
+]
+
+[[package]]
+name = "notes-domain"
+version = "0.1.0"
+
+[[package]]
+name = "notes-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "notes-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "notes-application",
+ "notes-domain",
+ "seiva-ports",
+]
+
+[[package]]
+name = "notes-interface"
+version = "0.1.0"
+dependencies = [
+ "notes-facade",
+]
+
+[[package]]
 name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

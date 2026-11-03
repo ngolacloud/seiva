@@ -1,0 +1,19 @@
+# Application layer of the `notes` example: the service (facade impl) and the
+# outbound port. Depends on domain, its own facade (DTOs + trait) and
+# seiva-ports. Not on infrastructure, interface, or delonix-seiva directly
+# (ADR 0003).
+[package]
+name = "notes-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+notes-domain = { path = "../domain" }
+notes-facade = { path = "../facade" }
+seiva-ports = { workspace = true }
+
+[dev-dependencies]
+seiva-testing = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
