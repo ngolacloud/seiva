@@ -83,6 +83,43 @@ fn not_yet(what: &str, phase: &str) -> ExitCode {
     ExitCode::from(64)
 }
 
+fn lint() -> ExitCode {
+    // CLI stays thin: scan the project and let the library decide. Run from the
+    // project root; module manifests live at `modules/<name>/module.toml`.
+    let root = std::path::Path::new(".");
+    match delonix_seiva::lint::lint_project(root) {
+        Ok(report) if report.modules_checked == 0 => {
+            println!("seiva lint: no modules found under ./modules (nothing to check).");
+            ExitCode::SUCCESS
+        }
+        Ok(report) if report.is_clean() => {
+            println!(
+                "seiva lint: contract check passed for {} module(s).",
+                report.modules_checked
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(report) => {
+            eprintln!(
+                "seiva lint: {} contract violation(s) across {} module(s):",
+                report.violations.len(),
+                report.modules_checked
+            );
+            for violation in &report.violations {
+                eprintln!(
+                    "  [{}] {}: {}",
+                    violation.rule, violation.module, violation.message
+                );
+            }
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            eprintln!("seiva lint: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn doctor() -> ExitCode {
     println!("Delonix Seiva");
     println!("  framework version : {}", delonix_seiva::VERSION);
@@ -113,7 +150,7 @@ fn main() -> ExitCode {
             DbAction::Dev { .. } => not_yet("db dev", "the data-layer phase"),
             DbAction::Migrate => not_yet("db migrate", "the data-layer phase"),
         },
-        Command::Lint => not_yet("lint", "the fitness-functions phase"),
+        Command::Lint => lint(),
         Command::Expand => not_yet("expand", "the macros phase"),
         Command::Start => not_yet("start", "the runtime phase"),
     }

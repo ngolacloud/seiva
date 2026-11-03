@@ -25,6 +25,8 @@ pub mod ports {
 }
 
 pub mod contract;
+pub mod lint;
+pub mod manifest;
 
 /// Marks a trait as a module's versioned public contract (ADR 0001). See
 /// [`contract`] for what it generates and the hand-written equivalent.

@@ -6,7 +6,25 @@
 
 ## Estado (2026-11-03)
 
-**Fundação + núcleo (ports & dublês) + macro `#[seiva::facade]` (1.º corte).**
+**Fundação + núcleo + macro `#[seiva::facade]` + zero-trust `[[uses]]`/`[[allow]]`.**
+
+### Zero-trust de módulos — `manifest` + `lint` (1.ª fitness function)
+- **`manifest`** (`delonix-seiva`): parse tipado do `module.toml`
+  (`[module]` name/facade/owners, `[[uses]]`, `[[allow]]`) com `serde`+`toml`;
+  erros marcam o caminho. 3 testes.
+- **`lint::check_contracts`** (puro, sem I/O): impõe a regra do brief — todo
+  `[[uses]]` precisa de `[[allow]]` correspondente no fornecedor, versões de
+  fachada coincidem, nomes únicos; **tudo negado por omissão**. Regras:
+  `uses-without-allow`, `method-not-allowed`, `uses-unknown-module`,
+  `facade-version-mismatch`, `duplicate-module-name`. 6 testes.
+- **`lint::lint_project`** varre `modules/*/module.toml` (ordem determinística).
+- **`seiva lint` deixou de ser stub**: chama a biblioteca (regra CLI-fina).
+  Provado ao vivo: contrato coincidente → exit 0; sem `[[allow]]` →
+  `uses-without-allow` exit 1; sem `modules/` → nada a verificar exit 0.
+- **Falta** (fases seguintes do lint): regra de dependência entre camadas
+  (`domain`↛`infrastructure`, etc.), sem FK/leitura entre módulos, verificar que
+  os métodos de `[[uses]]` existem no `FacadeDescriptor`, `--owners`, orçamentos
+  de latência, análise de segurança.
 
 ### Contrato Rust-first — macro `#[seiva::facade]` (ADR 0001)
 - **Crate novo `seiva-macros`** (proc-macro; só `syn`/`quote`/`proc-macro2`).
