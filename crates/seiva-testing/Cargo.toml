@@ -1,0 +1,26 @@
+# seiva-testing — in-memory reference doubles for the core ports.
+#
+# One double per port in `seiva-ports`, so a module's `application` crate can
+# unit-test its use cases with no server, broker or database. Depends only on
+# `seiva-ports` (plus `async-trait`); pulled in as a `dev-dependency`, so it
+# never enters a release build. These are the shape the scaffolding phase will
+# generate per module, and the fallback a module can use directly.
+[package]
+name = "seiva-testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "In-memory reference doubles for the Delonix Seiva core ports (Clock, IdGenerator, EventPublisher, UnitOfWork)."
+
+[dependencies]
+seiva-ports = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+# Only the doubles' own tests need an executor; downstream modules bring their
+# own. Kept to the current-thread runtime plus the test macro.
+tokio = { workspace = true, features = ["rt", "macros"] }

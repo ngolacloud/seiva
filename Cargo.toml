@@ -15,6 +15,9 @@ members = [
     # SemVer-stable by policy so a module's `application` can declare what it
     # needs without depending on the framework.
     "crates/seiva-ports",
+    # In-memory reference doubles for the ports, so a module's application layer
+    # unit-tests with no server, broker or database. A dev-dependency only.
+    "crates/seiva-testing",
     # The framework crate: the public entrypoint downstream apps depend on.
     "crates/delonix-seiva",
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
@@ -40,6 +43,8 @@ seiva-ports = { version = "0.1.0", path = "crates/seiva-ports" }
 # must be declared off at the workspace root and re-enabled by `seiva-cli`'s
 # own `dorm` feature.
 delonix-seiva = { version = "0.1.0", path = "crates/delonix-seiva", default-features = false }
+seiva-testing = { version = "0.1.0", path = "crates/seiva-testing" }
 async-trait = "0.1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+tokio = { version = "1" }

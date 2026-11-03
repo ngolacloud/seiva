@@ -1,0 +1,328 @@
+//! In-memory reference doubles for the core ports (ADR 0002).
+//!
+//! One double per port in [`seiva_ports`]. Construct a use case with these and
+//! assert on recorded events and transaction outcomes, with no server, broker
+//! or database involved. Each double is cheap to clone and shares its recorded
+//! state, so a test can hold a handle, pass a clone into the handler, and read
+//! back what happened.
+
+#![forbid(unsafe_code)]
+
+use async_trait::async_trait;
+use seiva_ports::{
+    Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork, UnitOfWorkFactory,
+};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// A [`Clock`] fixed at a chosen instant, advanceable for time-based tests.
+#[derive(Clone)]
+pub struct FixedClock {
+    now: Arc<Mutex<SystemTime>>,
+}
+
+impl FixedClock {
+    /// A clock fixed at `t`.
+    pub fn at(t: SystemTime) -> Self {
+        Self {
+            now: Arc::new(Mutex::new(t)),
+        }
+    }
+
+    /// A clock fixed at `secs` seconds after the Unix epoch.
+    pub fn at_unix_secs(secs: u64) -> Self {
+        Self::at(UNIX_EPOCH + Duration::from_secs(secs))
+    }
+
+    /// Moves the clock forward by `by`.
+    pub fn advance(&self, by: Duration) {
+        let mut now = self.now.lock().expect("FixedClock poisoned");
+        *now += by;
+    }
+}
+
+impl Clock for FixedClock {
+    fn now(&self) -> SystemTime {
+        *self.now.lock().expect("FixedClock poisoned")
+    }
+}
+
+/// An [`IdGenerator`] that hands out deterministic ids from a counter, written
+/// big-endian into the 16 bytes of [`Id`].
+#[derive(Clone)]
+pub struct SequenceIdGenerator {
+    next: Arc<Mutex<u128>>,
+}
+
+impl SequenceIdGenerator {
+    /// A generator whose first id is `1`.
+    pub fn new() -> Self {
+        Self::starting_at(1)
+    }
+
+    /// A generator whose first id is `start`.
+    pub fn starting_at(start: u128) -> Self {
+        Self {
+            next: Arc::new(Mutex::new(start)),
+        }
+    }
+}
+
+impl Default for SequenceIdGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IdGenerator for SequenceIdGenerator {
+    fn new_id(&self) -> Id {
+        let mut next = self.next.lock().expect("SequenceIdGenerator poisoned");
+        let value = *next;
+        *next += 1;
+        Id(value.to_be_bytes())
+    }
+}
+
+/// One event captured by [`RecordingEventPublisher`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedEvent {
+    pub topic: String,
+    pub payload: Vec<u8>,
+}
+
+/// An [`EventPublisher`] that records every published event for assertions.
+#[derive(Clone, Default)]
+pub struct RecordingEventPublisher {
+    events: Arc<Mutex<Vec<RecordedEvent>>>,
+}
+
+impl RecordingEventPublisher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every event published so far, in order.
+    pub fn events(&self) -> Vec<RecordedEvent> {
+        self.events.lock().expect("publisher poisoned").clone()
+    }
+
+    /// The topics published so far, in order.
+    pub fn topics(&self) -> Vec<String> {
+        self.events().into_iter().map(|event| event.topic).collect()
+    }
+
+    /// How many events were published.
+    pub fn count(&self) -> usize {
+        self.events.lock().expect("publisher poisoned").len()
+    }
+}
+
+#[async_trait]
+impl EventPublisher for RecordingEventPublisher {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> PortResult<()> {
+        self.events
+            .lock()
+            .expect("publisher poisoned")
+            .push(RecordedEvent {
+                topic: topic.to_owned(),
+                payload: payload.to_owned(),
+            });
+        Ok(())
+    }
+}
+
+/// What happened to a transaction opened through [`InMemoryUnitOfWorkFactory`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxOutcome {
+    Committed,
+    RolledBack,
+}
+
+/// A [`UnitOfWorkFactory`] that records the outcome of every transaction it
+/// opens. Hold a handle (or a clone), pass a clone into the handler, then read
+/// [`outcomes`](Self::outcomes) back after the use case runs.
+#[derive(Clone, Default)]
+pub struct InMemoryUnitOfWorkFactory {
+    log: Arc<Mutex<Vec<TxOutcome>>>,
+}
+
+impl InMemoryUnitOfWorkFactory {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The outcome of every transaction opened so far, in order.
+    pub fn outcomes(&self) -> Vec<TxOutcome> {
+        self.log.lock().expect("uow factory poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl UnitOfWorkFactory for InMemoryUnitOfWorkFactory {
+    async fn begin(&self) -> PortResult<Box<dyn UnitOfWork>> {
+        Ok(Box::new(InMemoryUnitOfWork {
+            hooks: Vec::new(),
+            log: self.log.clone(),
+        }))
+    }
+}
+
+/// The transaction handed out by [`InMemoryUnitOfWorkFactory`]. Runs its
+/// `on_commit` hooks on commit and discards them on rollback, mirroring the
+/// real guarantee so a test proves the contract the DORM-backed one must keep.
+struct InMemoryUnitOfWork {
+    hooks: Vec<Box<dyn FnOnce() + Send + 'static>>,
+    log: Arc<Mutex<Vec<TxOutcome>>>,
+}
+
+#[async_trait]
+impl UnitOfWork for InMemoryUnitOfWork {
+    async fn commit(mut self: Box<Self>) -> PortResult<()> {
+        self.log
+            .lock()
+            .expect("uow factory poisoned")
+            .push(TxOutcome::Committed);
+        for hook in self.hooks.drain(..) {
+            hook();
+        }
+        Ok(())
+    }
+
+    async fn rollback(mut self: Box<Self>) -> PortResult<()> {
+        self.log
+            .lock()
+            .expect("uow factory poisoned")
+            .push(TxOutcome::RolledBack);
+        self.hooks.clear();
+        Ok(())
+    }
+
+    fn on_commit(&mut self, hook: Box<dyn FnOnce() + Send + 'static>) {
+        self.hooks.push(hook);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn fixed_clock_holds_and_advances() {
+        let clock = FixedClock::at_unix_secs(1_000);
+        assert_eq!(clock.now(), UNIX_EPOCH + Duration::from_secs(1_000));
+        clock.advance(Duration::from_secs(5));
+        assert_eq!(clock.now(), UNIX_EPOCH + Duration::from_secs(1_005));
+    }
+
+    #[test]
+    fn sequence_ids_are_deterministic_and_distinct() {
+        let gen = SequenceIdGenerator::new();
+        assert_eq!(gen.new_id(), Id(1u128.to_be_bytes()));
+        assert_eq!(gen.new_id(), Id(2u128.to_be_bytes()));
+        let gen2 = SequenceIdGenerator::starting_at(10);
+        assert_eq!(gen2.new_id(), Id(10u128.to_be_bytes()));
+    }
+
+    #[tokio::test]
+    async fn recording_publisher_captures_events_in_order() {
+        let publisher = RecordingEventPublisher::new();
+        publisher.publish("notes.created", b"a").await.unwrap();
+        publisher.publish("notes.updated", b"b").await.unwrap();
+        assert_eq!(publisher.count(), 2);
+        assert_eq!(publisher.topics(), ["notes.created", "notes.updated"]);
+        assert_eq!(publisher.events()[0].payload, b"a");
+    }
+
+    #[tokio::test]
+    async fn commit_runs_on_commit_hooks_and_records_outcome() {
+        let factory = InMemoryUnitOfWorkFactory::new();
+        let ran = Arc::new(AtomicUsize::new(0));
+
+        let mut uow = factory.begin().await.unwrap();
+        let ran_hook = ran.clone();
+        uow.on_commit(Box::new(move || {
+            ran_hook.fetch_add(1, Ordering::SeqCst);
+        }));
+        uow.commit().await.unwrap();
+
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "hook must run on commit");
+        assert_eq!(factory.outcomes(), [TxOutcome::Committed]);
+    }
+
+    #[tokio::test]
+    async fn rollback_discards_hooks_and_records_outcome() {
+        let factory = InMemoryUnitOfWorkFactory::new();
+        let ran = Arc::new(AtomicUsize::new(0));
+
+        let mut uow = factory.begin().await.unwrap();
+        let ran_hook = ran.clone();
+        uow.on_commit(Box::new(move || {
+            ran_hook.fetch_add(1, Ordering::SeqCst);
+        }));
+        uow.rollback().await.unwrap();
+
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            0,
+            "hook must NOT run on rollback"
+        );
+        assert_eq!(factory.outcomes(), [TxOutcome::RolledBack]);
+    }
+
+    // The payoff of ADR 0002: a use case tested with the four doubles alone —
+    // no server, no broker, no database. This is the shape of a real module's
+    // application-layer unit test. The handler depends only on the ports.
+    struct CreateNote<C: Clock, G: IdGenerator, F: UnitOfWorkFactory, E: EventPublisher> {
+        clock: C,
+        ids: G,
+        uow: F,
+        events: E,
+    }
+
+    impl<C: Clock, G: IdGenerator, F: UnitOfWorkFactory, E: EventPublisher> CreateNote<C, G, F, E> {
+        /// Mints an id, commits a transaction, and publishes the created event
+        /// only after the commit succeeds. Returns the new note's id and time.
+        async fn execute(&self) -> PortResult<(Id, SystemTime)> {
+            let id = self.ids.new_id();
+            let created_at = self.clock.now();
+
+            let mut tx = self.uow.begin().await?;
+            // The hook is synchronous and, in the real framework, wakes the
+            // outbox relay rather than publishing inline. Here it flips a flag
+            // so the test can prove the hook fired on commit.
+            let relay_woken = Arc::new(AtomicUsize::new(0));
+            let flag = relay_woken.clone();
+            tx.on_commit(Box::new(move || {
+                flag.fetch_add(1, Ordering::SeqCst);
+            }));
+            tx.commit().await?;
+
+            // Publish after a successful commit (modelling the relay draining
+            // the outbox); the id bytes stand in for a real serialized event.
+            self.events.publish("notes.created", &id.0).await?;
+
+            assert_eq!(relay_woken.load(Ordering::SeqCst), 1);
+            Ok((id, created_at))
+        }
+    }
+
+    #[tokio::test]
+    async fn use_case_runs_against_the_four_doubles_only() {
+        let handler = CreateNote {
+            clock: FixedClock::at_unix_secs(1_700_000_000),
+            ids: SequenceIdGenerator::new(),
+            uow: InMemoryUnitOfWorkFactory::new(),
+            events: RecordingEventPublisher::new(),
+        };
+
+        let (id, created_at) = handler.execute().await.unwrap();
+
+        assert_eq!(id, Id(1u128.to_be_bytes()));
+        assert_eq!(created_at, UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+        // The event is visible only because the transaction committed first.
+        assert_eq!(handler.uow.outcomes(), [TxOutcome::Committed]);
+        assert_eq!(handler.events.topics(), ["notes.created"]);
+        assert_eq!(handler.events.events()[0].payload, id.0);
+    }
+}

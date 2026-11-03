@@ -75,8 +75,13 @@ pub trait EventPublisher: Send + Sync {
 /// begins and ends — one per use case — through this port; the data layer only
 /// executes it. `on_commit` registers a callback to run after a successful
 /// commit (e.g. to wake the outbox relay), never on rollback.
+///
+/// Bound `Send` but not `Sync`: a transaction handle is moved, used and
+/// consumed by one task, never shared by reference across threads — and its
+/// `on_commit` hooks (`FnOnce + Send`) are not `Sync`. The [`UnitOfWorkFactory`]
+/// that hands it out *is* `Send + Sync`, because that one is a shared dependency.
 #[async_trait]
-pub trait UnitOfWork: Send + Sync {
+pub trait UnitOfWork: Send {
     /// Commits the transaction and runs the registered `on_commit` hooks.
     async fn commit(self: Box<Self>) -> PortResult<()>;
     /// Rolls the transaction back, discarding the `on_commit` hooks.
