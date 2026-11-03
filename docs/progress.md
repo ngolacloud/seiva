@@ -6,7 +6,27 @@
 
 ## Estado (2026-11-03)
 
-**Fase fundadora + núcleo (ports & dublês) concluídos.**
+**Fundação + núcleo (ports & dublês) + macro `#[seiva::facade]` (1.º corte).**
+
+### Contrato Rust-first — macro `#[seiva::facade]` (ADR 0001)
+- **Crate novo `seiva-macros`** (proc-macro; só `syn`/`quote`/`proc-macro2`).
+  `#[facade(version = "v1")]` sobre um trait: re-emite o trait **inalterado**
+  (consome os atributos auxiliares `#[requires(..)]`, `#[policy(..)]`,
+  `#[cached(..)]`) e **adiciona** um ZST `<Trait>Facade` que implementa
+  `contract::Facade` com um `DESCRIPTOR` legível por máquina (nome, versão,
+  métodos, permissão de cada um).
+- **Módulo `contract` no `delonix-seiva`**: `Facade`, `FacadeDescriptor`,
+  `MethodDescriptor`. É a fonte que as próximas fases lêem para gerar
+  `.proto`/gRPC e impor o zero-trust `[[uses]]`/`[[allow]]` em compile-time.
+- **Corte delimitado e honesto:** a macro ainda **não** gera `.proto`/gRPC —
+  isso assenta no descritor numa fase seguinte. Extrai o contrato, nada mais.
+- **"Sem magia escondida":** equivalente escrito à mão documentado no doc-test
+  de `contract.rs` (passa). `delonix-seiva` re-exporta `facade`; usa
+  `extern crate self as delonix_seiva` para os caminhos absolutos gerados
+  funcionarem também nos testes do próprio crate.
+- Teste de integração `tests/facade.rs` (3) + doc-test: descritor com
+  nome/versão/3 métodos, `requires` vazio em método sem guarda, consulta por
+  nome, e o trait continua implementável e executável.
 
 ### Núcleo — ADR 0002 + `seiva-testing`
 - **ADR 0002 (Accepted):** fixa os 4 ports do núcleo (`Clock`, `IdGenerator`,
@@ -60,8 +80,9 @@
 
 ## Próximos passos (propostos)
 1. ~~Núcleo: ADR dos ports + dublês~~ ✅ (ADR 0002 + `seiva-testing`).
-2. **Macro `#[seiva::facade]`** (crate `seiva-macros`): gera `.proto` + cliente
-   gRPC + testes de contrato a partir do trait (ADR 0001, contrato Rust-first).
+2. ~~Macro `#[seiva::facade]` (1.º corte: descritor de contrato)~~ ✅
+   (`seiva-macros` + `contract`). **Falta** sobre o descritor: geração de
+   `.proto` + cliente gRPC + testes de contrato; e `seiva expand` real.
 3. **Gateway `seiva-data-dorm`**: ligar o DORM por git rev fixada (`ad5073d`),
    implementar `UnitOfWork`/`OutboxStore` sobre o `dorm-outbox`. Adicionar então
    os ports de camada de dados (`Connection`, `OutboxStore`, `JobStore`).

@@ -18,6 +18,8 @@ members = [
     # In-memory reference doubles for the ports, so a module's application layer
     # unit-tests with no server, broker or database. A dev-dependency only.
     "crates/seiva-testing",
+    # The framework's procedural macros (#[seiva::facade], ...).
+    "crates/seiva-macros",
     # The framework crate: the public entrypoint downstream apps depend on.
     "crates/delonix-seiva",
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
@@ -44,7 +46,11 @@ seiva-ports = { version = "0.1.0", path = "crates/seiva-ports" }
 # own `dorm` feature.
 delonix-seiva = { version = "0.1.0", path = "crates/delonix-seiva", default-features = false }
 seiva-testing = { version = "0.1.0", path = "crates/seiva-testing" }
+seiva-macros = { version = "0.1.0", path = "crates/seiva-macros" }
 async-trait = "0.1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1" }
+syn = { version = "3" }
+quote = "1"
+proc-macro2 = "1"

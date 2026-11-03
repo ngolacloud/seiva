@@ -18,6 +18,7 @@ description = "Delonix Seiva — a Rust backend framework for robust, high-criti
 
 [dependencies]
 seiva-ports = { workspace = true }
+seiva-macros = { workspace = true }
 
 [features]
 # DORM wired in by default, but as a feature so a project whose every module

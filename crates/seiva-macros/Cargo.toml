@@ -1,0 +1,28 @@
+# seiva-macros — the procedural macros of the framework.
+#
+# Today: `#[facade]`, which reads a trait tagged as a module's public contract
+# and emits a machine-readable descriptor (version, methods, required
+# permission) alongside the unchanged trait. That descriptor is the source the
+# later phases read to generate the `.proto`/gRPC client and to enforce the
+# zero-trust `[[uses]]`/`[[allow]]` contract (ADR 0001, Rust-first contracts).
+#
+# "No hidden magic": the macro keeps the trait as written and only ADDS a
+# descriptor; the hand-written equivalent is documented in `delonix-seiva`.
+[package]
+name = "seiva-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Procedural macros for the Delonix Seiva framework (#[seiva::facade])."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true, features = ["full"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
