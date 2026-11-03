@@ -127,6 +127,117 @@ pub fn check_contracts(manifests: &[ModuleManifest]) -> Report {
     }
 }
 
+// --- fitness function 2: the layer dependency rule -------------------------
+
+/// The five layer crate suffixes, outermost-last. A module's crates are named
+/// `<module>-<layer>`, and the dependency rule between them is enforced by the
+/// crate graph (the compiler); this fitness function catches a `Cargo.toml` that
+/// declares a forbidden dependency before the compiler would even see the import.
+pub const LAYERS: [&str; 5] = [
+    "facade",
+    "domain",
+    "application",
+    "infrastructure",
+    "interface",
+];
+
+/// One module's layer crates and the dependency crate names each declares. Kept
+/// separate from I/O so [`check_layers`] is testable with fixtures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleLayers {
+    pub module: String,
+    /// Layer name (`"domain"`, …) → the dependency crate names in its Cargo.toml.
+    pub layers: BTreeMap<String, Vec<String>>,
+}
+
+/// The layer `<module>-<layer>` a dependency crate belongs to, if any.
+fn layer_suffix(dep: &str) -> Option<&'static str> {
+    LAYERS.iter().copied().find(|l| {
+        dep.len() > l.len() + 1
+            && dep.ends_with(l)
+            && dep.as_bytes()[dep.len() - l.len() - 1] == b'-'
+    })
+}
+
+/// Whether a dependency is a DORM crate (the data layer).
+fn is_dorm(dep: &str) -> bool {
+    dep == "dorm" || dep.starts_with("dorm-")
+}
+
+/// The reason, if any, that `layer` of `module` may not depend on `dep`
+/// (Clean-Architecture dependency rule; ADR 0003 of the Seiva repo).
+fn forbidden_layer_dep(module: &str, layer: &str, dep: &str) -> Option<String> {
+    let suffix = layer_suffix(dep);
+    match layer {
+        // Depends only on shared kernel types.
+        "domain" => {
+            (dep == "delonix-seiva" || dep == "seiva-ports" || is_dorm(dep) || suffix.is_some())
+                .then(|| format!("`domain` depends only on shared kernel types, not `{dep}`"))
+        }
+        // The public contract: shared kernel + the Seiva macros only.
+        "facade" => (is_dorm(dep)
+            || matches!(
+                suffix,
+                Some("domain" | "application" | "infrastructure" | "interface")
+            ))
+        .then(|| format!("`facade` is the public contract and must not depend on `{dep}`")),
+        // Use cases + ports: its own domain/facade and `seiva-ports`; never the
+        // framework runtime, the data layer, lower layers, or another module.
+        "application" => {
+            if dep == "delonix-seiva" || is_dorm(dep) {
+                Some(format!(
+                    "`application` stays free of the framework runtime and the data layer, not `{dep}`"
+                ))
+            } else if matches!(suffix, Some("infrastructure" | "interface")) {
+                Some(format!(
+                    "`application` must not depend on the lower layer `{dep}`"
+                ))
+            } else if matches!(suffix, Some("domain" | "facade"))
+                && dep != format!("{module}-domain")
+                && dep != format!("{module}-facade")
+            {
+                Some(format!(
+                    "`application` may use only its own domain and facade, not another module's `{dep}`"
+                ))
+            } else {
+                None
+            }
+        }
+        // Adapters: may reach application/domain, the data layer and other
+        // modules' facades, but never the interface layer.
+        "infrastructure" => matches!(suffix, Some("interface")).then(|| {
+            format!("`infrastructure` must not depend on the `interface` layer (`{dep}`)")
+        }),
+        // Transport: application + facade; never infrastructure or domain.
+        "interface" => matches!(suffix, Some("infrastructure" | "domain")).then(|| {
+            format!(
+                "`interface` must not depend on `{dep}` (the {} layer)",
+                suffix.unwrap()
+            )
+        }),
+        _ => None,
+    }
+}
+
+/// Checks the layer dependency rule over a set of modules. Pure; deterministic.
+pub fn check_layers(modules: &[ModuleLayers]) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for m in modules {
+        for (layer, deps) in &m.layers {
+            for dep in deps {
+                if let Some(message) = forbidden_layer_dep(&m.module, layer, dep) {
+                    violations.push(Violation {
+                        rule: "layer-dependency",
+                        module: format!("{}::{layer}", m.module),
+                        message,
+                    });
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// Failure while scanning a project for module manifests.
 #[derive(Debug, thiserror::Error)]
 pub enum LintError {
@@ -167,11 +278,59 @@ pub fn lint_project(root: &Path) -> Result<Report, LintError> {
         }
     }
     paths.sort();
+    let mut module_dirs = Vec::new();
     for path in paths {
         manifests.push(ModuleManifest::from_path(&path)?);
+        // The manifest sits at modules/<dir>/module.toml; keep <dir> for the
+        // layer scan, which reads modules/<dir>/<layer>/Cargo.toml.
+        if let Some(dir) = path.parent().map(Path::to_path_buf) {
+            module_dirs.push(dir);
+        }
     }
 
-    Ok(check_contracts(&manifests))
+    let mut report = check_contracts(&manifests);
+
+    // Fitness function 2: the layer dependency rule, read from each module's
+    // five layer-crate Cargo.toml files.
+    let mut module_layers = Vec::new();
+    for dir in &module_dirs {
+        let module = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let mut layers = BTreeMap::new();
+        for layer in LAYERS {
+            let cargo = dir.join(layer).join("Cargo.toml");
+            if cargo.is_file() {
+                let text = std::fs::read_to_string(&cargo).map_err(|source| LintError::Io {
+                    path: cargo.display().to_string(),
+                    source,
+                })?;
+                layers.insert(layer.to_owned(), cargo_dependency_names(&text));
+            }
+        }
+        if !layers.is_empty() {
+            module_layers.push(ModuleLayers { module, layers });
+        }
+    }
+    report.violations.extend(check_layers(&module_layers));
+
+    Ok(report)
+}
+
+/// The dependency crate names declared in a `Cargo.toml`'s `[dependencies]`
+/// table (dev-/build-dependencies are not part of the layer rule). Best-effort:
+/// an unparseable manifest yields no names rather than failing the whole lint —
+/// the build would reject it anyway.
+fn cargo_dependency_names(text: &str) -> Vec<String> {
+    let Ok(toml::Value::Table(root)) = text.parse::<toml::Value>() else {
+        return Vec::new();
+    };
+    match root.get("dependencies") {
+        Some(toml::Value::Table(deps)) => deps.keys().cloned().collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +348,102 @@ mod tests {
             uses: vec![],
             allow: vec![],
         }
+    }
+
+    fn layers(module: &str, pairs: &[(&str, &[&str])]) -> ModuleLayers {
+        ModuleLayers {
+            module: module.to_owned(),
+            layers: pairs
+                .iter()
+                .map(|(l, deps)| (l.to_string(), deps.iter().map(|d| d.to_string()).collect()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_well_layered_module_passes() {
+        let m = layers(
+            "notes",
+            &[
+                ("facade", &["delonix-seiva"]),
+                ("domain", &["kernel"]),
+                (
+                    "application",
+                    &["notes-domain", "notes-facade", "seiva-ports"],
+                ),
+                (
+                    "infrastructure",
+                    &[
+                        "notes-application",
+                        "notes-domain",
+                        "dorm-core",
+                        "identity-facade",
+                    ],
+                ),
+                (
+                    "interface",
+                    &["notes-application", "notes-facade", "delonix-seiva"],
+                ),
+            ],
+        );
+        assert!(check_layers(&[m]).is_empty());
+    }
+
+    #[test]
+    fn domain_may_not_depend_on_the_framework_or_the_data_layer() {
+        let m = layers(
+            "notes",
+            &[(
+                "domain",
+                &["delonix-seiva", "dorm-core", "notes-application"],
+            )],
+        );
+        let v = check_layers(&[m]);
+        assert_eq!(v.len(), 3, "{v:?}");
+        assert!(v
+            .iter()
+            .all(|x| x.rule == "layer-dependency" && x.module == "notes::domain"));
+    }
+
+    #[test]
+    fn application_may_not_reach_a_lower_layer_or_another_modules_internals() {
+        let m = layers(
+            "notes",
+            &[(
+                "application",
+                &[
+                    "notes-infrastructure", // lower layer
+                    "identity-domain",      // another module's domain
+                    "delonix-seiva",        // the framework runtime
+                    "notes-domain",         // OK: own domain
+                    "seiva-ports",          // OK
+                ],
+            )],
+        );
+        let v = check_layers(&[m]);
+        assert_eq!(v.len(), 3, "{v:?}");
+    }
+
+    #[test]
+    fn interface_may_not_depend_on_infrastructure_or_domain() {
+        let m = layers(
+            "notes",
+            &[(
+                "interface",
+                &[
+                    "notes-infrastructure",
+                    "notes-domain",
+                    "notes-application",
+                    "notes-facade",
+                ],
+            )],
+        );
+        let v = check_layers(&[m]);
+        assert_eq!(
+            v.len(),
+            2,
+            "only the infrastructure and domain deps are refused: {v:?}"
+        );
     }
 
     #[test]

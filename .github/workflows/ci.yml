@@ -1,0 +1,48 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# One in-flight run per ref: a new push cancels the previous run on the same
+# branch or PR, so the queue never backs up on force-pushes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The gate: format, lint, and the whole test suite — no database and no broker,
+  # because the framework's tests run against the in-memory doubles in
+  # `seiva-testing`. The `seiva lint` fitness functions are unit-tested here as
+  # part of `delonix-seiva`.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Smoke-test the CLI
+        run: cargo run -q -p seiva-cli --bin seiva -- doctor
+
+  # Documentation builds with intra-doc links treated as errors, matching DORM's
+  # gate: a redundant or dangling `[`link`]` fails here rather than shipping.
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the docs
+        run: cargo doc --no-deps --workspace --document-private-items

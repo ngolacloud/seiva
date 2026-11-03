@@ -6,7 +6,21 @@
 
 ## Estado (2026-11-03)
 
-**Fundação + núcleo + facade + zero-trust lint + scaffolding + módulo de referência ligado.**
+**Fundação + núcleo + facade + lint (contrato + camadas) + scaffolding + módulo ligado + CI.**
+
+### Repo publicado + 2.ª fitness function + CI
+- **Repo no GitHub:** github.com/ngolacloud/seiva (privado), `main` publicado.
+- **`seiva lint` ganhou a 2.ª fitness function — regra de dependência entre camadas**
+  (`lint::check_layers`, pura): lê os `Cargo.toml` das 5 camadas de cada módulo e
+  recusa dependências proibidas (domain só kernel; application sem framework/data
+  layer/camadas inferiores/outro módulo; facade=contrato; infrastructure↛interface;
+  interface↛infrastructure/domain). Complementa a imposição do compilador (grafo de
+  crates). 4 testes novos (10 no total em `lint`).
+- **CI do repo** (`.github/workflows/ci.yml`, espelha o DORM): job `check`
+  (fmt + clippy `--all-features -D warnings` + `test --workspace` + smoke `seiva
+  doctor`) e job `docs` (`cargo doc -D warnings`). Valide localmente antes de push
+  (armadilha docs CI do DORM aprendida).
+- 20 grupos de testes verdes; clippy limpo; `cargo doc -D warnings` limpo.
 
 ### Módulo de referência ligado ao framework — `examples/notes` (ADR 0003)
 - Módulo canónico de 5 camadas no workspace do Seiva, ligado aos crates **reais**
