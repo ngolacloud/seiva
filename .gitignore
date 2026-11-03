@@ -1,4 +1,6 @@
 /target
+# the excluded gateway crate (and any nested crate) has its own target dir
+target/
 **/*.rs.bk
 Cargo.lock.orig
 .env

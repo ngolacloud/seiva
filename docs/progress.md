@@ -6,7 +6,22 @@
 
 ## Estado (2026-11-03)
 
-**Fundação + núcleo + facade + lint (contrato + camadas) + scaffolding + módulo ligado + CI.**
+**Fundação + núcleo + facade + lint(×2) + scaffolding + módulo ligado + CI + gateway DORM.**
+
+### Travessia da fronteira — `seiva-data-dorm` (ADR 0004)
+- **DORM integrado:** os 4 PRs (DORM-C, B1×2, B2) mergeados; DORM `main` em `f43d873`.
+- **Gateway `seiva-data-dorm`** (ADR 0004): todo o acoplamento ao DORM num só crate,
+  dependente do DORM **por git rev `f43d873`** (nunca path). **Compila e testa contra
+  o DORM real** (dorm-core v0.6.0 via git). Implementa `Clock`/`IdGenerator`; `connect`
+  constrói o `Database` (connect_with) e **impõe os invariantes B1**: strict sessions ON
+  + cursor key configurada. 3 testes (connect com deadpool lazy, sem PG).
+- **EXCLUÍDO do workspace** por agora (CI público não tem acesso ao DORM privado sem token)
+  → o CI do Seiva continua verde e DORM-free; build do gateway com `CARGO_NET_GIT_FETCH_WITH_CLI=1`.
+- **Achado (ADR 0004):** `UnitOfWork`/`EventPublisher` adiados — modelo de transacção do DORM
+  é por closure (`db::atomic`), o port `seiva-ports` é por handle (begin/commit). Resolve-se
+  a seguir: port com escopo (`run<F>`) **ou** primitiva handle-based do DORM (`on_commit`, B3).
+- **Decisões do dono por fazer:** ligar o `dorm` feature → gateway (acopla build + exige token
+  de CI para o DORM privado); e a forma final do port `UnitOfWork`.
 
 ### Repo publicado + 2.ª fitness function + CI
 - **Repo no GitHub:** github.com/ngolacloud/seiva (privado), `main` publicado.
