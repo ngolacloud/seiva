@@ -8,6 +8,17 @@
 
 **Fundação + núcleo + facade + lint(×2) + scaffolding + módulo ligado + CI + gateway DORM.**
 
+### `UnitOfWork` por escopo + ligado ao DORM (ADR 0004, decisão do dono)
+- **Decisão #2 do dono:** o port `UnitOfWork` passa a ser **por escopo** —
+  `transaction(|| async {…})`, commit em `Ok`, rollback em `Err` (dispensa
+  `on_commit`/DORM-B3). Resolve o desencontro com o `db::atomic` (closure) do DORM.
+- Implementado em toda a pilha: `seiva-ports` (port RPITIT genérico), `seiva-testing`
+  (`InMemoryUnitOfWork` por escopo), `examples/notes/application` (valida no domínio,
+  depois `transaction`), e o gateway (`DormUnitOfWork` → `with_session`+`db::atomic`).
+- `NoteRepository::save` passou a `-> impl Future + Send` (o future tem de ser Send
+  para correr dentro do `transaction`). ADR 0002 emendada; ADR 0004 regista a resolução.
+- Falta só o port `EventPublisher` no gateway (precisa do `dorm-outbox` na mesma transacção).
+
 ### Travessia da fronteira — `seiva-data-dorm` (ADR 0004)
 - **DORM integrado:** os 4 PRs (DORM-C, B1×2, B2) mergeados; DORM `main` em `f43d873`.
 - **Gateway `seiva-data-dorm`** (ADR 0004): todo o acoplamento ao DORM num só crate,

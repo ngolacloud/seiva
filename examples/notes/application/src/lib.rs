@@ -4,18 +4,20 @@
 //! Depends on `domain`, its own `facade` (DTOs + trait) and `seiva-ports`. It
 //! names no `delonix_seiva::` item — the framework coupling is the facade's
 //! concern (ADR 0003). The service consumes the framework's cross-cutting ports
-//! (`UnitOfWorkFactory`, `IdGenerator`, `EventPublisher`) through `seiva-ports`.
+//! (`UnitOfWork`, `IdGenerator`, `EventPublisher`) through `seiva-ports`.
 
 #![allow(async_fn_in_trait)]
 
 use notes_domain::Note;
 use notes_facade::{CreateNote, NoteDto, Notes};
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWorkFactory};
+use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 
 /// Outbound port: persistence of notes, in the domain's language. Implemented
-/// in `infrastructure` (over DORM or an external library).
+/// in `infrastructure` (over DORM or an external library). The future is `Send`
+/// so a use case can `.await` it inside a `UnitOfWork::transaction`, which runs
+/// on a multi-threaded runtime.
 pub trait NoteRepository {
-    async fn save(&self, note: &Note) -> PortResult<()>;
+    fn save(&self, note: &Note) -> impl std::future::Future<Output = PortResult<()>> + Send;
 }
 
 /// The application service. It implements the [`Notes`] facade by running the
@@ -31,17 +33,20 @@ impl<R, G, U, E> NotesService<R, G, U, E>
 where
     R: NoteRepository + Sync,
     G: IdGenerator,
-    U: UnitOfWorkFactory,
+    U: UnitOfWork,
     E: EventPublisher,
 {
     async fn create_note(&self, cmd: CreateNote) -> PortResult<NoteDto> {
+        // Validate in the domain first — no point opening a transaction for a
+        // command the rule will reject.
         let id = u128::from_be_bytes(self.ids.new_id().0);
         let note = Note::new(id, cmd.title).map_err(BoxError::from)?;
 
-        // One transaction per use case; the framework port executes it.
-        let tx = self.uow.begin().await?;
-        self.repository.save(&note).await?;
-        tx.commit().await?;
+        // One transaction per use case: the save runs inside it and the port
+        // commits iff the body returns Ok (scope-based UnitOfWork, ADR 0004).
+        self.uow
+            .transaction(|| async { self.repository.save(&note).await })
+            .await?;
 
         // Publish after a successful commit (the relay model); the id bytes
         // stand in for a serialized event envelope.
@@ -60,7 +65,7 @@ impl<R, G, U, E> Notes for NotesService<R, G, U, E>
 where
     R: NoteRepository + Sync,
     G: IdGenerator,
-    U: UnitOfWorkFactory,
+    U: UnitOfWork,
     E: EventPublisher,
 {
     async fn create(&self, cmd: CreateNote) -> Result<NoteDto, String> {
@@ -74,7 +79,7 @@ where
 mod tests {
     use super::*;
     use seiva_testing::{
-        InMemoryUnitOfWorkFactory, RecordingEventPublisher, SequenceIdGenerator, TxOutcome,
+        InMemoryUnitOfWork, RecordingEventPublisher, SequenceIdGenerator, TxOutcome,
     };
     use std::sync::Mutex;
 
@@ -90,16 +95,13 @@ mod tests {
         }
     }
 
-    fn service() -> NotesService<
-        FakeRepo,
-        SequenceIdGenerator,
-        InMemoryUnitOfWorkFactory,
-        RecordingEventPublisher,
-    > {
+    fn service(
+    ) -> NotesService<FakeRepo, SequenceIdGenerator, InMemoryUnitOfWork, RecordingEventPublisher>
+    {
         NotesService {
             repository: FakeRepo::default(),
             ids: SequenceIdGenerator::new(),
-            uow: InMemoryUnitOfWorkFactory::new(),
+            uow: InMemoryUnitOfWork::new(),
             events: RecordingEventPublisher::new(),
         }
     }

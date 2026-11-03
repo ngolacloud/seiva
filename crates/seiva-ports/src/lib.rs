@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
+use std::future::Future;
 use std::time::SystemTime;
 
 /// The error any port may surface, kept opaque and dependency-free: a boxed
@@ -71,30 +72,29 @@ pub trait EventPublisher: Send + Sync {
     async fn publish(&self, topic: &str, payload: &[u8]) -> PortResult<()>;
 }
 
-/// A started transaction. The application layer decides where a transaction
-/// begins and ends — one per use case — through this port; the data layer only
-/// executes it. `on_commit` registers a callback to run after a successful
-/// commit (e.g. to wake the outbox relay), never on rollback.
+/// The transaction boundary — **scope-based** (ADR 0002, amended by ADR 0004 of
+/// the data-layer gateway).
 ///
-/// Bound `Send` but not `Sync`: a transaction handle is moved, used and
-/// consumed by one task, never shared by reference across threads — and its
-/// `on_commit` hooks (`FnOnce + Send`) are not `Sync`. The [`UnitOfWorkFactory`]
-/// that hands it out *is* `Send + Sync`, because that one is a shared dependency.
-#[async_trait]
-pub trait UnitOfWork: Send {
-    /// Commits the transaction and runs the registered `on_commit` hooks.
-    async fn commit(self: Box<Self>) -> PortResult<()>;
-    /// Rolls the transaction back, discarding the `on_commit` hooks.
-    async fn rollback(self: Box<Self>) -> PortResult<()>;
-    /// Registers a callback to run after a successful commit.
-    fn on_commit(&mut self, hook: Box<dyn FnOnce() + Send + 'static>);
-}
-
-/// Opens a [`UnitOfWork`]. Injected into a use case so the handler asks for a
-/// transaction without knowing whether it is backed by DORM or an external pool.
-#[async_trait]
-pub trait UnitOfWorkFactory: Send + Sync {
-    async fn begin(&self) -> PortResult<Box<dyn UnitOfWork>>;
+/// The application decides where a transaction begins and ends, one per use
+/// case, by running the use-case body inside [`transaction`](UnitOfWork::transaction):
+/// the data layer **commits if the body returns `Ok` and rolls back if it
+/// returns `Err`**. Statements the body performs through the data layer join
+/// this transaction. To publish an event only after a successful commit (the
+/// outbox-relay wake), act on the `Ok` the call returns — no separate
+/// `on_commit` hook is needed.
+///
+/// Scope-based rather than handle-based (`begin`/`commit`) because the DORM
+/// executor is closure-scoped (`db::atomic`): a `commit()` called later could
+/// not drive a closure that had already returned. Used generically (a handler is
+/// generic over its ports), so this trait need not be object-safe.
+#[allow(async_fn_in_trait)]
+pub trait UnitOfWork: Send + Sync {
+    /// Runs `work` in a transaction, committing on `Ok` and rolling back on `Err`.
+    async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = PortResult<T>> + Send,
+        T: Send;
 }
 
 #[cfg(test)]

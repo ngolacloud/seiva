@@ -6,20 +6,21 @@
 //! the DORM data layer off is simply not compiling this crate (the brief's Parte
 //! C), which is why the coupling is confined to one place.
 //!
-//! This first cut crosses the boundary and proves it: it compiles against DORM
-//! pinned by git revision, implements the ports that map cleanly ([`Clock`],
-//! [`IdGenerator`]), and offers [`connect`], which builds a module's `Database`
-//! while enforcing the two boundary invariants a framework must not forget —
-//! strict sessions on (no silent global `DEFAULT_DB`) and the keyset cursor key
-//! configured (no forgeable default). `UnitOfWork` and `EventPublisher` are
-//! deferred: DORM's transaction API is closure-scoped (`db::atomic`) while the
-//! `seiva-ports` `UnitOfWork` is handle-based (begin/commit), a mismatch Seiva
-//! ADR 0004 records and resolves next (a scope-based port, or DORM's `on_commit`
-//! primitive, DORM-B3).
+//! It compiles against DORM pinned by git revision and implements the ports:
+//! [`Clock`], [`IdGenerator`], and the scope-based [`UnitOfWork`] via
+//! [`DormUnitOfWork`] (which maps straight onto DORM's `with_session` +
+//! `db::atomic` — the resolution ADR 0004 chose for the tx-model mismatch).
+//! [`connect`] builds a module's `Database` while enforcing the two boundary
+//! invariants a framework must not forget — strict sessions on (no silent global
+//! `DEFAULT_DB`) and the keyset cursor key configured (no forgeable default).
+//! `EventPublisher` is the one port still to come, once the transactional outbox
+//! (`dorm-outbox`) is wired.
 
 #![forbid(unsafe_code)]
 
-use seiva_ports::{Clock, Id, IdGenerator};
+use seiva_ports::{BoxError, Clock, Id, IdGenerator, PortResult, UnitOfWork};
+use std::future::Future;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// The real system clock.
@@ -84,6 +85,46 @@ pub fn connect(config: &DormConfig) -> Result<dorm_core::db::Database, dorm_core
     )
 }
 
+/// The DORM-backed [`UnitOfWork`] (ADR 0004): the scope-based port mapped onto
+/// DORM's closure-scoped executor. `transaction` runs the body inside the
+/// module's session (`with_session` — strict mode requires one) and a DORM
+/// transaction (`db::atomic`), which commits when the body returns `Ok` and
+/// rolls back when it returns `Err`. The internal error is wrapped as the
+/// boundary's [`BoxError`]; this is the bridge the ADR-0004 finding resolves.
+pub struct DormUnitOfWork {
+    db: Arc<dorm_core::db::Database>,
+}
+
+impl DormUnitOfWork {
+    /// Wraps a module's [`connect`]-built handle as a unit of work.
+    pub fn new(db: dorm_core::db::Database) -> Self {
+        Self { db: Arc::new(db) }
+    }
+}
+
+impl UnitOfWork for DormUnitOfWork {
+    async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = PortResult<T>> + Send,
+        T: Send,
+    {
+        let db = self.db.clone();
+        let outcome: Result<T, dorm_core::Error> = dorm_core::db::with_session(db, async move {
+            dorm_core::db::atomic(move |_tx| async move {
+                // Map the boundary error to a DORM error so `atomic` rolls back;
+                // the message is preserved across the bridge.
+                work()
+                    .await
+                    .map_err(|e| dorm_core::Error::Config(e.to_string()))
+            })
+            .await
+        })
+        .await;
+        outcome.map_err(|e| Box::new(e) as BoxError)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +155,9 @@ mod tests {
         };
         let db = connect(&cfg).expect("the handle builds without connecting");
         assert_eq!(db.replica_count(), 0);
-        assert!(dorm_core::db::strict_sessions(), "strict sessions must be on");
+        assert!(
+            dorm_core::db::strict_sessions(),
+            "strict sessions must be on"
+        );
     }
 }

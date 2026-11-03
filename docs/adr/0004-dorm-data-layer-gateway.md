@@ -52,28 +52,27 @@ forget these: the gateway owns them.
 implemented. These need no DORM, but they live here so a module's composition
 has one data-layer provider to wire.
 
-### 5. `UnitOfWork` and `EventPublisher` are deferred — a tx-model mismatch
+### 5. `UnitOfWork` is now scope-based (the tx-model mismatch, resolved)
 
-The `seiva-ports` `UnitOfWork` is **handle-based**: `begin()` → `commit()` /
-`rollback()`, with the handle outliving the call that opened it. DORM's
-transaction API is **closure-scoped**: `db::atomic(|tx| async { … })` owns the
-transaction for the duration of a closure and commits when it returns. The two
-do not compose directly — a handle-based `commit()` later cannot drive a closure
+The first boundary finding: the `seiva-ports` `UnitOfWork` was **handle-based**
+(`begin()` → `commit()`/`rollback()`), but DORM's transaction API is
+**closure-scoped** (`db::atomic(|tx| async { … })`, which commits when the
+closure returns). A handle-based `commit()` called later cannot drive a closure
 that has already returned.
 
-This is the first real finding of the boundary crossing, and it is resolved
-next, one of two ways (decided in a follow-up ADR once prototyped):
+**Decision (the owner chose this):** make `UnitOfWork` **scope-based** —
+`transaction(|| async { … })` commits on `Ok`, rolls back on `Err`. The brief
+permits adjusting the port's shape ("ajusta os detalhes na ADR do núcleo"), and
+this is honest about where the transaction begins and ends. It is implemented
+through the whole stack: the port (`seiva-ports`), the in-memory double
+(`seiva-testing`), the example module (`examples/notes`), and the gateway
+(`DormUnitOfWork`, which maps it straight onto `with_session` + `db::atomic`).
+This avoids needing a handle-based DORM primitive (DORM-B3's `on_commit`), which
+is no longer on the critical path. The "publish after a successful commit" need
+is met by acting on the `Ok` the call returns — no `on_commit` hook.
 
-- **a scope-based `UnitOfWork` port** — `run<F>(&self, f: F)` that the gateway
-  maps straight onto `db::atomic`; the brief allows adjusting the port's shape
-  ("ajusta os detalhes na ADR do núcleo"), and a scope-based unit of work is
-  honest about where the transaction begins and ends; or
-- **a handle-based DORM primitive** — DORM-B3's `on_commit`/explicit begin/commit
-  on a pinned connection, which would let the current port shape stand.
-
-`EventPublisher` follows the same resolution: the transactional outbox
-(`dorm-outbox`) writes in the same transaction, so it is wired once the
-transaction boundary is.
+`EventPublisher` is the one port still to come: the transactional outbox
+(`dorm-outbox`) writes in the same transaction, so it is wired once that is in.
 
 ## Consequences
 

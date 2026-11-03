@@ -9,9 +9,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use seiva_ports::{
-    Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork, UnitOfWorkFactory,
-};
+use seiva_ports::{Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -131,81 +129,62 @@ impl EventPublisher for RecordingEventPublisher {
     }
 }
 
-/// What happened to a transaction opened through [`InMemoryUnitOfWorkFactory`].
+/// What happened to a transaction run through [`InMemoryUnitOfWork`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TxOutcome {
     Committed,
     RolledBack,
 }
 
-/// A [`UnitOfWorkFactory`] that records the outcome of every transaction it
-/// opens. Hold a handle (or a clone), pass a clone into the handler, then read
+/// A scope-based [`UnitOfWork`] that records each transaction's outcome: the
+/// work body committing (`Ok`) or rolling back (`Err`), mirroring the guarantee
+/// the DORM-backed one keeps. Hold a clone, pass one into the handler, then read
 /// [`outcomes`](Self::outcomes) back after the use case runs.
 #[derive(Clone, Default)]
-pub struct InMemoryUnitOfWorkFactory {
+pub struct InMemoryUnitOfWork {
     log: Arc<Mutex<Vec<TxOutcome>>>,
 }
 
-impl InMemoryUnitOfWorkFactory {
+impl InMemoryUnitOfWork {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The outcome of every transaction opened so far, in order.
+    /// The outcome of every transaction run so far, in order.
     pub fn outcomes(&self) -> Vec<TxOutcome> {
-        self.log.lock().expect("uow factory poisoned").clone()
+        self.log.lock().expect("uow poisoned").clone()
     }
 }
 
-#[async_trait]
-impl UnitOfWorkFactory for InMemoryUnitOfWorkFactory {
-    async fn begin(&self) -> PortResult<Box<dyn UnitOfWork>> {
-        Ok(Box::new(InMemoryUnitOfWork {
-            hooks: Vec::new(),
-            log: self.log.clone(),
-        }))
-    }
-}
-
-/// The transaction handed out by [`InMemoryUnitOfWorkFactory`]. Runs its
-/// `on_commit` hooks on commit and discards them on rollback, mirroring the
-/// real guarantee so a test proves the contract the DORM-backed one must keep.
-struct InMemoryUnitOfWork {
-    hooks: Vec<Box<dyn FnOnce() + Send + 'static>>,
-    log: Arc<Mutex<Vec<TxOutcome>>>,
-}
-
-#[async_trait]
 impl UnitOfWork for InMemoryUnitOfWork {
-    async fn commit(mut self: Box<Self>) -> PortResult<()> {
-        self.log
-            .lock()
-            .expect("uow factory poisoned")
-            .push(TxOutcome::Committed);
-        for hook in self.hooks.drain(..) {
-            hook();
+    async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: std::future::Future<Output = PortResult<T>> + Send,
+        T: Send,
+    {
+        match work().await {
+            Ok(value) => {
+                self.log
+                    .lock()
+                    .expect("uow poisoned")
+                    .push(TxOutcome::Committed);
+                Ok(value)
+            }
+            Err(err) => {
+                self.log
+                    .lock()
+                    .expect("uow poisoned")
+                    .push(TxOutcome::RolledBack);
+                Err(err)
+            }
         }
-        Ok(())
-    }
-
-    async fn rollback(mut self: Box<Self>) -> PortResult<()> {
-        self.log
-            .lock()
-            .expect("uow factory poisoned")
-            .push(TxOutcome::RolledBack);
-        self.hooks.clear();
-        Ok(())
-    }
-
-    fn on_commit(&mut self, hook: Box<dyn FnOnce() + Send + 'static>) {
-        self.hooks.push(hook);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn fixed_clock_holds_and_advances() {
@@ -235,74 +214,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_runs_on_commit_hooks_and_records_outcome() {
-        let factory = InMemoryUnitOfWorkFactory::new();
-        let ran = Arc::new(AtomicUsize::new(0));
-
-        let mut uow = factory.begin().await.unwrap();
-        let ran_hook = ran.clone();
-        uow.on_commit(Box::new(move || {
-            ran_hook.fetch_add(1, Ordering::SeqCst);
-        }));
-        uow.commit().await.unwrap();
-
-        assert_eq!(ran.load(Ordering::SeqCst), 1, "hook must run on commit");
-        assert_eq!(factory.outcomes(), [TxOutcome::Committed]);
-    }
-
-    #[tokio::test]
-    async fn rollback_discards_hooks_and_records_outcome() {
-        let factory = InMemoryUnitOfWorkFactory::new();
-        let ran = Arc::new(AtomicUsize::new(0));
-
-        let mut uow = factory.begin().await.unwrap();
-        let ran_hook = ran.clone();
-        uow.on_commit(Box::new(move || {
-            ran_hook.fetch_add(1, Ordering::SeqCst);
-        }));
-        uow.rollback().await.unwrap();
-
+    async fn an_ok_body_commits_and_an_err_body_rolls_back() {
+        let uow = InMemoryUnitOfWork::new();
+        let ok: PortResult<i32> = uow.transaction(|| async { Ok(7) }).await;
+        assert_eq!(ok.unwrap(), 7);
+        let err: PortResult<i32> = uow.transaction(|| async { Err("boom".into()) }).await;
+        assert!(err.is_err());
         assert_eq!(
-            ran.load(Ordering::SeqCst),
-            0,
-            "hook must NOT run on rollback"
+            uow.outcomes(),
+            [TxOutcome::Committed, TxOutcome::RolledBack]
         );
-        assert_eq!(factory.outcomes(), [TxOutcome::RolledBack]);
     }
 
     // The payoff of ADR 0002: a use case tested with the four doubles alone —
     // no server, no broker, no database. This is the shape of a real module's
     // application-layer unit test. The handler depends only on the ports.
-    struct CreateNote<C: Clock, G: IdGenerator, F: UnitOfWorkFactory, E: EventPublisher> {
+    struct CreateNote<C: Clock, G: IdGenerator, U: UnitOfWork, E: EventPublisher> {
         clock: C,
         ids: G,
-        uow: F,
+        uow: U,
         events: E,
     }
 
-    impl<C: Clock, G: IdGenerator, F: UnitOfWorkFactory, E: EventPublisher> CreateNote<C, G, F, E> {
-        /// Mints an id, commits a transaction, and publishes the created event
-        /// only after the commit succeeds. Returns the new note's id and time.
+    impl<C: Clock, G: IdGenerator, U: UnitOfWork, E: EventPublisher> CreateNote<C, G, U, E> {
+        /// Mints an id inside a transaction, then publishes the created event
+        /// only after the transaction commits. Returns the new note's id and time.
         async fn execute(&self) -> PortResult<(Id, SystemTime)> {
-            let id = self.ids.new_id();
             let created_at = self.clock.now();
-
-            let mut tx = self.uow.begin().await?;
-            // The hook is synchronous and, in the real framework, wakes the
-            // outbox relay rather than publishing inline. Here it flips a flag
-            // so the test can prove the hook fired on commit.
-            let relay_woken = Arc::new(AtomicUsize::new(0));
-            let flag = relay_woken.clone();
-            tx.on_commit(Box::new(move || {
-                flag.fetch_add(1, Ordering::SeqCst);
-            }));
-            tx.commit().await?;
-
-            // Publish after a successful commit (modelling the relay draining
-            // the outbox); the id bytes stand in for a real serialized event.
+            // The transaction commits iff the body returns Ok (scope-based UoW).
+            let id = self
+                .uow
+                .transaction(|| async { Ok(self.ids.new_id()) })
+                .await?;
+            // Publish after a successful commit (the relay draining the outbox);
+            // the id bytes stand in for a real serialized event.
             self.events.publish("notes.created", &id.0).await?;
-
-            assert_eq!(relay_woken.load(Ordering::SeqCst), 1);
             Ok((id, created_at))
         }
     }
@@ -312,7 +258,7 @@ mod tests {
         let handler = CreateNote {
             clock: FixedClock::at_unix_secs(1_700_000_000),
             ids: SequenceIdGenerator::new(),
-            uow: InMemoryUnitOfWorkFactory::new(),
+            uow: InMemoryUnitOfWork::new(),
             events: RecordingEventPublisher::new(),
         };
 

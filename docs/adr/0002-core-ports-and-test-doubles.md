@@ -1,9 +1,17 @@
 # ADR 0002 — Core ports and in-memory test doubles
 
-- Status: Accepted
+- Status: Accepted (the `UnitOfWork` shape amended by ADR 0004)
 - Date: 2026-11-03
 - Deciders: NgolaCloud
 - Follows: ADR 0001
+
+> **Amendment (ADR 0004).** This ADR first described `UnitOfWork` as
+> handle-based (`begin()` → `commit()`/`rollback()` + `on_commit`). The DORM
+> gateway revealed that DORM's executor is closure-scoped (`db::atomic`), which a
+> handle-based commit cannot drive, so `UnitOfWork` is now **scope-based**:
+> `transaction(|| async { … })` commits on `Ok` and rolls back on `Err`, and the
+> "publish after commit" need is met by acting on the returned `Ok` (no
+> `on_commit` hook). The other three ports are unchanged.
 
 ## Context
 
