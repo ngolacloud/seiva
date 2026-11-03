@@ -28,6 +28,7 @@ pub mod contract;
 pub mod lint;
 pub mod manifest;
 pub mod scaffold;
+pub mod worker;
 
 /// Marks a trait as a module's versioned public contract (ADR 0001). See
 /// [`contract`] for what it generates and the hand-written equivalent.

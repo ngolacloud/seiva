@@ -22,6 +22,15 @@ seiva-macros = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
+# The worker runtime's loop needs an interval and select; `tracing` is a facade
+# (no subscriber installed = near-zero cost), for the worker's metrics spans.
+tokio = { workspace = true, features = ["time", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+# The worker tests drive the loop on a current-thread runtime and signal
+# shutdown over a oneshot.
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 
 [features]
 # DORM wired in by default, but as a feature so a project whose every module

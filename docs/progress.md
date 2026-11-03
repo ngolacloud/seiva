@@ -8,6 +8,17 @@
 
 **Fundação + núcleo + facade + lint(×2) + scaffolding + módulo ligado + CI + gateway DORM.**
 
+### Runtime de workers (`delonix-seiva::worker`)
+- `run_worker(config, shutdown, pass)` — o **ciclo** genérico, DORM-free, que conduz
+  qualquer função de **uma passagem** (`forward`/`drain` do relay, `run_once` do RAG,
+  leases do dorm-jobs): intervalo, *graceful shutdown* (futuro de shutdown), métricas
+  (`WorkerReport{passes,processed,errors}`), e fast-drain (corre já a seguir quando a
+  passagem encheu). Um `Err` numa passagem é contado e registado, **nunca fatal**.
+- É a metade de framework da fronteira (brief Parte B): as funções de 1 passagem são da
+  camada de dados; o ciclo/tempo/shutdown/métricas são do Seiva. Testável com um closure.
+- 2 testes (sem BD, sem tempo real: intervalo 0 + shutdown por oneshot). `tokio`
+  (time/macros) + `tracing` entraram no `delonix-seiva`.
+
 ### Parte DORM-A — 1.ª extracção: `dorm-messaging` → `seiva-messaging`
 - **Movido do DORM com histórico preservado** (`git filter-repo` num clone temporário
   → merge de históricos não-relacionados). 6 commits do DORM vieram junto.
