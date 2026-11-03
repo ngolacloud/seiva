@@ -1,23 +1,18 @@
-# dorm-messaging
+# seiva-messaging
 
-Optional messaging for [DORM](../../README.md) (ADR 0031): a **CloudEvents 1.0**
-envelope and `Publisher`/`Subscriber` traits.
+Messaging for [Delonix Seiva](../../README.md): a **CloudEvents 1.0** envelope, a
+`Publisher` trait, and broker backends. Moved out of DORM with its git history
+(the ORM/framework boundary — DORM ADR 0054): broker clients are cross-service
+communication, so they belong to the framework, not the ORM. **Data-layer-free** —
+this crate carries bytes to a broker and never touches a database.
 
-The default transport is the generic outbox ([dorm-outbox](../dorm-outbox)):
+- `CloudEvent` — the CloudEvents 1.0 envelope (`id`, `source`, `type`,
+  `specversion`, optional `time`/`traceparent`, JSON `data`).
+- `Publisher` — publish a `CloudEvent` to a topic.
+- Broker backends behind features: **NATS** (`nats`), **AMQP/RabbitMQ** (`amqp`),
+  **Kafka** (`kafka`). A build that uses none pulls no client library.
 
-- `OutboxBus::publish(topic, &event)` — writes the event in the **same
-  transaction** as the business change.
-- `OutboxBus::drain(consumer, topic, cfg, handler)` — **at-least-once** delivery,
-  **exactly-once effect**: the handler's database work and the inbox record commit
-  together, so a redelivered event is a no-op.
-
-Every message carries `id`, `source`, `type`, `specversion`, optional `time`, and
-a W3C `traceparent` for distributed tracing, plus a JSON `data` body.
-
-Broker backends (NATS JetStream, Kafka, AMQP) implement the same `Publisher` trait
-behind Cargo features; they need a running broker.
-
-```text
-DELONIX_ORM_TEST_DSN='host=127.0.0.1 port=5432 user=orm dbname=ormtest' \
-  cargo test -p dorm-messaging --test messaging_live -- --ignored --nocapture
-```
+The transactional-outbox → broker relay (the old `OutboxBus`) is **not** here:
+consuming the in-database outbox is DORM's (`dorm-outbox`), and the relay loop
+that drives it and publishes through a `Publisher` is a Seiva worker over that
+crate.

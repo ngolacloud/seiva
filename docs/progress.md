@@ -8,6 +8,22 @@
 
 **Fundação + núcleo + facade + lint(×2) + scaffolding + módulo ligado + CI + gateway DORM.**
 
+### Parte DORM-A — 1.ª extracção: `dorm-messaging` → `seiva-messaging`
+- **Movido do DORM com histórico preservado** (`git filter-repo` num clone temporário
+  → merge de históricos não-relacionados). 6 commits do DORM vieram junto.
+- **Adaptado e DORM-free:** erro próprio (`Error::Config`/`Broker`, `Result`), removido
+  o `OutboxBus` (ponte outbox→broker, acoplada ao `dorm-outbox`/`db` — vai para um
+  worker de relay do Seiva depois). Ficou CloudEvent 1.0 + `Publisher` + backends
+  NATS/AMQP/Kafka atrás de features (off por omissão).
+- **Dependência oculta revelada pela mudança:** o backend Kafka usava
+  `rskafka::chrono::Utc::now()` (feature `clock` do chrono, antes ligada por
+  unificação no workspace do DORM); liguei `chrono`/`clock` sob a feature `kafka`.
+- Membro do workspace Seiva; testes live acoplados ao outbox removidos (voltam como
+  testes do relay-worker). 22 grupos de testes; clippy `--all-features` e doc `-D
+  warnings` limpos.
+- **FALTA (PR à parte no DORM):** remover o `dorm-messaging` do DORM com nota de
+  redirecção (depreciação antes de remoção). E o relay-worker do Seiva (OutboxBus).
+
 ### `UnitOfWork` por escopo + ligado ao DORM (ADR 0004, decisão do dono)
 - **Decisão #2 do dono:** o port `UnitOfWork` passa a ser **por escopo** —
   `transaction(|| async {…})`, commit em `Ok`, rollback em `Err` (dispensa

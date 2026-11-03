@@ -1,24 +1,46 @@
-//! Messaging for DORM: a CloudEvents envelope and a transactional bus (ADR 0031).
+//! Messaging for Seiva: a CloudEvents 1.0 envelope, a [`Publisher`] trait, and
+//! broker backends — the framework's cross-service communication layer, moved
+//! out of DORM (ADR 0054 of DORM; the brief's Parte DORM-A). This crate is
+//! **data-layer-free**: it carries bytes to a broker and knows nothing of the
+//! database.
 //!
 //! The envelope is [CloudEvents 1.0](https://cloudevents.io): every message
-//! carries `id`, `source`, `type`, `specversion`, an optional `time` and a
-//! W3C `traceparent`, plus a JSON `data` body. The default transport is the
-//! generic outbox ([`dorm-outbox`](dorm_outbox)): [`OutboxBus::publish`] writes
-//! the event in the **same transaction** as the business change, and
-//! [`OutboxBus::drain`] consumes it with **at-least-once** delivery and
-//! **exactly-once effect** — the handler's database work and the inbox record
-//! commit together, so a redelivered event is a no-op.
+//! carries `id`, `source`, `type`, `specversion`, an optional `time` and a W3C
+//! `traceparent`, plus a JSON `data` body.
 //!
-//! Broker backends implement the same [`Publisher`] trait behind Cargo features,
-//! and [`OutboxBus::forward`] bridges the outbox to any of them, at-least-once.
-//! **NATS** (`nats`, ADR 0051), **AMQP/RabbitMQ** (`amqp`, ADR 0052) and
-//! **Kafka** (`kafka`, ADR 0053) are implemented, each behind its feature and
-//! each proven against a live broker through the one bridge.
+//! Broker backends implement [`Publisher`] behind Cargo features: **NATS**
+//! (`nats`, ADR 0051), **AMQP/RabbitMQ** (`amqp`, ADR 0052) and **Kafka**
+//! (`kafka`, ADR 0053). A build that uses none pulls no client library.
+//!
+//! The transactional-outbox → broker relay (the old `OutboxBus`) is **not** here:
+//! consuming the in-database outbox is DORM's (`dorm-outbox`), and the relay loop
+//! that drives it and publishes through a [`Publisher`] is a Seiva worker over
+//! that crate — the boundary the ORM/framework split draws.
 
 use std::future::Future;
 
-use dorm_core::db;
-use dorm_core::error::{Error, Result};
+/// What messaging can refuse.
+#[derive(Debug)]
+pub enum Error {
+    /// A malformed CloudEvent envelope — a required attribute is missing.
+    Config(String),
+    /// A broker operation failed (connect, publish, flush, confirm).
+    Broker(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Config(m) => write!(f, "{m}"),
+            Error::Broker(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// The messaging result type.
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// A CloudEvents 1.0 envelope.
 #[derive(Debug, Clone, PartialEq)]
@@ -110,93 +132,11 @@ pub trait Publisher {
     fn publish(&self, topic: &str, event: &CloudEvent) -> impl Future<Output = Result<()>>;
 }
 
-/// The default bus: events ride the generic outbox (ADR 0026), so publishing is
-/// transactional with the business write and consumption is at-least-once with
-/// exactly-once effect.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct OutboxBus;
-
-impl Publisher for OutboxBus {
-    /// Write the event to the outbox — **inside `db::atomic`**, so it commits with
-    /// the business change (the outbox refuses a publish outside a transaction).
-    async fn publish(&self, topic: &str, event: &CloudEvent) -> Result<()> {
-        dorm_outbox::publish(topic, &event.to_json())
-            .await
-            .map(|_| ())
-    }
-}
-
-impl OutboxBus {
-    /// Drain the events `consumer` has not seen for `topic`, calling `handler` for
-    /// each **exactly once in effect**: the handler's database work and the inbox
-    /// record commit in one transaction, so a redelivered event (at-least-once) is
-    /// a no-op. Returns how many events were processed this pass.
-    pub async fn drain<H, Fut>(
-        &self,
-        consumer: &str,
-        topic: &str,
-        cfg: dorm_outbox::RelayConfig,
-        handler: H,
-    ) -> Result<u64>
-    where
-        H: Fn(CloudEvent) -> Fut,
-        Fut: Future<Output = Result<()>>,
-    {
-        let handler = &handler;
-        let consumer = consumer.to_string();
-        let stats = dorm_outbox::relay(&consumer.clone(), topic, cfg, move |ev| {
-            let consumer = consumer.clone();
-            async move {
-                let event = CloudEvent::from_json(&ev.payload)?;
-                // The inbox guard and the handler's effect share one transaction:
-                // record-once returns false on a redelivery, and then the handler
-                // is skipped — exactly-once effect under at-least-once delivery.
-                db::atomic(move |_tx| async move {
-                    if dorm_outbox::record_once(&consumer, &event.id).await? {
-                        handler(event).await
-                    } else {
-                        Ok(())
-                    }
-                })
-                .await
-            }
-        })
-        .await?;
-        Ok(stats.processed)
-    }
-
-    /// Forward outbox events to an external broker through `publisher` (ADR 0031):
-    /// drain what `consumer` has not seen for `topic` and publish each, advancing
-    /// the cursor **only after** a successful publish. This is the
-    /// transactional-outbox → broker bridge — the business write committed the
-    /// event with its own transaction ([`OutboxBus::publish`]); this relay carries
-    /// it to the broker with **at-least-once** delivery (a publish that fails
-    /// leaves the cursor where it was, so the event is retried, and after
-    /// `max_attempts` it dead-letters, exactly as [`dorm_outbox::relay`] defines).
-    ///
-    /// Works with any [`Publisher`]: the `nats::NatsPublisher` behind the `nats`
-    /// feature, or a test double. Returns how many events it forwarded this pass.
-    pub async fn forward<P: Publisher>(
-        &self,
-        consumer: &str,
-        topic: &str,
-        cfg: dorm_outbox::RelayConfig,
-        publisher: &P,
-    ) -> Result<u64> {
-        let stats = dorm_outbox::relay(consumer, topic, cfg, move |ev| async move {
-            let event = CloudEvent::from_json(&ev.payload)?;
-            publisher.publish(topic, &event).await
-        })
-        .await?;
-        Ok(stats.processed)
-    }
-}
-
 /// The NATS broker backend (ADR 0031/0051), behind the `nats` feature.
 ///
 /// A [`NatsPublisher`] carries [`CloudEvent`]s to a NATS subject in
 /// CloudEvents **structured** JSON (the whole envelope is the message body).
-/// Pair it with [`OutboxBus::forward`] for the durable, at-least-once path:
+/// Drive it from the outbox relay worker for the durable, at-least-once path:
 /// business writes land in the outbox transactionally, and the relay forwards
 /// them here.
 #[cfg(feature = "nats")]
@@ -213,7 +153,7 @@ pub mod nats {
         pub async fn connect(url: &str) -> Result<Self> {
             let client = async_nats::connect(url)
                 .await
-                .map_err(|e| Error::Db(format!("NATS connect failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("NATS connect failed: {e}")))?;
             Ok(NatsPublisher { client })
         }
 
@@ -230,15 +170,15 @@ pub mod nats {
         /// relay must not advance its cursor on an unacknowledged publish.
         async fn publish(&self, topic: &str, event: &CloudEvent) -> Result<()> {
             let bytes = serde_json::to_vec(&event.to_json())
-                .map_err(|e| Error::Db(format!("CloudEvent serialize failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("CloudEvent serialize failed: {e}")))?;
             self.client
                 .publish(topic.to_string(), bytes.into())
                 .await
-                .map_err(|e| Error::Db(format!("NATS publish failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("NATS publish failed: {e}")))?;
             self.client
                 .flush()
                 .await
-                .map_err(|e| Error::Db(format!("NATS flush failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("NATS flush failed: {e}")))?;
             Ok(())
         }
     }
@@ -251,7 +191,7 @@ pub mod nats {
 /// the routing key (so a queue of the topic's name receives it). Publisher
 /// **confirms** are on, so [`Publisher::publish`] returns only once the broker has
 /// acked — the relay must not advance its cursor on an unconfirmed publish. Pair
-/// it with [`OutboxBus::forward`] for the durable, at-least-once path.
+/// it from the outbox relay worker for the durable, at-least-once path.
 #[cfg(feature = "amqp")]
 pub mod amqp {
     use super::{CloudEvent, Error, Publisher, Result};
@@ -271,15 +211,15 @@ pub mod amqp {
         pub async fn connect(uri: &str) -> Result<Self> {
             let connection = Connection::connect(uri, ConnectionProperties::default())
                 .await
-                .map_err(|e| Error::Db(format!("AMQP connect failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("AMQP connect failed: {e}")))?;
             let channel = connection
                 .create_channel()
                 .await
-                .map_err(|e| Error::Db(format!("AMQP channel failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("AMQP channel failed: {e}")))?;
             channel
                 .confirm_select(lapin::options::ConfirmSelectOptions::default())
                 .await
-                .map_err(|e| Error::Db(format!("AMQP confirm_select failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("AMQP confirm_select failed: {e}")))?;
             Ok(AmqpPublisher {
                 _connection: connection,
                 channel,
@@ -299,7 +239,7 @@ pub mod amqp {
         /// surfaces here rather than being buffered.
         async fn publish(&self, topic: &str, event: &CloudEvent) -> Result<()> {
             let bytes = serde_json::to_vec(&event.to_json())
-                .map_err(|e| Error::Db(format!("CloudEvent serialize failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("CloudEvent serialize failed: {e}")))?;
             self.channel
                 .basic_publish(
                     "",
@@ -309,9 +249,9 @@ pub mod amqp {
                     BasicProperties::default(),
                 )
                 .await
-                .map_err(|e| Error::Db(format!("AMQP publish failed: {e}")))?
+                .map_err(|e| Error::Broker(format!("AMQP publish failed: {e}")))?
                 .await
-                .map_err(|e| Error::Db(format!("AMQP publish not confirmed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("AMQP publish not confirmed: {e}")))?;
             Ok(())
         }
     }
@@ -325,7 +265,7 @@ pub mod amqp {
 /// partition, so all events with the same key keep their order on one partition
 /// while the stream spreads across the rest (ADR 0053). A `produce` returns only
 /// once the broker has acked, so the relay does not advance its cursor on an
-/// unacknowledged publish. Pair it with [`OutboxBus::forward`] for the durable,
+/// unacknowledged publish. Drive it from the outbox relay worker for the durable,
 /// at-least-once path. TLS/SASL are available through `rskafka`'s `ClientBuilder`
 /// (`tls_config`/`sasl_config`); [`KafkaPublisher::from_client`] takes a
 /// pre-built client for that.
@@ -358,7 +298,7 @@ pub mod kafka {
             let client = ClientBuilder::new(boots)
                 .build()
                 .await
-                .map_err(|e| Error::Db(format!("Kafka connect failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("Kafka connect failed: {e}")))?;
             Ok(Self::from_client(client))
         }
 
@@ -382,7 +322,7 @@ pub mod kafka {
                 .client
                 .list_topics()
                 .await
-                .map_err(|e| Error::Db(format!("Kafka list_topics failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("Kafka list_topics failed: {e}")))?;
             match topics.iter().find(|t| t.name == topic) {
                 Some(t) => {
                     let n = (t.partitions.len() as i32).max(1);
@@ -410,7 +350,7 @@ pub mod kafka {
             let controller = self
                 .client
                 .controller_client()
-                .map_err(|e| Error::Db(format!("Kafka controller failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("Kafka controller failed: {e}")))?;
             match controller
                 .create_topic(topic, partitions, replication, 5_000)
                 .await
@@ -418,7 +358,7 @@ pub mod kafka {
                 Ok(()) => Ok(()),
                 // An already-existing topic is success for an idempotent ensure.
                 Err(e) if e.to_string().to_lowercase().contains("already exists") => Ok(()),
-                Err(e) => Err(Error::Db(format!("Kafka create_topic failed: {e}"))),
+                Err(e) => Err(Error::Broker(format!("Kafka create_topic failed: {e}"))),
             }
         }
     }
@@ -430,7 +370,7 @@ pub mod kafka {
         /// spread across the rest (ADR 0053).
         async fn publish(&self, topic: &str, event: &CloudEvent) -> Result<()> {
             let bytes = serde_json::to_vec(&event.to_json())
-                .map_err(|e| Error::Db(format!("CloudEvent serialize failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("CloudEvent serialize failed: {e}")))?;
             let n = self.partition_count(topic).await?;
             // A stable key→partition choice (DORM's own, not Kafka's murmur2): the
             // same key always lands on the same partition, which is what keeps a
@@ -444,7 +384,7 @@ pub mod kafka {
                 .client
                 .partition_client(topic.to_string(), partition, UnknownTopicHandling::Retry)
                 .await
-                .map_err(|e| Error::Db(format!("Kafka partition_client failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("Kafka partition_client failed: {e}")))?;
             let record = Record {
                 key: Some(event.id.clone().into_bytes()),
                 value: Some(bytes),
@@ -453,7 +393,7 @@ pub mod kafka {
             };
             pc.produce(vec![record], Compression::NoCompression)
                 .await
-                .map_err(|e| Error::Db(format!("Kafka produce failed: {e}")))?;
+                .map_err(|e| Error::Broker(format!("Kafka produce failed: {e}")))?;
             Ok(())
         }
     }

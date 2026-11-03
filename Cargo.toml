@@ -25,6 +25,9 @@ members = [
     "crates/seiva-testing",
     # The framework's procedural macros (#[seiva::facade], ...).
     "crates/seiva-macros",
+    # Messaging: CloudEvents envelope + Publisher + broker backends (features).
+    # Moved out of DORM with its history (Parte DORM-A). Data-layer-free.
+    "crates/seiva-messaging",
     # The framework crate: the public entrypoint downstream apps depend on.
     "crates/delonix-seiva",
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
