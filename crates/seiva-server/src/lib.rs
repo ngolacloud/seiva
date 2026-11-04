@@ -59,7 +59,7 @@ use axum::Router;
 use delonix_seiva::ports::PortResult;
 use delonix_seiva::worker::{run_worker, WorkerConfig};
 use seiva_config::{EnvReader, FromEnv};
-use seiva_http::{router, Health};
+use seiva_http::{router_with_security, Health, HttpSecurity, RateLimit};
 use tokio::net::TcpListener;
 
 pub use delonix_seiva::worker::WorkerReport;
@@ -103,6 +103,24 @@ pub const EXPOSE_ERROR_DETAILS_VAR: &str = "SEIVA_EXPOSE_ERROR_DETAILS";
 /// is set: loopback only, so an unconfigured service is not exposed off-box.
 pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:8080";
 
+/// Comma-separated allowlist of cross-origin (CORS) origins, e.g.
+/// `https://app.example.com,https://admin.example.com`. Unset or empty means
+/// same-origin only (no CORS layer). See [`HttpSecurity::cors_allowed_origins`].
+pub const CORS_ALLOWED_ORIGINS_VAR: &str = "SEIVA_CORS_ALLOWED_ORIGINS";
+
+/// Whether the rate limiter keys on the trusted `X-Forwarded-For` client IP
+/// instead of the raw TCP peer. Set to `true` **only** behind a single trusted
+/// reverse proxy; defaults to `false`. See [`HttpSecurity::trust_forwarded_for`].
+pub const TRUST_FORWARDED_FOR_VAR: &str = "SEIVA_TRUST_FORWARDED_FOR";
+
+/// The per-client rate-limit budget per window. Defaults to
+/// [`RateLimit::DEFAULT_MAX_REQUESTS`]; `0` disables rate limiting entirely.
+pub const RATE_LIMIT_MAX_REQUESTS_VAR: &str = "SEIVA_RATE_LIMIT_MAX_REQUESTS";
+
+/// The rate-limit window length in seconds. Defaults to
+/// [`RateLimit::DEFAULT_WINDOW`] (60s); a `0` is clamped to 1s.
+pub const RATE_LIMIT_WINDOW_SECS_VAR: &str = "SEIVA_RATE_LIMIT_WINDOW_SECS";
+
 /// The runtime configuration of a Seiva service, read from the environment.
 ///
 /// It is small but real. Build it with [`from_process_env`](ServerConfig::from_process_env)
@@ -136,6 +154,11 @@ pub struct ServerConfig {
     /// Whether internal error details are exposed to clients. A development-only
     /// shortcut, refused in production by the guard.
     pub expose_error_details: bool,
+    /// The transport-level security posture ([`HttpSecurity`]) read from the
+    /// environment: the CORS allowlist, the trusted-proxy switch and the rate
+    /// limit. [`Default`](HttpSecurity::default) (same-origin only, rate limiting
+    /// on) when none of the variables are set.
+    pub security: HttpSecurity,
 }
 
 impl ServerConfig {
@@ -174,6 +197,43 @@ fn resolve_http_addr(reader: &mut EnvReader) -> Option<SocketAddr> {
     }
 }
 
+/// Builds the [`HttpSecurity`] posture from the environment, honouring the
+/// secure-by-default baseline: an unset variable leaves [`HttpSecurity::default`]
+/// (same-origin only, rate limiting on). A present-but-unparseable numeric or
+/// boolean records a problem (and yields `None`) so a typo fails the boot.
+fn resolve_security(reader: &mut EnvReader) -> Option<HttpSecurity> {
+    let cors_allowed_origins = reader
+        .optional_var(CORS_ALLOWED_ORIGINS_VAR)
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let trust_forwarded_for = reader.optional_bool(TRUST_FORWARDED_FOR_VAR, false)?;
+    let max_requests = reader
+        .optional_parsed::<u32>(RATE_LIMIT_MAX_REQUESTS_VAR, RateLimit::DEFAULT_MAX_REQUESTS)?;
+    let window_secs = reader.optional_parsed::<u64>(
+        RATE_LIMIT_WINDOW_SECS_VAR,
+        RateLimit::DEFAULT_WINDOW.as_secs(),
+    )?;
+
+    // `0 requests` is the explicit off switch; otherwise the window is clamped to
+    // at least a second so a `0` can never degenerate into an always-exhausted budget.
+    let rate_limit = (max_requests > 0).then(|| RateLimit {
+        max_requests,
+        window: Duration::from_secs(window_secs.max(1)),
+    });
+
+    Some(HttpSecurity {
+        cors_allowed_origins,
+        rate_limit,
+        trust_forwarded_for,
+    })
+}
+
 impl FromEnv for ServerConfig {
     fn from_env(reader: &mut EnvReader) -> Option<Self> {
         // Read every field up front so each problem is collected, not just the
@@ -181,11 +241,13 @@ impl FromEnv for ServerConfig {
         let env = reader.app_env();
         let http_addr = resolve_http_addr(reader);
         let expose_error_details = reader.optional_bool(EXPOSE_ERROR_DETAILS_VAR, false);
+        let security = resolve_security(reader);
 
         let config = Self {
             env,
             http_addr: http_addr?,
             expose_error_details: expose_error_details?,
+            security: security?,
         };
 
         reader.guard(
@@ -231,12 +293,13 @@ impl std::error::Error for ServeError {
 
 /// Serves the framework HTTP surface until `shutdown` resolves, then drains.
 ///
-/// It serves the module-free framework router ([`seiva_http::router`]: health,
-/// `/openapi.json`, `/docs`). A real service does not call this — its
-/// `apps/<name>-api` composition root builds its own router (merging its modules'
-/// generated controllers) and calls [`serve_router`] directly. This entrypoint is
-/// the module-free skeleton the binary runs; the example composition
-/// (`accounts`) lives in this crate's tests.
+/// It serves the module-free framework router (health, `/openapi.json`, `/docs`)
+/// under the [`HttpSecurity`] posture read from the environment into
+/// [`ServerConfig::security`] (CORS allowlist, trusted-proxy switch, rate limit).
+/// A real service does not call this — its `apps/<name>-api` composition root
+/// builds its own router (merging its modules' generated controllers) and calls
+/// [`serve_router`] directly. This entrypoint is the module-free skeleton the
+/// binary runs; the example composition (`accounts`) lives in this crate's tests.
 ///
 /// The lifecycle, in order:
 ///
@@ -262,7 +325,7 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
     let health = Health::starting();
-    let app = router(health.clone());
+    let app = router_with_security(health.clone(), &config.security);
     serve_router(config.http_addr, app, health, shutdown).await
 }
 
@@ -393,7 +456,7 @@ mod tests {
             accounts_interface::accounts_router(accounts_interface::AccountsController::new(
                 accounts_infrastructure::InMemoryCredentialRepository::new(),
             ));
-        router(health).merge(accounts)
+        seiva_http::router(health).merge(accounts)
     }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -456,6 +519,59 @@ mod tests {
         .expect("dev permits the shortcut");
         assert!(cfg.expose_error_details);
         assert!(cfg.env.is_development());
+    }
+
+    #[test]
+    fn security_defaults_to_the_secure_baseline() {
+        let cfg: ServerConfig = load_from(map(&[])).expect("empty env is valid");
+        assert!(cfg.security.cors_allowed_origins.is_empty());
+        assert!(!cfg.security.trust_forwarded_for);
+        assert_eq!(cfg.security.rate_limit, Some(RateLimit::default()));
+    }
+
+    #[test]
+    fn security_reads_cors_trust_proxy_and_rate_limit_from_env() {
+        let cfg: ServerConfig = load_from(map(&[
+            (
+                CORS_ALLOWED_ORIGINS_VAR,
+                " https://app.example.com , https://admin.example.com ,",
+            ),
+            (TRUST_FORWARDED_FOR_VAR, "true"),
+            (RATE_LIMIT_MAX_REQUESTS_VAR, "100"),
+            (RATE_LIMIT_WINDOW_SECS_VAR, "30"),
+        ]))
+        .expect("valid security config");
+
+        // Trimmed, and the trailing empty segment dropped.
+        assert_eq!(
+            cfg.security.cors_allowed_origins,
+            vec![
+                "https://app.example.com".to_string(),
+                "https://admin.example.com".to_string()
+            ]
+        );
+        assert!(cfg.security.trust_forwarded_for);
+        assert_eq!(
+            cfg.security.rate_limit,
+            Some(RateLimit {
+                max_requests: 100,
+                window: Duration::from_secs(30)
+            })
+        );
+    }
+
+    #[test]
+    fn rate_limit_is_disabled_by_a_zero_budget() {
+        let cfg: ServerConfig =
+            load_from(map(&[(RATE_LIMIT_MAX_REQUESTS_VAR, "0")])).expect("zero disables");
+        assert_eq!(cfg.security.rate_limit, None);
+    }
+
+    #[test]
+    fn config_rejects_unparseable_rate_limit() {
+        let err =
+            load_from::<ServerConfig>(map(&[(RATE_LIMIT_MAX_REQUESTS_VAR, "lots")])).unwrap_err();
+        assert!(err.problems()[0].contains(RATE_LIMIT_MAX_REQUESTS_VAR));
     }
 
     // --- HTTP surface: driven via the router, no live port -----------------
@@ -599,6 +715,7 @@ mod tests {
             // races another on a fixed port.
             http_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             expose_error_details: false,
+            security: HttpSecurity::default(),
         };
         // An already-resolved shutdown: serve binds, flips Ready, immediately
         // drains and returns Ok — no fixed port, no running clock.
