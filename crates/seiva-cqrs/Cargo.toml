@@ -1,0 +1,26 @@
+# seiva-cqrs — the application-layer command/query dispatch core.
+#
+# The INTERNAL CQRS bus: a use case is a self-contained handler invoked through
+# a mediator, with cross-cutting middleware wrapped around dispatch, decoupled
+# from transport. This is NOT the external contract (`#[seiva::facade]`); it is
+# how the application layer routes a command or query to its handler.
+#
+# Dependency-light by policy: it depends ONLY on the trait-only ports crate
+# (`seiva-ports`) for its result/error types. NO runtime, NO data layer, NO
+# async-trait — `impl Future` carries the asynchrony.
+[package]
+name = "seiva-cqrs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Application-layer CQRS dispatch for Delonix Seiva: a statically-wired command/query mediator with typed middleware. DORM-free."
+
+[dependencies]
+# The single dependency: the result/error boundary (`PortResult`, `BoxError`).
+# No runtime, no framework, no data layer rides in through this.
+seiva-ports = { path = "../seiva-ports" }
+
+[dev-dependencies]
+# The tests drive async handlers on a current-thread runtime. A dev-dependency
+# only: the library itself pulls in no runtime.
+tokio = { version = "1", features = ["rt", "macros"] }

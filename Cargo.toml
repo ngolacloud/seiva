@@ -45,6 +45,9 @@ members = [
     "crates/seiva-config",
     # Standard Webhooks signing/verification (HMAC-SHA256, replay window).
     "crates/seiva-webhooks",
+    # Application-layer CQRS dispatch: a statically-wired command/query mediator
+    # with typed middleware (instrumentation, query caching). Data-layer-free.
+    "crates/seiva-cqrs",
     # gRPC artefact generation (proto3 + tonic Status) from a facade descriptor.
     # Data-layer-free: reads only the contract, so a workspace member.
     "crates/seiva-grpc",

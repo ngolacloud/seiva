@@ -7,9 +7,23 @@
 //! with a typed result (the "CLI as a library" rule, mirrored from DORM).
 
 use clap::{Parser, Subcommand};
+use delonix_seiva::contract::{Facade, FacadeDescriptor};
 use delonix_seiva::scaffold::{self, GeneratedFile};
+use notes_facade::NotesFacade;
+use seiva_auth::hash_password;
+use seiva_grpc::proto_document;
+use seiva_openapi::{openapi_document, ApiInfo};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+/// The facades the CLI knows at compile time.
+///
+/// The CLI cannot introspect a user's own crate at runtime, so this first cut
+/// documents and serves only the built-in demonstration facade shipped with the
+/// framework (`notes-facade`'s `NotesFacade`). A later phase will discover a
+/// project's own facades; until then `seiva openapi` and `seiva proto` operate
+/// on this fixed set.
+const BUILTIN_FACADES: &[FacadeDescriptor] = &[NotesFacade::DESCRIPTOR];
 
 #[derive(Parser)]
 #[command(
@@ -47,6 +61,48 @@ enum Command {
     Start,
     /// Report the environment: framework version and which data layer is linked.
     Doctor,
+    /// Print the OpenAPI 3.1 document for the built-in demonstration facade(s).
+    ///
+    /// LIMITATION: this first cut cannot introspect a user's own crate at
+    /// runtime, so it documents only the framework's built-in demonstration
+    /// facade (`NotesFacade`). A later phase will discover a project's own
+    /// facades. A short note to this effect is also printed to stderr.
+    Openapi {
+        /// Pretty-print the JSON (the default when no style flag is given).
+        #[arg(long, conflicts_with = "compact")]
+        pretty: bool,
+        /// Emit compact, single-line JSON instead of the pretty default.
+        #[arg(long)]
+        compact: bool,
+    },
+    /// Print the proto3 service document for the built-in demonstration facade(s).
+    ///
+    /// LIMITATION: like `openapi`, this first cut documents only the framework's
+    /// built-in demonstration facade (`NotesFacade`); a later phase will
+    /// discover a project's own facades. A short note is also printed to stderr.
+    Proto,
+    /// Manage user credential records.
+    User {
+        #[command(subcommand)]
+        action: UserAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum UserAction {
+    /// Create a user credential record: `seiva user create --username <NAME>`.
+    ///
+    /// The password is read as one line from STDIN (never from an argv flag,
+    /// which would leak into shell history); pipe it in to run non-interactively,
+    /// e.g. `printf 'secret\n' | seiva user create --username alice`. The record
+    /// is printed as JSON to stdout with the Argon2id PHC hash of the password.
+    /// A later phase persists the record; this cut proves the hashing path from
+    /// the CLI.
+    Create {
+        /// The username for the new credential record.
+        #[arg(long)]
+        username: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -238,6 +294,113 @@ fn lint() -> ExitCode {
     }
 }
 
+/// Builds the OpenAPI 3.1 document for the built-in facades as a JSON string.
+///
+/// `compact` chooses the single-line form; otherwise the JSON is pretty-printed.
+/// The document's `info.version` is the framework version, so the served
+/// contract tracks the installed `seiva`.
+fn builtin_openapi_json(compact: bool) -> String {
+    let info = ApiInfo {
+        title: "Seiva API (built-in facades)".to_string(),
+        version: delonix_seiva::VERSION.to_string(),
+    };
+    let document = openapi_document(info, BUILTIN_FACADES);
+    if compact {
+        serde_json::to_string(&document).expect("a serde_json::Value always serialises")
+    } else {
+        serde_json::to_string_pretty(&document).expect("a serde_json::Value always serialises")
+    }
+}
+
+/// Renders the proto3 service document(s) for the built-in facades.
+///
+/// One document per facade, separated by a blank line. Today there is a single
+/// built-in facade, so this is `proto_document` of `NotesFacade::DESCRIPTOR`.
+fn builtin_proto() -> String {
+    BUILTIN_FACADES
+        .iter()
+        .map(proto_document)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A user credential record: a username and the Argon2id PHC hash of a password.
+///
+/// This is the JSON the `user create` command emits. It carries no plaintext
+/// password — only the self-describing PHC hash, which is safe to store.
+#[derive(serde::Serialize)]
+struct UserRecord {
+    /// The account's username.
+    username: String,
+    /// The Argon2id PHC hash string (`$argon2id$...`) of the account's password.
+    password_hash: String,
+}
+
+/// Builds the JSON for a user credential record, hashing `password` with
+/// Argon2id via `seiva-auth`.
+///
+/// # Errors
+///
+/// Returns the `seiva_auth::AuthError` raised if the Argon2id hashing fails.
+fn build_user_record_json(username: &str, password: &str) -> Result<String, seiva_auth::AuthError> {
+    let record = UserRecord {
+        username: username.to_string(),
+        password_hash: hash_password(password)?,
+    };
+    Ok(serde_json::to_string_pretty(&record).expect("UserRecord always serialises"))
+}
+
+/// Reads a single line from STDIN, stripping the trailing newline (CR/LF).
+fn read_password_line() -> std::io::Result<String> {
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+/// `seiva openapi`: prints the OpenAPI 3.1 document for the built-in facades.
+fn openapi(compact: bool) -> ExitCode {
+    eprintln!(
+        "seiva: note — this documents the built-in demonstration facade(s) only; \
+         runtime introspection of a project's own facades is a later phase."
+    );
+    println!("{}", builtin_openapi_json(compact));
+    ExitCode::SUCCESS
+}
+
+/// `seiva proto`: prints the proto3 service document for the built-in facades.
+fn proto() -> ExitCode {
+    eprintln!(
+        "seiva: note — this documents the built-in demonstration facade(s) only; \
+         runtime introspection of a project's own facades is a later phase."
+    );
+    println!("{}", builtin_proto());
+    ExitCode::SUCCESS
+}
+
+/// `seiva user create`: hashes a stdin password and prints a credential record.
+fn user_create(username: &str) -> ExitCode {
+    let password = match read_password_line() {
+        Ok(password) => password,
+        Err(err) => {
+            eprintln!("seiva: failed to read password from stdin: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match build_user_record_json(username, &password) {
+        Ok(json) => {
+            eprintln!(
+                "seiva: note — this proves the hashing path; a later phase persists the record."
+            );
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("seiva: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn doctor() -> ExitCode {
     println!("Delonix Seiva");
     println!("  framework version : {}", delonix_seiva::VERSION);
@@ -273,5 +436,77 @@ fn main() -> ExitCode {
         Command::Lint => lint(),
         Command::Expand => not_yet("expand", "the macros phase"),
         Command::Start => not_yet("start", "the runtime phase"),
+        Command::Openapi { compact, .. } => openapi(compact),
+        Command::Proto => proto(),
+        Command::User { action } => match action {
+            UserAction::Create { username } => user_create(&username),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openapi_json_is_valid_and_documents_the_notes_facade() {
+        let json = builtin_openapi_json(false);
+        let doc: serde_json::Value =
+            serde_json::from_str(&json).expect("openapi must be valid JSON");
+        assert_eq!(doc["openapi"], "3.1.0");
+        assert_eq!(doc["info"]["version"], delonix_seiva::VERSION);
+        // The built-in Notes facade's `create` operation is present.
+        assert!(
+            doc["paths"]["/v1/notes"]["post"].is_object(),
+            "notes create operation must be documented"
+        );
+        assert_eq!(
+            doc["paths"]["/v1/notes"]["post"]["operationId"],
+            "notes_create"
+        );
+    }
+
+    #[test]
+    fn openapi_compact_and_pretty_carry_the_same_document() {
+        let compact = builtin_openapi_json(true);
+        let pretty = builtin_openapi_json(false);
+        assert!(!compact.contains('\n'), "compact JSON must be single-line");
+        assert!(pretty.contains('\n'), "pretty JSON must be multi-line");
+        let a: serde_json::Value = serde_json::from_str(&compact).unwrap();
+        let b: serde_json::Value = serde_json::from_str(&pretty).unwrap();
+        assert_eq!(a, b, "the two styles must encode the same document");
+    }
+
+    #[test]
+    fn proto_document_renders_the_notes_service() {
+        let proto = builtin_proto();
+        assert!(
+            proto.contains("syntax = \"proto3\";"),
+            "proto was:\n{proto}"
+        );
+        assert!(proto.contains("service Notes {"), "proto was:\n{proto}");
+        assert!(
+            proto.contains("rpc Create(CreateRequest) returns (CreateResponse);"),
+            "proto was:\n{proto}"
+        );
+    }
+
+    #[test]
+    fn user_record_json_carries_username_and_a_phc_hash() {
+        let json = build_user_record_json("alice", "hunter2").expect("hashing must succeed");
+        let record: serde_json::Value = serde_json::from_str(&json).expect("record must be JSON");
+        assert_eq!(record["username"], "alice");
+        let hash = record["password_hash"]
+            .as_str()
+            .expect("password_hash is a string");
+        assert!(
+            hash.starts_with("$argon2id$"),
+            "expected an Argon2id PHC string, got: {hash}"
+        );
+        // The hash round-trips through the same crate's verifier.
+        assert!(
+            seiva_auth::verify_password("hunter2", hash).unwrap(),
+            "the emitted hash must verify against the source password"
+        );
     }
 }

@@ -2362,6 +2362,12 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "delonix-seiva",
+ "notes-facade",
+ "seiva-auth",
+ "seiva-grpc",
+ "seiva-openapi",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2379,6 +2385,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "seiva-cqrs"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "tokio",
 ]
 
 [[package]]

@@ -24,6 +24,17 @@ path = "src/main.rs"
 [dependencies]
 delonix-seiva = { workspace = true }
 clap = { workspace = true }
+# DORM-free sibling crates the new `openapi`/`proto`/`user` commands drive. Path
+# deps (siblings), kept out of the `dorm` feature: these commands never touch the
+# data layer, so they must build with default features and `--no-default-features`
+# alike.
+seiva-openapi = { path = "../seiva-openapi" }
+seiva-grpc = { path = "../seiva-grpc" }
+seiva-auth = { path = "../seiva-auth" }
+# The built-in demonstration facade the CLI documents at compile time.
+notes-facade = { path = "../../examples/notes/facade" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [features]
 # Forward the data-layer toggle to the framework crate so `--no-default-features`
