@@ -88,10 +88,15 @@ pub fn router(health: Health) -> Router {
 }
 
 /// Builds the framework router — the health endpoints, `/openapi.json` and
-/// `/docs` — wrapped (innermost to outermost) with the security response headers,
-/// an optional CORS layer, a body-size limit, the rate limiter and the
-/// [`request_id()`] middleware (outermost, so every response — problems included —
-/// carries a correlation id).
+/// `/docs`. Request flows through the layers outermost-first:
+/// [`request_id()`] → [`security_headers`] → the rate limiter → the optional CORS
+/// layer → the body-size limit → the route.
+///
+/// `security_headers` and `request_id` are the **outermost** layers on purpose:
+/// every response carries them even when an outer layer short-circuits before the
+/// route runs — a rate-limiter `429` or a CORS preflight included. (With the
+/// headers mounted inside the rate limiter, a `429` went out naked — no CSP, no
+/// `nosniff`, no HSTS — measured end-to-end.)
 ///
 /// It mounts no module route; the composition root merges each module's generated
 /// controller router into the result. `security` controls the transport-level
@@ -103,7 +108,6 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
         .route("/docs", get(docs::docs_handler))
-        .layer(from_fn(security_headers))
         .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
 
     if let Some(cors) = cors_layer(security) {
@@ -115,5 +119,8 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
         app = app.layer(from_fn_with_state(limiter, rate_limit));
     }
 
-    app.layer(from_fn(request_id))
+    // Outermost: so a short-circuited response (a 429, a CORS preflight) still
+    // leaves through the security headers and gets a correlation id.
+    app.layer(from_fn(security_headers))
+        .layer(from_fn(request_id))
 }

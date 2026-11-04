@@ -183,6 +183,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn security_headers_are_present_even_on_a_rate_limited_429() {
+        use crate::RateLimit;
+        use std::time::Duration;
+
+        // A limit of one request per minute: the second request in the window is
+        // a 429 that short-circuits before the route. It must STILL carry the
+        // secure-by-default headers (regression: they used to be stripped because
+        // the limiter sat outside the header layer).
+        let security = HttpSecurity {
+            rate_limit: Some(RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(60),
+            }),
+            ..HttpSecurity::default()
+        };
+        let app = ready_app(&security);
+
+        let req = || {
+            Request::builder()
+                .uri("/health/ready")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let ok = app.clone().oneshot(req()).await.unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        let limited = app.oneshot(req()).await.unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let headers = limited.headers();
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+        assert_eq!(headers["x-frame-options"], "DENY");
+        assert!(headers.contains_key("content-security-policy"));
+        assert!(headers.contains_key("strict-transport-security"));
+        // And still the correlation id a problem response needs.
+        assert!(headers.contains_key(crate::REQUEST_ID_HEADER));
+    }
+
+    #[tokio::test]
     async fn security_headers_are_present_on_every_response() {
         let app = ready_app(&HttpSecurity::default());
         let res = app
