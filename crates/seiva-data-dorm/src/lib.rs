@@ -21,6 +21,7 @@
 use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
 use seiva_ports::{BoxError, Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
+use std::pin::Pin;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -105,25 +106,31 @@ impl DormUnitOfWork {
 }
 
 impl UnitOfWork for DormUnitOfWork {
-    async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+    fn transaction<'a, T, F, Fut>(
+        &'a self,
+        work: F,
+    ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
     where
-        F: FnOnce() -> Fut + Send,
-        Fut: Future<Output = PortResult<T>> + Send,
-        T: Send,
+        F: FnOnce() -> Fut + Send + 'a,
+        Fut: Future<Output = PortResult<T>> + Send + 'a,
+        T: Send + 'a,
     {
         let db = self.db.clone();
-        let outcome: Result<T, dorm_core::Error> = dorm_core::db::with_session(db, async move {
-            dorm_core::db::atomic(move |_tx| async move {
-                // Map the boundary error to a DORM error so `atomic` rolls back;
-                // the message is preserved across the bridge.
-                work()
+        Box::pin(async move {
+            let outcome: Result<T, dorm_core::Error> =
+                dorm_core::db::with_session(db, async move {
+                    dorm_core::db::atomic(move |_tx| async move {
+                        // Map the boundary error to a DORM error so `atomic` rolls
+                        // back; the message is preserved across the bridge.
+                        work()
+                            .await
+                            .map_err(|e| dorm_core::Error::Config(e.to_string()))
+                    })
                     .await
-                    .map_err(|e| dorm_core::Error::Config(e.to_string()))
-            })
-            .await
+                })
+                .await;
+            outcome.map_err(|e| Box::new(e) as BoxError)
         })
-        .await;
-        outcome.map_err(|e| Box::new(e) as BoxError)
     }
 }
 

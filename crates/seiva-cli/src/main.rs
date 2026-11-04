@@ -358,13 +358,16 @@ mod app_ports {
     pub struct DirectUnitOfWork;
 
     impl UnitOfWork for DirectUnitOfWork {
-        async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+        fn transaction<'a, T, F, Fut>(
+            &'a self,
+            work: F,
+        ) -> std::pin::Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
         where
-            F: FnOnce() -> Fut + Send,
-            Fut: Future<Output = PortResult<T>> + Send,
-            T: Send,
+            F: FnOnce() -> Fut + Send + 'a,
+            Fut: Future<Output = PortResult<T>> + Send + 'a,
+            T: Send + 'a,
         {
-            work().await
+            Box::pin(async move { work().await })
         }
     }
 

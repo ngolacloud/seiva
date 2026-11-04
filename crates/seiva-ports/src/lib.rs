@@ -15,6 +15,7 @@
 
 use async_trait::async_trait;
 use std::future::Future;
+use std::pin::Pin;
 use std::time::SystemTime;
 
 /// The error any port may surface, kept opaque and dependency-free: a boxed
@@ -87,14 +88,24 @@ pub trait EventPublisher: Send + Sync {
 /// executor is closure-scoped (`db::atomic`): a `commit()` called later could
 /// not drive a closure that had already returned. Used generically (a handler is
 /// generic over its ports), so this trait need not be object-safe.
-#[allow(async_fn_in_trait)]
 pub trait UnitOfWork: Send + Sync {
     /// Runs `work` in a transaction, committing on `Ok` and rolling back on `Err`.
-    async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+    ///
+    /// Returns a **boxed `Send` future** (`Pin<Box<dyn Future + Send>>`). The
+    /// `Send` bound is part of the contract, so a use case that awaits it stays
+    /// `Send` in a generic async context — an HTTP handler drives it directly,
+    /// with no `spawn_blocking` offload. Boxing (one allocation per transaction,
+    /// negligible against a database round-trip) erases the opaque future type,
+    /// which also sidesteps the higher-ranked-lifetime inference limits an
+    /// `impl Future` return hits with the generic `work` closure.
+    fn transaction<'a, T, F, Fut>(
+        &'a self,
+        work: F,
+    ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
     where
-        F: FnOnce() -> Fut + Send,
-        Fut: Future<Output = PortResult<T>> + Send,
-        T: Send;
+        F: FnOnce() -> Fut + Send + 'a,
+        Fut: Future<Output = PortResult<T>> + Send + 'a,
+        T: Send + 'a;
 }
 
 #[cfg(test)]

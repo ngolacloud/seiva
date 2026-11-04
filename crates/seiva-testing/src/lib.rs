@@ -157,28 +157,33 @@ impl InMemoryUnitOfWork {
 }
 
 impl UnitOfWork for InMemoryUnitOfWork {
-    async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+    fn transaction<'a, T, F, Fut>(
+        &'a self,
+        work: F,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PortResult<T>> + Send + 'a>>
     where
-        F: FnOnce() -> Fut + Send,
-        Fut: std::future::Future<Output = PortResult<T>> + Send,
-        T: Send,
+        F: FnOnce() -> Fut + Send + 'a,
+        Fut: std::future::Future<Output = PortResult<T>> + Send + 'a,
+        T: Send + 'a,
     {
-        match work().await {
-            Ok(value) => {
-                self.log
-                    .lock()
-                    .expect("uow poisoned")
-                    .push(TxOutcome::Committed);
-                Ok(value)
+        Box::pin(async move {
+            match work().await {
+                Ok(value) => {
+                    self.log
+                        .lock()
+                        .expect("uow poisoned")
+                        .push(TxOutcome::Committed);
+                    Ok(value)
+                }
+                Err(err) => {
+                    self.log
+                        .lock()
+                        .expect("uow poisoned")
+                        .push(TxOutcome::RolledBack);
+                    Err(err)
+                }
             }
-            Err(err) => {
-                self.log
-                    .lock()
-                    .expect("uow poisoned")
-                    .push(TxOutcome::RolledBack);
-                Err(err)
-            }
-        }
+        })
     }
 }
 

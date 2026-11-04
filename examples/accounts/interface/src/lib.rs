@@ -86,13 +86,16 @@ mod runtime {
     pub struct DirectUnitOfWork;
 
     impl UnitOfWork for DirectUnitOfWork {
-        async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+        fn transaction<'a, T, F, Fut>(
+            &'a self,
+            work: F,
+        ) -> std::pin::Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
         where
-            F: FnOnce() -> Fut + Send,
-            Fut: Future<Output = PortResult<T>> + Send,
-            T: Send,
+            F: FnOnce() -> Fut + Send + 'a,
+            Fut: Future<Output = PortResult<T>> + Send + 'a,
+            T: Send + 'a,
         {
-            work().await
+            Box::pin(async move { work().await })
         }
     }
 
@@ -141,53 +144,19 @@ impl Default for AccountsController {
     }
 }
 
-impl AccountsController {
-    /// Runs a use case on the blocking pool and awaits its result.
-    ///
-    /// The `accounts` use case drives `seiva_ports::UnitOfWork::transaction`,
-    /// whose generic `F: FnOnce() -> Fut` closure under an `async fn`-in-trait
-    /// return type produces a future rustc cannot prove `Send` in a generic async
-    /// context (a known higher-ranked-lifetime limitation). axum requires a
-    /// `Send` handler future, so the use-case future is confined to a
-    /// [`tokio::task::spawn_blocking`] thread with its own current-thread runtime;
-    /// the future this method returns only awaits the `JoinHandle`, which IS
-    /// `Send`. This also keeps the CPU-bound Argon2id hashing off the async worker
-    /// threads — the right home for it. The proper fix (a `Send`-friendly
-    /// `UnitOfWork`) lives in `seiva-ports` and is out of scope here.
-    async fn run<T, Fut>(
-        &self,
-        use_case: impl FnOnce(Arc<DefaultService>) -> Fut + Send + 'static,
-    ) -> Result<T, UserError>
-    where
-        Fut: std::future::Future<Output = Result<T, UserError>>,
-        T: Send + 'static,
-    {
-        let service = Arc::clone(&self.0);
-        tokio::task::spawn_blocking(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .expect("building a current-thread runtime for the accounts use case");
-            runtime.block_on(use_case(service))
-        })
-        .await
-        .unwrap_or_else(|join_error| {
-            Err(UserError(format!(
-                "accounts use case panicked: {join_error}"
-            )))
-        })
-    }
-}
-
 #[controller]
 impl Accounts for AccountsController {
+    // `UnitOfWork::transaction` returns a `Send` future (RPITIT with a `+ Send`
+    // bound in `seiva-ports`), so the use-case future is `Send` in this axum
+    // handler and is awaited directly — no boxing or `spawn_blocking`. (Argon2id
+    // hashing runs inline here; offloading that CPU-bound step is a separate
+    // performance concern, not a `Send` requirement.)
     async fn create_user(&self, cmd: CreateUser) -> Result<UserDto, UserError> {
-        self.run(move |service| async move { service.create_user(cmd).await })
-            .await
+        self.0.create_user(cmd).await
     }
 
     async fn get_user(&self, query: GetUser) -> Result<UserDto, UserError> {
-        self.run(move |service| async move { service.get_user(query).await })
-            .await
+        self.0.get_user(query).await
     }
 }
 
