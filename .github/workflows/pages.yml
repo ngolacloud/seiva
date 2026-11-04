@@ -3,10 +3,10 @@ name: pages
 # Publishes the framework's API documentation (rustdoc) to GitHub Pages with a
 # small landing page linking the crates and the written guides.
 #
-# OWNER STEP (one-time): enable Pages with Settings → Pages → Build and
-# deployment → Source: "GitHub Actions". Until that is set, the `deploy` job
-# fails (the environment is not provisioned); the `build` job still produces the
-# artifact. After enabling, re-run this workflow (or push to main) to deploy.
+# The `configure-pages` step self-enables Pages (`enablement: true`) using the
+# workflow token, so no manual setup is normally needed. If org policy forbids
+# a workflow from enabling Pages, do it once by hand — Settings → Pages → Build
+# and deployment → Source: "GitHub Actions" — then re-run this workflow.
 on:
   push:
     branches: [main]
@@ -87,6 +87,10 @@ jobs:
           # Pages serves no directory listing without an index; the one above is it.
           echo "landing page written"
       - uses: actions/configure-pages@v5
+        with:
+          # Create/enable the Pages site (Actions build type) if it does not
+          # exist yet, so the first run provisions it instead of failing.
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: target/doc
