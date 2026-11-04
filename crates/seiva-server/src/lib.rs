@@ -58,8 +58,12 @@ use std::time::Duration;
 use axum::Router;
 use delonix_seiva::ports::PortResult;
 use delonix_seiva::worker::{run_worker, WorkerConfig};
+use std::sync::Arc;
+
 use seiva_config::{EnvReader, FromEnv};
-use seiva_http::{router_with_security, Health, HttpSecurity, RateLimit};
+use seiva_http::{
+    router_with_auth, Authenticator, Health, HttpSecurity, JwtAuthenticator, RateLimit,
+};
 use tokio::net::TcpListener;
 
 pub use delonix_seiva::worker::WorkerReport;
@@ -121,6 +125,20 @@ pub const RATE_LIMIT_MAX_REQUESTS_VAR: &str = "SEIVA_RATE_LIMIT_MAX_REQUESTS";
 /// [`RateLimit::DEFAULT_WINDOW`] (60s); a `0` is clamped to 1s.
 pub const RATE_LIMIT_WINDOW_SECS_VAR: &str = "SEIVA_RATE_LIMIT_WINDOW_SECS";
 
+/// Path to a JWKS (JSON Web Key Set) file whose keys verify inbound bearer JWTs.
+/// Setting it (with the issuer and audience below) turns on the authentication
+/// layer; leaving all three unset means no authn layer (every caller anonymous).
+pub const OIDC_JWKS_FILE_VAR: &str = "SEIVA_OIDC_JWKS_FILE";
+/// The expected JWT `iss` (issuer). Required when [`OIDC_JWKS_FILE_VAR`] is set.
+pub const OIDC_ISSUER_VAR: &str = "SEIVA_OIDC_ISSUER";
+/// The expected JWT `aud` (audience). Required when [`OIDC_JWKS_FILE_VAR`] is set.
+pub const OIDC_AUDIENCE_VAR: &str = "SEIVA_OIDC_AUDIENCE";
+/// The claim carrying the caller's tenant (default `tenant`). Optional.
+pub const OIDC_TENANT_CLAIM_VAR: &str = "SEIVA_OIDC_TENANT_CLAIM";
+/// The claim carrying the caller's permissions (default `permissions`, `scope`
+/// fallback). Optional.
+pub const OIDC_PERMISSION_CLAIM_VAR: &str = "SEIVA_OIDC_PERMISSION_CLAIM";
+
 /// The runtime configuration of a Seiva service, read from the environment.
 ///
 /// It is small but real. Build it with [`from_process_env`](ServerConfig::from_process_env)
@@ -159,6 +177,53 @@ pub struct ServerConfig {
     /// limit. [`Default`](HttpSecurity::default) (same-origin only, rate limiting
     /// on) when none of the variables are set.
     pub security: HttpSecurity,
+    /// The OIDC/JWT authentication configuration, or `None` when the
+    /// `SEIVA_OIDC_*` variables are unset (no authn layer — every caller
+    /// anonymous). Built into a `JwtAuthenticator` at [`serve`] time.
+    pub oidc: Option<OidcConfig>,
+}
+
+/// The inbound-JWT verification configuration read from the environment. Present
+/// only when [`OIDC_JWKS_FILE_VAR`], [`OIDC_ISSUER_VAR`] and [`OIDC_AUDIENCE_VAR`]
+/// are all set; a partial set fails the boot.
+#[derive(Debug, Clone)]
+pub struct OidcConfig {
+    /// Path to the JWKS file whose keys verify bearer tokens.
+    pub jwks_file: String,
+    /// The expected `iss`.
+    pub issuer: String,
+    /// The expected `aud`.
+    pub audience: String,
+    /// The claim carrying the tenant (default `tenant`).
+    pub tenant_claim: Option<String>,
+    /// The claim carrying the permissions (default `permissions`, `scope` fallback).
+    pub permission_claim: Option<String>,
+}
+
+/// Reads the OIDC configuration: `None` when the `SEIVA_OIDC_*` trio is unset
+/// (no authn). If any of the three is set, all three are required — a partial
+/// configuration records a problem and fails the boot, so a typo cannot silently
+/// leave the service unauthenticated.
+fn resolve_oidc(reader: &mut EnvReader) -> Option<Option<OidcConfig>> {
+    let present = reader.optional_var(OIDC_JWKS_FILE_VAR).is_some()
+        || reader.optional_var(OIDC_ISSUER_VAR).is_some()
+        || reader.optional_var(OIDC_AUDIENCE_VAR).is_some();
+    if !present {
+        return Some(None);
+    }
+    // require_var records a "missing" problem for any of the three left unset.
+    let jwks_file = reader.require_var(OIDC_JWKS_FILE_VAR);
+    let issuer = reader.require_var(OIDC_ISSUER_VAR);
+    let audience = reader.require_var(OIDC_AUDIENCE_VAR);
+    let tenant_claim = reader.optional_var(OIDC_TENANT_CLAIM_VAR);
+    let permission_claim = reader.optional_var(OIDC_PERMISSION_CLAIM_VAR);
+    Some(Some(OidcConfig {
+        jwks_file: jwks_file?,
+        issuer: issuer?,
+        audience: audience?,
+        tenant_claim,
+        permission_claim,
+    }))
 }
 
 impl ServerConfig {
@@ -242,12 +307,14 @@ impl FromEnv for ServerConfig {
         let http_addr = resolve_http_addr(reader);
         let expose_error_details = reader.optional_bool(EXPOSE_ERROR_DETAILS_VAR, false);
         let security = resolve_security(reader);
+        let oidc = resolve_oidc(reader);
 
         let config = Self {
             env,
             http_addr: http_addr?,
             expose_error_details: expose_error_details?,
             security: security?,
+            oidc: oidc?,
         };
 
         reader.guard(
@@ -272,6 +339,10 @@ pub enum ServeError {
     Bind(std::io::Error),
     /// The server itself failed while accepting or draining connections.
     Serve(std::io::Error),
+    /// The configured OIDC identity could not be built (the JWKS file is missing
+    /// or is not a valid key set). A startup error — the service refuses to boot
+    /// claiming to authenticate when it cannot.
+    Identity(String),
 }
 
 impl fmt::Display for ServeError {
@@ -279,6 +350,7 @@ impl fmt::Display for ServeError {
         match self {
             ServeError::Bind(e) => write!(f, "failed to bind the HTTP listener: {e}"),
             ServeError::Serve(e) => write!(f, "the HTTP server failed: {e}"),
+            ServeError::Identity(m) => write!(f, "failed to build the OIDC authenticator: {m}"),
         }
     }
 }
@@ -287,15 +359,40 @@ impl std::error::Error for ServeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ServeError::Bind(e) | ServeError::Serve(e) => Some(e),
+            ServeError::Identity(_) => None,
         }
     }
+}
+
+/// Builds the inbound-JWT authenticator from [`ServerConfig::oidc`], or `None`
+/// when no OIDC configuration is set (every caller then anonymous). The JWKS file
+/// is read once at startup — a missing or malformed key set fails the boot rather
+/// than leaving the service silently unauthenticated.
+fn build_authenticator(
+    config: &ServerConfig,
+) -> Result<Option<Arc<dyn Authenticator>>, ServeError> {
+    let Some(oidc) = &config.oidc else {
+        return Ok(None);
+    };
+    let jwks_json = std::fs::read_to_string(&oidc.jwks_file)
+        .map_err(|e| ServeError::Identity(format!("reading JWKS file {}: {e}", oidc.jwks_file)))?;
+    let mut auth = JwtAuthenticator::from_jwks_json(&jwks_json, &oidc.issuer, &oidc.audience)
+        .map_err(|e| ServeError::Identity(format!("parsing JWKS {}: {e}", oidc.jwks_file)))?;
+    if let Some(claim) = &oidc.tenant_claim {
+        auth = auth.with_tenant_claim(claim);
+    }
+    if let Some(claim) = &oidc.permission_claim {
+        auth = auth.with_permission_claim(claim);
+    }
+    Ok(Some(Arc::new(auth)))
 }
 
 /// Serves the framework HTTP surface until `shutdown` resolves, then drains.
 ///
 /// It serves the module-free framework router (health, `/openapi.json`, `/docs`)
 /// under the [`HttpSecurity`] posture read from the environment into
-/// [`ServerConfig::security`] (CORS allowlist, trusted-proxy switch, rate limit).
+/// [`ServerConfig::security`] (CORS allowlist, trusted-proxy switch, rate limit),
+/// and — when [`ServerConfig::oidc`] is set — the OIDC/JWT authentication layer.
 /// A real service does not call this — its `apps/<name>-api` composition root
 /// builds its own router (merging its modules' generated controllers) and calls
 /// [`serve_router`] directly. This entrypoint is the module-free skeleton the
@@ -325,7 +422,8 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
     let health = Health::starting();
-    let app = router_with_security(health.clone(), &config.security);
+    let authenticator = build_authenticator(&config)?;
+    let app = router_with_auth(health.clone(), &config.security, authenticator);
     serve_router(config.http_addr, app, health, shutdown).await
 }
 
@@ -561,6 +659,36 @@ mod tests {
     }
 
     #[test]
+    fn oidc_is_absent_by_default_and_parsed_when_fully_set() {
+        let none: ServerConfig = load_from(map(&[])).expect("empty env");
+        assert!(none.oidc.is_none());
+
+        let cfg: ServerConfig = load_from(map(&[
+            (OIDC_JWKS_FILE_VAR, "/etc/seiva/jwks.json"),
+            (OIDC_ISSUER_VAR, "https://id.example.com/"),
+            (OIDC_AUDIENCE_VAR, "seiva-api"),
+            (OIDC_TENANT_CLAIM_VAR, "org_id"),
+        ]))
+        .expect("full oidc config");
+        let oidc = cfg.oidc.expect("present");
+        assert_eq!(oidc.jwks_file, "/etc/seiva/jwks.json");
+        assert_eq!(oidc.issuer, "https://id.example.com/");
+        assert_eq!(oidc.audience, "seiva-api");
+        assert_eq!(oidc.tenant_claim.as_deref(), Some("org_id"));
+        assert!(oidc.permission_claim.is_none());
+    }
+
+    #[test]
+    fn a_partial_oidc_config_fails_the_boot() {
+        // Only the issuer set: the service must not boot half-authenticated.
+        let err = load_from::<ServerConfig>(map(&[(OIDC_ISSUER_VAR, "https://id.example.com/")]))
+            .unwrap_err();
+        let problems = err.problems().join(" ");
+        assert!(problems.contains(OIDC_JWKS_FILE_VAR));
+        assert!(problems.contains(OIDC_AUDIENCE_VAR));
+    }
+
+    #[test]
     fn rate_limit_is_disabled_by_a_zero_budget() {
         let cfg: ServerConfig =
             load_from(map(&[(RATE_LIMIT_MAX_REQUESTS_VAR, "0")])).expect("zero disables");
@@ -716,6 +844,7 @@ mod tests {
             http_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             expose_error_details: false,
             security: HttpSecurity::default(),
+            oidc: None,
         };
         // An already-resolved shutdown: serve binds, flips Ready, immediately
         // drains and returns Ok — no fixed port, no running clock.

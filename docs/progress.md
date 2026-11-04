@@ -476,3 +476,20 @@ do `permission_guard`. Provado por crypto real (fixtures RSA+JWKS) e integraçã
 - **Unificação do `seiva-mcp`** sobre o `seiva-identity` (o seu `Principal` tem
   `can_write`, não `permissions`, e está acoplado ao DORM) fica como follow-up
   deste mesmo tema; o crate partilhado já existe para o efeito.
+
+### Identidade efetiva ponta-a-ponta (atualização 2026-11-04)
+
+Resolvida a ressalva da composição `merge`-depois-`layer`: `seiva-http` ganhou
+`router_with_modules(health, security, auth, modules)`, que mescla as rotas dos
+módulos ANTES de aplicar as camadas — a única ordem que faz a authn/headers/limite
+valerem nas rotas de módulos (provado por teste: rota de módulo mesclada → bad
+bearer dá 401, não é contornada). O `seiva-server` passou a ler o OIDC do ambiente
+(`SEIVA_OIDC_JWKS_FILE`/`_ISSUER`/`_AUDIENCE` [+ claims]; trio parcial falha o
+boot) e constrói um `JwtAuthenticator` a partir do ficheiro JWKS, montando o
+`authn` via `router_with_auth`. Provado AO VIVO: servidor real com JWKS, sem token
+→ 200 (anónimo), bad bearer → 401 + `WWW-Authenticate`, JWT RS256 válido assinado
+com a chave da fixture → 200.
+
+Pendente (não bloqueia este tema): adotar `router_with_modules` no `main` gerado
+pelo scaffold (ligado ao bloqueador #2, publicação+compilação do projeto gerado);
+unificação do `seiva-mcp`.

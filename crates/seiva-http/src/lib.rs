@@ -125,7 +125,7 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
 /// supplies an [`Authenticator`] to actually admit callers.
 ///
 /// Layer order, outermost-first: [`request_id()`] → [`security_headers`] →
-/// [`authn`] → the rate limiter → CORS → the body-size limit → the route.
+/// [`authn()`] → the rate limiter → CORS → the body-size limit → the route.
 /// `authn` sits inside the header layers (so a `401` still carries them) but
 /// outside the routes (so it runs before each route's guard).
 pub fn router_with_auth(
@@ -133,11 +133,51 @@ pub fn router_with_auth(
     security: &HttpSecurity,
     authenticator: Option<Arc<dyn Authenticator>>,
 ) -> Router {
-    let mut app = Router::new()
+    apply_framework_layers(framework_routes(health), security, authenticator)
+}
+
+/// Builds the full application router: the framework routes **plus the caller's
+/// `modules`**, wrapped in the framework layers — the composition a real
+/// `apps/<name>-api` needs.
+///
+/// Why this exists: axum's [`Router::layer`](axum::Router::layer) wraps only the
+/// routes already present, so `router_with_auth(..).merge(modules)` would leave
+/// the module routes **outside** every middleware — no authn, no security
+/// headers, no rate limit. Merging the modules *before* layering (what this does)
+/// is the only order that applies the framework's guarantees to module routes.
+/// Mount each module's generated controller router into `modules` and pass it here.
+pub fn router_with_modules(
+    health: Health,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+    modules: Router,
+) -> Router {
+    apply_framework_layers(
+        framework_routes(health).merge(modules),
+        security,
+        authenticator,
+    )
+}
+
+/// The framework's own routes, unlayered: health, `/openapi.json`, `/docs`.
+fn framework_routes(health: Health) -> Router {
+    Router::new()
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
         .route("/docs", get(docs::docs_handler))
-        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
+}
+
+/// Wraps `app` (framework routes, and any merged module routes) in the transport
+/// middleware. Layer order, outermost-first: [`request_id()`] →
+/// [`security_headers`] → [`authn()`] → the rate limiter → CORS → the body-size
+/// limit → the route. `authn` sits inside the header layers (so a `401` still
+/// carries them) but outside the routes (so it runs before each route's guard).
+fn apply_framework_layers(
+    app: Router,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+) -> Router {
+    let mut app = app.layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
 
     if let Some(cors) = cors_layer(security) {
         app = app.layer(cors);

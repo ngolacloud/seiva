@@ -19,9 +19,9 @@ use tower::ServiceExt;
 use std::sync::Arc;
 
 use seiva_http::{
-    authn, permission_guard, request_id, router, Authenticator, Health, Principal, Problem,
-    RequiredPermission, TokenAuthenticator, Valid, Validate, ValidationError, PROBLEM_JSON,
-    REQUEST_ID_HEADER,
+    authn, permission_guard, request_id, router, router_with_modules, Authenticator, Health,
+    HttpSecurity, Principal, Problem, RequiredPermission, TokenAuthenticator, Valid, Validate,
+    ValidationError, PROBLEM_JSON, REQUEST_ID_HEADER,
 };
 
 /// Reads a response body into a JSON value.
@@ -343,4 +343,56 @@ async fn a_valid_token_without_the_permission_is_403() {
         .unwrap();
     let response = authed_app(auth).oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn module_routes_merged_via_router_with_modules_get_the_authn_layer() {
+    // The composition a real apps/<name>-api performs: a guarded module route,
+    // merged THROUGH the framework layers (not after them). The authn layer must
+    // apply to it — a bad bearer is a 401, proving the middleware is not bypassed.
+    let module = Router::new()
+        .route("/demo", post(demo_create))
+        .layer(from_fn_with_state(
+            RequiredPermission("demo.create"),
+            permission_guard,
+        ));
+    let app = router_with_modules(
+        Health::starting(),
+        &HttpSecurity::default(),
+        Some(Arc::new(demo_authenticator()) as Arc<dyn Authenticator>),
+        module,
+    );
+
+    // Bad bearer → 401 from the authn layer (it reached the module route).
+    let bad = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/demo")
+                .header("authorization", "Bearer nope")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"title":"x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+    // And it carries the framework's security headers (the module route is inside them).
+    assert_eq!(bad.headers()["x-content-type-options"], "nosniff");
+
+    // Valid bearer → the Principal flows to the guard and the route runs.
+    let ok = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/demo")
+                .header("authorization", "Bearer good-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"title":"authed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::CREATED);
 }

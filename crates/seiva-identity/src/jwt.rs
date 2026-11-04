@@ -73,6 +73,22 @@ impl JwtAuthenticator {
         }
     }
 
+    /// Builds a verifier from the JWKS as a JSON string (the body of a
+    /// `jwks_uri`, or a file a deployment ships), so a caller need not depend on
+    /// `jsonwebtoken` to parse the key set.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`serde_json::Error`] if `jwks_json` is not a valid JWKS.
+    pub fn from_jwks_json(
+        jwks_json: &str,
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+    ) -> Result<Self, serde_json::Error> {
+        let jwks: JwkSet = serde_json::from_str(jwks_json)?;
+        Ok(Self::new(jwks, issuer, audience))
+    }
+
     /// Read the tenant from a different claim (default [`DEFAULT_TENANT_CLAIM`]).
     #[must_use]
     pub fn with_tenant_claim(mut self, claim: impl Into<String>) -> Self {
