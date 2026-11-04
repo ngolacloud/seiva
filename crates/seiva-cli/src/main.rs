@@ -165,6 +165,27 @@ fn write_files(root: &Path, files: &[GeneratedFile]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The framework workspace root a generated project's interim `[patch.crates-io]`
+/// points at (see [`scaffold::workspace_patch_section`]). `SEIVA_FRAMEWORK_DIR`
+/// overrides it; otherwise it is the checkout this `seiva` binary was built from —
+/// the CLI crate's manifest dir (`<root>/crates/seiva-cli`) is two levels below
+/// the workspace root. Canonicalized when the path exists so the generated
+/// manifest carries an absolute path.
+fn framework_root() -> String {
+    if let Ok(dir) = std::env::var("SEIVA_FRAMEWORK_DIR") {
+        return dir;
+    }
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(manifest);
+    std::fs::canonicalize(root)
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn project_new(name: &str) -> ExitCode {
     let files = match scaffold::project_files(name) {
         Ok(files) => files,
@@ -182,8 +203,24 @@ fn project_new(name: &str) -> ExitCode {
         eprintln!("seiva: {err}");
         return ExitCode::FAILURE;
     }
+    // Interim until the framework crates are published: append a
+    // `[patch.crates-io]` redirecting them to this checkout, so `cargo build`
+    // resolves the `= "0.1"` dependencies standalone.
+    let manifest = root.join("Cargo.toml");
+    if let Err(err) = append_patch_section(&manifest, &framework_root()) {
+        eprintln!("seiva: writing {}: {err}", manifest.display());
+        return ExitCode::FAILURE;
+    }
     println!("Created project `{name}`. Next: cd {name} && seiva module new <name>");
     ExitCode::SUCCESS
+}
+
+/// Appends the framework `[patch.crates-io]` section to the generated workspace
+/// manifest at `manifest`.
+fn append_patch_section(manifest: &Path, framework_root: &str) -> std::io::Result<()> {
+    let mut cargo = std::fs::read_to_string(manifest)?;
+    cargo.push_str(&scaffold::workspace_patch_section(framework_root));
+    std::fs::write(manifest, cargo)
 }
 
 fn module_new(name: &str, external: bool) -> ExitCode {

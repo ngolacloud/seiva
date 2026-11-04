@@ -304,9 +304,11 @@ fn bin_cargo_toml(app: &str) -> String {
          # logging and the shutdown signal. The composition root reuses it instead\n\
          # of writing its own `main`.\n\
          seiva-server = \"{FRAMEWORK_VERSION}\"\n\
-         # The HTTP application builder (`router(health)` + health + /openapi.json\n\
-         # + /docs); merge your modules' routers into it below.\n\
+         # The HTTP application builder (`router_with_modules` + health +\n\
+         # /openapi.json + /docs); merge your modules' routers through it below.\n\
          seiva-http = \"{FRAMEWORK_VERSION}\"\n\
+         # The composition root holds the merged module routes as an `axum::Router`.\n\
+         axum = \"0.8\"\n\
          tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
          tracing = \"0.1\"\n"
     )
@@ -320,8 +322,9 @@ fn app_main_rs(name: &str) -> String {
     let app = format!("{name}-api");
     format!(
         "//! Composition root for `{name}`: the service's `main`. Wire your\n\
-         //! modules' routers into `app` below; keep business logic out.\n\n\
-         use seiva_http::{{router, Health}};\n\
+         //! modules' routers into `modules` below; keep business logic out.\n\n\
+         use axum::Router;\n\
+         use seiva_http::{{router_with_modules, Health, HttpSecurity}};\n\
          use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
          use std::process::ExitCode;\n\n\
          #[tokio::main(flavor = \"multi_thread\")]\n\
@@ -336,16 +339,28 @@ fn app_main_rs(name: &str) -> String {
          \x20       }}\n\
          \x20   }};\n\n\
          \x20   let health = Health::starting();\n\
-         \x20   // The framework application: /health, /openapi.json and /docs.\n\
-         \x20   // This is the composition root: for each module you add, pick its\n\
-         \x20   // adapters and merge its generated router, for example:\n\
-         \x20   //   let app = router(health.clone()).merge(notes_interface::notes_router(\n\
+         \x20   // Transport security posture: secure response headers on, same-origin\n\
+         \x20   // only (no CORS) until you add allowed origins.\n\
+         \x20   let security = HttpSecurity::default();\n\
+         \x20   // No authenticator wired yet, so guarded routes answer 403; supply an\n\
+         \x20   // `Arc<dyn seiva_http::Authenticator>` (see `seiva-identity`) to admit\n\
+         \x20   // callers. `None` leaves public routes serving.\n\
+         \x20   let auth = None;\n\
+         \x20   // Merge each module's generated router here, BEFORE the framework\n\
+         \x20   // layers wrap them — `router_with_modules` merges then layers, so\n\
+         \x20   // authn, security headers and the rate limit apply to module routes\n\
+         \x20   // too (a plain `.merge()` after layering would leave them uncovered).\n\
+         \x20   // For each module you add, pick its adapters and merge its router:\n\
+         \x20   //   let modules = Router::new().merge(notes_interface::notes_router(\n\
          \x20   //       notes_interface::NotesController::new(\n\
          \x20   //           notes_infrastructure::InMemoryRecordRepository::new(),\n\
          \x20   //           notes_infrastructure::CounterIdGenerator::default(),\n\
          \x20   //       ),\n\
          \x20   //   ));\n\
-         \x20   let app = router(health.clone());\n\n\
+         \x20   let modules = Router::new();\n\
+         \x20   // The framework application (/health, /openapi.json, /docs) plus the\n\
+         \x20   // modules, all under the framework layers.\n\
+         \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
          \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
          \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
          \x20       Ok(()) => ExitCode::SUCCESS,\n\
@@ -444,6 +459,52 @@ fn module_toml(module: &str) -> String {
 /// framework by version, so a project compiles standalone once the crates are
 /// published; it is not tied to a local framework checkout.
 const FRAMEWORK_VERSION: &str = "0.1";
+
+/// The framework crates a generated project names as crates.io dependencies
+/// (`delonix-seiva = "0.1"`, …). Every other framework crate they pull in is
+/// reached transitively, through these crates' own `path`/`workspace`
+/// dependencies, so redirecting just these to a local checkout resolves the
+/// whole graph (see [`workspace_patch_section`]).
+pub const FRAMEWORK_CRATES: [&str; 5] = [
+    "delonix-seiva",
+    "seiva-http",
+    "seiva-ports",
+    "seiva-openapi",
+    "seiva-server",
+];
+
+/// A `[patch.crates-io]` section redirecting every [`FRAMEWORK_CRATES`] entry to
+/// its directory under `<framework_root>/crates`, so a generated project compiles
+/// against a local framework checkout *before* the crates are published to
+/// crates.io. This is the interim that unblocks a standalone `cargo build`: the
+/// manifests keep the published contract (`delonix-seiva = "0.1"`), and this one
+/// section — deletable in a single edit once the crates are on crates.io —
+/// points those versions at the checkout.
+///
+/// `framework_root` is written verbatim into the manifest; pass an absolute path
+/// (forward slashes, which Cargo accepts on every platform) so the project builds
+/// regardless of where it is generated. The CLI resolves it; a fitness test
+/// resolves its own. Pure: the caller appends the returned text to the generated
+/// workspace `Cargo.toml`.
+#[must_use]
+pub fn workspace_patch_section(framework_root: &str) -> String {
+    let root = framework_root.replace('\\', "/");
+    let mut out = String::from(
+        "\n\
+         # INTERIM — remove once the framework crates are published to crates.io.\n\
+         # The manifests above depend on the framework by version (`= \"0.1\"`); until\n\
+         # those versions exist on crates.io, this redirects them to a local\n\
+         # framework checkout so `cargo build` resolves standalone. Regenerate with\n\
+         # `SEIVA_FRAMEWORK_DIR=/path/to/seiva` to point elsewhere.\n\
+         [patch.crates-io]\n",
+    );
+    for krate in FRAMEWORK_CRATES {
+        out.push_str(&format!(
+            "{krate} = {{ path = \"{root}/crates/{krate}\" }}\n"
+        ));
+    }
+    out
+}
 
 /// Converts a validated snake_case name to PascalCase for the facade trait and
 /// its generated descriptor/router names (`order_items` → `OrderItems`).
@@ -658,10 +719,10 @@ fn facade_cargo_toml(module: &str) -> String {
     format!(
         "[package]\nname = \"{module}-facade\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
          [dependencies]\n\
-         # The framework macros (`#[facade]`) and contract descriptor. A published\n\
-         # project uses a version dependency (`delonix-seiva = \"0.1\"`); this scaffold\n\
-         # uses a path so it builds against a local framework checkout. The data\n\
-         # layer is off here — the facade needs none.\n\
+         # The framework macros (`#[facade]`) and contract descriptor. The project\n\
+         # depends on the framework by version (`delonix-seiva = \"0.1\"`); until those\n\
+         # crates are published, the workspace root's `[patch.crates-io]` redirects\n\
+         # them to a local checkout. The data layer is off here — the facade needs none.\n\
          delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          # The controller uses the facade's own DTOs as wire types, so the write DTO\n\
          # implements `seiva_http::Validate` and the error maps to `seiva_http::Problem`.\n\
@@ -790,6 +851,20 @@ mod tests {
         assert!(main.contains("Health::starting"), "app must expose health");
         assert!(!main.contains("println!"), "the stub must be gone");
 
+        // The composition root merges modules BEFORE the framework layers wrap
+        // them, via `router_with_modules` — so authn/security/rate-limit apply to
+        // module routes. The `router(health).merge(..)` shape (merge AFTER
+        // layering, leaving module routes uncovered) must not appear, not even in
+        // a comment that a developer would copy.
+        assert!(
+            main.contains("router_with_modules(health.clone(), &security, auth, modules)"),
+            "app must compose through router_with_modules"
+        );
+        assert!(
+            !main.contains("router(health).merge("),
+            "the merge-after-layering shape must be gone"
+        );
+
         // The Delonixfile is distroless, multi-stage and non-root.
         let dockerfile = get("Delonixfile");
         assert!(dockerfile.contains("AS builder"), "multi-stage");
@@ -804,6 +879,93 @@ mod tests {
         let compose = get("compose.yaml");
         assert!(compose.contains("dockerfile: Delonixfile"));
         assert!(compose.contains("8080:8080"));
+    }
+
+    /// The framework workspace root, resolved from this crate's manifest dir
+    /// (`<root>/crates/delonix-seiva`). The fitness build points the generated
+    /// project's `[patch.crates-io]` here.
+    fn framework_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("manifest dir is <root>/crates/delonix-seiva")
+            .to_path_buf()
+    }
+
+    /// Writes `files` (paths relative to `root`), creating parent directories.
+    fn write_all(root: &std::path::Path, files: &[GeneratedFile]) {
+        for file in files {
+            let full = root.join(&file.path);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).expect("create parent dir");
+            }
+            std::fs::write(&full, &file.contents).expect("write generated file");
+        }
+    }
+
+    /// The fitness function for the standalone-compile blocker: generate a
+    /// project AND a module, redirect the framework crates to this checkout with
+    /// the same `[patch.crates-io]` the CLI emits, and actually run `cargo build`.
+    ///
+    /// This COMPILES the generated code — it is not a string assertion on the
+    /// manifests — so it catches drift between the templates and the real
+    /// framework API (a renamed `router_with_modules`, a changed controller
+    /// macro, a moved `seiva-ports` item) that a manifest-text check cannot. It
+    /// exercises both the app composition root and all five module layers.
+    ///
+    /// A persistent `CARGO_TARGET_DIR` keeps reruns fast; the project tree itself
+    /// is a fresh temp dir removed on the way in and out.
+    #[test]
+    fn generated_project_compiles_standalone() {
+        let root = framework_root();
+        let work = std::env::temp_dir().join(format!(
+            "seiva-scaffold-fitness-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).expect("create work dir");
+
+        // Project skeleton, then a module, then the workspace registration edit
+        // the CLI performs so the module crates are built too.
+        let mut project = project_files("demo").expect("project files");
+        let modules = module_files("notes").expect("module files");
+        let cargo = project
+            .iter()
+            .find(|f| f.path == "Cargo.toml")
+            .expect("workspace manifest")
+            .contents
+            .clone();
+        let registered = add_members_to_workspace(&cargo, "notes").expect("register module");
+        // The interim patch redirecting `= "0.1"` to this checkout — exactly what
+        // `seiva project new` appends.
+        let with_patch = format!(
+            "{registered}{}",
+            workspace_patch_section(&root.to_string_lossy())
+        );
+        project
+            .iter_mut()
+            .find(|f| f.path == "Cargo.toml")
+            .expect("workspace manifest")
+            .contents = with_patch;
+
+        write_all(&work, &project);
+        write_all(&work, &modules);
+
+        let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+        let target_dir = std::env::temp_dir().join("seiva-scaffold-fitness-target");
+        let status = std::process::Command::new(cargo_bin)
+            .arg("build")
+            .current_dir(&work)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .status()
+            .expect("run cargo build on the generated project");
+
+        let _ = std::fs::remove_dir_all(&work);
+        assert!(
+            status.success(),
+            "the generated project must compile standalone (rc {:?})",
+            status.code()
+        );
     }
 
     /// Looks up a generated file's contents by its exact path.
