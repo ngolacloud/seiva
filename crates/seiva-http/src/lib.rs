@@ -29,6 +29,7 @@
 // box away, so the large-Err lint is allowed crate-wide.
 #![allow(clippy::result_large_err)]
 
+pub mod authn;
 pub mod docs;
 pub mod guard;
 pub mod health;
@@ -38,19 +39,27 @@ pub mod request_id;
 pub mod security;
 pub mod valid;
 
+use std::sync::Arc;
+
 use axum::extract::DefaultBodyLimit;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::get;
 use axum::{Json, Router};
 
+pub use authn::authn;
 pub use docs::{docs_handler, DOCS_HTML};
-pub use guard::{permission_guard, Principal, RequiredPermission, Scoped};
+pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
 pub use health::{health_router, Health, HealthState};
 pub use problem::{Problem, PROBLEM_JSON};
 pub use rate_limit::{rate_limit, RateLimit, RateLimiter};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};
 pub use security::{cors_layer, security_headers, HttpSecurity};
 pub use valid::{Valid, Validate, ValidationError};
+// The identity model is owned by `seiva-identity` (transport-free, shared with
+// MCP); re-exported here so a `seiva_http::Principal` import keeps working.
+pub use seiva_identity::{
+    AuthError, Authenticator, JwtAuthenticator, Principal, TokenAuthenticator,
+};
 
 /// The default maximum request body size (1 MiB). Oversized bodies are rejected
 /// before a handler runs. Mounted as [`DefaultBodyLimit`] in [`router`].
@@ -104,6 +113,26 @@ pub fn router(health: Health) -> Router {
 /// only when [`HttpSecurity::cors_allowed_origins`] is non-empty (otherwise the
 /// browser enforces same-origin).
 pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
+    router_with_auth(health, security, None)
+}
+
+/// Builds the framework router under `security` and an optional authentication
+/// layer: when `authenticator` is `Some`, every request is authenticated (ADR
+/// 0006) ahead of any route's [`permission_guard`] — a missing bearer becomes
+/// [`Principal::anonymous`] (public routes still serve, guarded routes `403`),
+/// a present-but-invalid one is a `401`. `None` mounts no authn layer (no caller
+/// is ever authenticated, so guarded routes answer `403`): the composition root
+/// supplies an [`Authenticator`] to actually admit callers.
+///
+/// Layer order, outermost-first: [`request_id()`] → [`security_headers`] →
+/// [`authn`] → the rate limiter → CORS → the body-size limit → the route.
+/// `authn` sits inside the header layers (so a `401` still carries them) but
+/// outside the routes (so it runs before each route's guard).
+pub fn router_with_auth(
+    health: Health,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+) -> Router {
     let mut app = Router::new()
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
@@ -119,8 +148,12 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
         app = app.layer(from_fn_with_state(limiter, rate_limit));
     }
 
-    // Outermost: so a short-circuited response (a 429, a CORS preflight) still
-    // leaves through the security headers and gets a correlation id.
+    if let Some(auth) = authenticator {
+        app = app.layer(from_fn_with_state(auth, authn));
+    }
+
+    // Outermost: so a short-circuited response (a 429, a 401, a CORS preflight)
+    // still leaves through the security headers and gets a correlation id.
     app.layer(from_fn(security_headers))
         .layer(from_fn(request_id))
 }

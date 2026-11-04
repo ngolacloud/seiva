@@ -12,18 +12,18 @@
 //! treated as [`Principal::anonymous`] — holding nothing — so an unauthenticated
 //! caller is denied, not admitted.
 
-use std::collections::BTreeSet;
-
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+use seiva_identity::Principal;
+
 use crate::problem::Problem;
 use crate::request_id::RequestIdExt;
 
-/// The authenticated caller, the tenant it belongs to, and the permissions it
-/// holds. Placed in the request extensions by an authentication layer upstream
-/// of [`permission_guard`].
+/// HTTP-flavoured object-level authorization helpers on the transport-free
+/// [`Principal`] (which lives in `seiva-identity`). These return a `403`
+/// [`Problem`], so they stay in the HTTP crate rather than in the identity crate.
 ///
 /// # Function-level vs object-level authorization
 ///
@@ -32,83 +32,21 @@ use crate::request_id::RequestIdExt;
 /// API1 / BOLA), because the middleware runs before the handler loads the
 /// resource, so it does not yet know which tenant owns it. Object-level checks
 /// belong where the resource is known: once a handler (or the application layer)
-/// has loaded a record, it calls [`Principal::require_owns`] with the record's
-/// tenant. [`tenant`](Self::tenant) is the building block both layers share.
-#[derive(Debug, Clone, Default)]
-pub struct Principal {
-    /// A stable identifier for the caller (subject). Empty for the anonymous
-    /// principal.
-    pub subject: String,
-    /// The tenant the caller belongs to, if any. `None` for the anonymous
-    /// principal and for single-tenant deployments that do not scope by tenant.
-    /// Compared against a resource's tenant by [`owns`](Self::owns).
-    pub tenant: Option<String>,
-    /// The permissions the caller holds, compared verbatim against a facade
-    /// method's `requires`.
-    pub permissions: BTreeSet<String>,
-}
-
-impl Principal {
-    /// The anonymous principal: no subject, no tenant, no permissions.
-    pub fn anonymous() -> Self {
-        Self::default()
-    }
-
-    /// A principal with the given subject holding `permissions`, belonging to no
-    /// particular tenant. Use [`in_tenant`](Self::in_tenant) to scope it.
-    pub fn new<I, P>(subject: impl Into<String>, permissions: I) -> Self
-    where
-        I: IntoIterator<Item = P>,
-        P: Into<String>,
-    {
-        Self {
-            subject: subject.into(),
-            tenant: None,
-            permissions: permissions.into_iter().map(Into::into).collect(),
-        }
-    }
-
-    /// A principal scoped to `tenant`, holding `permissions`.
-    pub fn in_tenant<I, P>(
-        subject: impl Into<String>,
-        tenant: impl Into<String>,
-        permissions: I,
-    ) -> Self
-    where
-        I: IntoIterator<Item = P>,
-        P: Into<String>,
-    {
-        Self {
-            subject: subject.into(),
-            tenant: Some(tenant.into()),
-            permissions: permissions.into_iter().map(Into::into).collect(),
-        }
-    }
-
-    /// Whether the caller holds `permission`.
-    pub fn has(&self, permission: &str) -> bool {
-        self.permissions.contains(permission)
-    }
-
-    /// Whether the caller owns a resource belonging to `resource_tenant`.
-    ///
-    /// True only when the caller has a tenant and it matches `resource_tenant`.
-    /// An anonymous or tenant-less principal owns nothing, so this is a safe
-    /// default: a missing tenant never grants cross-tenant access.
-    #[must_use]
-    pub fn owns(&self, resource_tenant: &str) -> bool {
-        self.tenant.as_deref() == Some(resource_tenant)
-    }
-
+/// has loaded a record, it calls [`require_owns`](PrincipalExt::require_owns)
+/// with the record's tenant — or, fail-closed, wraps it in a [`Scoped`].
+pub trait PrincipalExt {
     /// Asserts the caller owns a resource in `resource_tenant`, returning a `403`
-    /// [`Problem`] otherwise. The object-level (API1 / BOLA) counterpart to the
-    /// function-level [`permission_guard`]: call it from a handler or the
-    /// application layer once the resource's tenant is known.
+    /// [`Problem`] otherwise. The advisory object-level (API1 / BOLA) counterpart
+    /// to the function-level [`permission_guard`]; [`Scoped`] is the fail-closed one.
     ///
     /// # Errors
     ///
     /// Returns a `403` [`Problem`] when the caller does not own the resource.
-    pub fn require_owns(&self, resource_tenant: &str) -> Result<(), Problem> {
+    fn require_owns(&self, resource_tenant: &str) -> Result<(), Problem>;
+}
+
+impl PrincipalExt for Principal {
+    fn require_owns(&self, resource_tenant: &str) -> Result<(), Problem> {
         if self.owns(resource_tenant) {
             Ok(())
         } else {

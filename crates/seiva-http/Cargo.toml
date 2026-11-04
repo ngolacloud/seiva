@@ -27,6 +27,9 @@ description = "Delonix Seiva — HTTP transport (axum/tower): RFC 9457 problems,
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
 # The trait-only ports: we map their opaque `BoxError` into an RFC 9457 problem.
 seiva-ports = { path = "../seiva-ports" }
+# The verified caller: `Principal` and the `Authenticator` the authn middleware
+# runs. Transport-free, so the same identity model serves HTTP and MCP (ADR 0006).
+seiva-identity = { path = "../seiva-identity" }
 # The OpenAPI 3.1 generator: `/openapi.json` is generated from the facades
 # linked into the binary, not hand-written. Data-layer-free like this crate.
 seiva-openapi = { path = "../seiva-openapi" }

@@ -448,3 +448,31 @@ Dívida aceite: adoção é por-módulo e opt-in; e o primitivo vive em `seiva-h
 (construído na costura do interface), por isso a `application` ainda não devolve
 `Scoped<T>` diretamente — mover o primitivo para um crate sem transporte é o
 refactor que o primeiro módulo multi-tenant real vai forçar.
+
+## Identidade / autenticação (bloqueador #1 do audit) — ADR 0006 (2026-11-04)
+
+Novo crate transport-free `seiva-identity`: um `Principal` único (subject, tenant,
+permissions), o trait `Authenticator` (deny-by-default), `TokenAuthenticator`
+(dev/test) e `JwtAuthenticator` (verificação OIDC/JWT contra JWKS injetado —
+RS256/ES256 só, nunca HS*/`none`; valida iss/aud/exp/nbf; mapeia claims→Principal
+com claims de tenant/permissões configuráveis e fallback `scope`). `seiva-http`
+passou a importar o `Principal` daqui (re-exportado; `require_owns` virou o trait
+`PrincipalExt`) e ganhou o middleware `authn` + `router_with_auth`: sem bearer →
+anónimo (rotas públicas servem, guardadas dão 403); bearer inválido → 401 com
+`WWW-Authenticate`; bearer válido → `Principal` dos claims verificados, à frente
+do `permission_guard`. Provado por crypto real (fixtures RSA+JWKS) e integração
+401/403/200.
+
+**Dívida/ressalvas (datadas 2026-11-04):**
+- **Fetch/rotação de JWKS e allowlist de emissor (SSRF, API7) ficam de fora** — o
+  `JwtAuthenticator` consome um `JwkSet` estático; um porto de refresh vem depois.
+  Emissão de tokens é do IdP, não do Seiva.
+- **Composição `merge`-depois-`layer`**: em axum, `router(health).merge(módulo)`
+  NÃO aplica as camadas do framework (authn/security/request-id) às rotas do
+  módulo mescladas depois. Para a autenticação ser efetiva nas rotas reais, a
+  composition root tem de mesclar os módulos ANTES de aplicar as camadas (ou usar
+  um helper do framework). Fica como follow-up prioritário (toca o scaffold e o
+  `serve_router`), relacionado com o bloqueador #7.
+- **Unificação do `seiva-mcp`** sobre o `seiva-identity` (o seu `Principal` tem
+  `can_write`, não `permissions`, e está acoplado ao DORM) fica como follow-up
+  deste mesmo tema; o crate partilhado já existe para o efeito.

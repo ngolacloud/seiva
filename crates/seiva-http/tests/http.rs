@@ -16,9 +16,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+use std::sync::Arc;
+
 use seiva_http::{
-    permission_guard, request_id, router, Health, Principal, Problem, RequiredPermission, Valid,
-    Validate, ValidationError, PROBLEM_JSON, REQUEST_ID_HEADER,
+    authn, permission_guard, request_id, router, Authenticator, Health, Principal, Problem,
+    RequiredPermission, TokenAuthenticator, Valid, Validate, ValidationError, PROBLEM_JSON,
+    REQUEST_ID_HEADER,
 };
 
 /// Reads a response body into a JSON value.
@@ -234,4 +237,110 @@ async fn openapi_document_is_served() {
     assert_eq!(body["openapi"], "3.1.0");
     assert!(body["info"]["version"].is_string());
     assert!(body["paths"].is_object());
+}
+
+// --- The authn middleware (ADR 0006): deny-by-default, ahead of the guard ------
+
+/// The guarded `/demo` route with the authentication middleware mounted *ahead*
+/// of the permission guard, exactly as `router_with_auth` arranges them: authn
+/// runs first and inserts the `Principal`, then the guard reads it.
+fn authed_app(auth: TokenAuthenticator) -> Router {
+    Router::new()
+        .route("/demo", post(demo_create))
+        .layer(from_fn_with_state(
+            RequiredPermission("demo.create"),
+            permission_guard,
+        ))
+        .layer(from_fn_with_state(
+            Arc::new(auth) as Arc<dyn Authenticator>,
+            authn,
+        ))
+        .layer(from_fn(request_id))
+}
+
+fn demo_authenticator() -> TokenAuthenticator {
+    TokenAuthenticator::new().with_token(
+        "good-token",
+        Principal::in_tenant("user-1", "acme", ["demo.create"]),
+    )
+}
+
+#[tokio::test]
+async fn no_token_is_anonymous_and_a_guarded_route_is_403() {
+    // Deny by default: a missing bearer is the anonymous principal, which holds
+    // no permission, so the guard refuses — but the layer itself does not 401
+    // (public routes must still serve).
+    let request = Request::builder()
+        .method("POST")
+        .uri("/demo")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"title":"x"}"#))
+        .unwrap();
+    let response = authed_app(demo_authenticator())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        PROBLEM_JSON
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_bearer_is_401_with_www_authenticate() {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/demo")
+        .header("authorization", "Bearer not-a-real-token")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"title":"x"}"#))
+        .unwrap();
+    let response = authed_app(demo_authenticator())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()["www-authenticate"], "Bearer");
+    // Even a short-circuited 401 carries a correlation id.
+    assert!(response.headers().contains_key(REQUEST_ID_HEADER));
+}
+
+#[tokio::test]
+async fn a_valid_bearer_authenticates_and_the_guard_passes() {
+    // The token maps to a Principal holding `demo.create`, so authn inserts it and
+    // the guard admits the request: the identity flows end to end.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/demo")
+        .header("authorization", "Bearer good-token")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"title":"authed"}"#))
+        .unwrap();
+    let response = authed_app(demo_authenticator())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = json_body(response.into_body()).await;
+    assert_eq!(body["title"], "authed");
+}
+
+#[tokio::test]
+async fn a_valid_token_without_the_permission_is_403() {
+    // Authentication succeeds, authorization does not: a read-only caller is
+    // admitted by authn but refused by the guard. AuthN and AuthZ are distinct.
+    let auth = TokenAuthenticator::new().with_token(
+        "reader",
+        Principal::in_tenant("user-2", "acme", ["demo.read"]),
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/demo")
+        .header("authorization", "Bearer reader")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"title":"x"}"#))
+        .unwrap();
+    let response = authed_app(auth).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

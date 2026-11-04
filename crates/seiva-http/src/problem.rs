@@ -53,6 +53,13 @@ impl Problem {
         }
     }
 
+    /// A `401 Unauthorized` problem (the caller presented a bearer credential
+    /// that did not authenticate). The caller is expected to add the
+    /// `WWW-Authenticate` response header separately.
+    pub fn unauthorized(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "Unauthorized").with_detail(detail)
+    }
+
     /// A `403 Forbidden` problem (the permission guard denied the caller).
     pub fn forbidden(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, "Forbidden").with_detail(detail)
