@@ -12,33 +12,38 @@ disponíveis por versão (crates.io) ou por git tag — hoje o scaffold emite de
 `seiva-testing`. Metadata completa; deps internas já carregam `version` via
 `[workspace.dependencies]`.
 
-**Não publicáveis por intenção:** `seiva-grpc` (`publish = false`); os crates
-acoplados ao DORM privado (`seiva-data-dorm`, `seiva-outbox-relay`,
-`seiva-rag-worker`, `seiva-mcp`), excluídos do workspace.
+**DESBLOQUEADOS nesta campanha** (demo extraída → `cargo package` passa):
+- `seiva-http`: removido o demo `notes_router`/`notes-facade`; fica só com
+  problem/valid/guard/health/security/rate_limit/docs + o builder de router. Os
+  testes exercem os primitivos com uma rota inline (sem exemplo).
+- `seiva-server`: `serve()` serve a superfície do framework; o `accounts` passou
+  a `[dev-dependencies]` + testes (composição demo-free em produção).
 
-**BLOQUEADOS — dependem de crates de exemplo (`publish = false`):**
-- `seiva-http` → `notes-facade` (o demo `notes_router` vive dentro do crate que
-  devia enviar).
-- `seiva-server` → `accounts-interface`, `accounts-infrastructure` (monta a demo
-  `accounts` de forma fixa).
-- `seiva-cli` → `notes-facade`, `accounts-*` (o `user create`/`openapi`/`proto`
-  usam as demos).
+**Não publicáveis por intenção:** os crates acoplados ao DORM privado
+(`seiva-data-dorm`, `seiva-outbox-relay`, `seiva-rag-worker`, `seiva-mcp`),
+excluídos do workspace.
 
-Um crate publicável **não pode** depender de um `publish = false`. Logo estes
-três precisam de extrair a demo antes de publicar — é a dívida "demo bleed"
-registada em S3.
+**BLOQUEADORES RESTANTES (decisão do dono — release pass):**
+- `seiva-grpc` é `publish = false`, **mas o módulo gerado depende dele** (para
+  `proto()`). Decisão: publicar `seiva-grpc` (se a geração proto é para enviar) ou
+  tirar a dependência do módulo gerado (gerar proto só via CLI, não no crate do
+  módulo). Até lá, um projeto gerado não resolve `seiva-grpc` de crates.io.
+- `seiva-cli` depende dos exemplos (`notes-facade`, `accounts-*`) porque os
+  comandos-demo `user create`/`openapi`/`proto` operam sobre eles. Decisão de
+  produto: esses comandos são demo-only (extrair para exemplos/testes), feature-
+  gated, ou removidos do CLI shippable? **Nota:** os projetos gerados **não**
+  dependem do `seiva-cli` (é instalado como binário), por isso isto não bloqueia o
+  projeto gerado — só a publicação do próprio CLI em crates.io (instala via
+  `cargo install --git` entretanto).
 
-## O que falta (campanha dedicada, recomendada)
+## O que falta (release pass dedicado)
 
-1. **Extrair as demos dos crates shippable:**
-   - `seiva-http`: remover `notes_router`/`notes-facade`; o demo passa a viver em
-     `examples/notes` (ou num `examples/*-server`). `seiva-http` fica só com
-     problem/valid/guard/health/security/rate_limit/docs + o builder de router.
-   - `seiva-server`: tornar-se demo-free (já tem `serve_router` genérico); a
-     montagem do `accounts` move-se para um binário de exemplo
-     (`examples/accounts-server`). Alternativa limpa: dividir em `seiva-runtime`
-     (lib demo-free) + um exemplo que compõe `accounts`.
-   - `seiva-cli`: o caminho `user create`/`openapi`/`proto` deixa de depender dos
+1. **Decidir `seiva-grpc`** (publicar vs tirar do módulo gerado) e **`seiva-cli`**
+   (destino dos comandos-demo), conforme acima.
+2. ~~Extrair as demos de `seiva-http`/`seiva-server`~~ ✅ feito nesta campanha.
+   Resta (opcional) a divisão `seiva-runtime` demo-free vs demo, se se quiser um
+   binário de exemplo `accounts-server` separado.
+3. **(histórico) `seiva-cli`**: o caminho `user create`/`openapi`/`proto` deixa de depender dos
      exemplos (ou move a demonstração para um exemplo).
 2. **Decisão de distribuição (do dono):** crates.io (deps por `version`) **ou**
    git tag (`{ git = "…seiva", tag = "v0.1.0" }`). Recomendo **crates.io** para o
