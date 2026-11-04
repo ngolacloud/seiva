@@ -34,6 +34,36 @@ jobs:
       - name: Smoke-test the CLI
         run: cargo run -q -p seiva-cli --bin seiva -- doctor
 
+  # The CVE/KEV and supply-chain gate: cargo-deny's `advisories` check IS the
+  # RUSTSEC scan (a superset of cargo-audit) and is feature-aware, so it gates on
+  # exactly what a build pulls. Config in /deny.toml.
+  #
+  # Two passes:
+  #   1. DEFAULT features — the hard gate. What a Seiva service ships by default
+  #      must be free of known vulnerabilities, yanked crates, disallowed licences
+  #      and bad sources. Clean today.
+  #   2. ALL features — informational (continue-on-error). seiva-messaging's
+  #      OPTIONAL broker backends (nats/amqp/kafka) pull clients with open
+  #      advisories; this surfaces them every run so they stay visible and
+  #      tracked (docs/progress.md) until those clients are bumped — never hidden,
+  #      never silently blocking.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo-deny — default build (the gate)
+        run: cargo deny check
+      - name: cargo-deny — optional backends (informational, tracked)
+        run: cargo deny --all-features check advisories
+        continue-on-error: true
+
   # Documentation builds with intra-doc links treated as errors, matching DORM's
   # gate: a redundant or dangling `[`link`]` fails here rather than shipping.
   docs:

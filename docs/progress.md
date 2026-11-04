@@ -326,3 +326,34 @@
 Para o Seiva avançar além do núcleo precisa de: API de biblioteca do DORM
 (DORM-B4), namespaces (DORM-B2), primitivas transaccionais (DORM-B3) e a saída
 do `dorm-messaging` → `seiva-messaging` (DORM-A). Ver `../DORM/docs/progress-dorm-seiva.md`.
+
+## Auditoria de segurança S1 (2026-11-04) — OWASP API Top 10 + gate CVE
+
+Fase S1 da auditoria de segurança. Controlos acrescentados ao transporte e ao CI:
+
+- **API8** — `seiva-http::security`: headers de segurança por omissão (CSP, HSTS,
+  nosniff, X-Frame-Options, Referrer-Policy) + CORS por allowlist explícita.
+- **API4** — `seiva-http::rate_limit`: rate limiting por IP, janela fixa, relógio
+  injetado; `seiva-server` serve com `ConnectInfo` para a chave ser o IP real.
+- **API1/BOLA** — `seiva-http::guard::Principal` ganha `tenant` + `owns`/
+  `require_owns` (verificação de posse object-level onde o recurso é conhecido).
+- **API2** — `seiva-auth::LoginThrottle`: lockout/throttling de tentativas.
+- **Gate CVE/KEV** — `deny.toml` + job `audit` no CI (cargo-deny). Gate duro sobre
+  features por omissão (limpo hoje); passo informativo `--all-features`.
+
+### Dívida rastreada — advisories dos backends de broker opcionais de `seiva-messaging`
+
+O gate `--all-features` expõe 8 advisories RUSTSEC, **todos** em backends opcionais
+(features `nats`/`amqp`/`kafka`, `default = []`; um build Seiva por omissão não os
+puxa). O fix real é subir os majors dos clientes de broker (trabalho separado,
+precisa de validação da crate `seiva-messaging`):
+
+- `async-nats 0.45` → `rustls-webpki 0.102.8`: **5 vulnerabilidades** de verificação
+  de certificados — RUSTSEC-2026-0049, -0098, -0099, -0104, -0382. Subir `async-nats`.
+- `lapin 2.5` → `instant` (RUSTSEC-2024-0384) e `rustls-pemfile` (RUSTSEC-2025-0134),
+  ambos *unmaintained*. Subir `lapin`/`tcp-stream`.
+- `rskafka 0.5` → `zstd-safe 6` (RUSTSEC-2026-0403). Subir `rskafka`.
+
+**Decisão do dono pendente:** (a) manter o gate duro sobre default + fix dos brokers
+numa sessão dedicada [recomendado]; ou (b) gate `--all-features` com as 8 exceções
+datadas em `deny.toml` até ao bump. Hoje está em (a).
