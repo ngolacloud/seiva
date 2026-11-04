@@ -1,0 +1,102 @@
+name: pages
+
+# Publishes the framework's API documentation (rustdoc) to GitHub Pages with a
+# small landing page linking the crates and the written guides.
+#
+# OWNER STEP (one-time): enable Pages with Settings → Pages → Build and
+# deployment → Source: "GitHub Actions". Until that is set, the `deploy` job
+# fails (the environment is not provisioned); the `build` job still produces the
+# artifact. After enabling, re-run this workflow (or push to main) to deploy.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege for Pages deployment via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deployment at a time; never cancel an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+      # DORM-free: the default workspace excludes the DORM-coupled crates, so the
+      # public docs build with no credentials.
+      - name: Build the API docs
+        run: cargo doc --no-deps --workspace
+      - name: Write the landing page
+        run: |
+          cat > target/doc/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Delonix Seiva — documentation</title>
+            <style>
+              :root { color-scheme: light dark; }
+              body { max-width: 52rem; margin: 3rem auto; padding: 0 1.25rem;
+                     font: 16px/1.6 system-ui, sans-serif; }
+              h1 { margin-bottom: 0.25rem; }
+              .sub { color: gray; margin-top: 0; }
+              h2 { margin-top: 2rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+              ul { padding-left: 1.2rem; } li { margin: .3rem 0; }
+              code { font-family: ui-monospace, monospace; }
+              a { text-decoration: none; } a:hover { text-decoration: underline; }
+            </style>
+          </head>
+          <body>
+            <h1>Delonix Seiva</h1>
+            <p class="sub">A Rust backend framework for robust, high-criticality systems.</p>
+
+            <h2>Guides</h2>
+            <ul>
+              <li><a href="https://github.com/ngolacloud/seiva#readme">Overview (README)</a></li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/architecture.md">Architecture</a>
+                  — the layers, the facade contract, the generated transports</li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/quickstart.md">Quickstart</a>
+                  — scaffold, run and call a service end to end</li>
+            </ul>
+
+            <h2>API reference</h2>
+            <ul>
+              <li><a href="delonix_seiva/index.html"><code>delonix-seiva</code></a> — the framework entrypoint (contract, lint, scaffold, worker)</li>
+              <li><a href="seiva_ports/index.html"><code>seiva-ports</code></a> — the trait-only boundary</li>
+              <li><a href="seiva_http/index.html"><code>seiva-http</code></a> — the HTTP transport</li>
+              <li><a href="seiva_grpc/index.html"><code>seiva-grpc</code></a> — proto3/gRPC generation</li>
+              <li><a href="seiva_openapi/index.html"><code>seiva-openapi</code></a> — OpenAPI 3.1 generation</li>
+              <li><a href="seiva_cqrs/index.html"><code>seiva-cqrs</code></a> — command/query dispatch</li>
+              <li><a href="seiva_server/index.html"><code>seiva-server</code></a> — the service runtime</li>
+              <li><a href="seiva_messaging/index.html"><code>seiva-messaging</code></a> — CloudEvents + brokers</li>
+              <li><a href="seiva_auth/index.html"><code>seiva-auth</code></a> · <a href="seiva_config/index.html"><code>seiva-config</code></a> · <a href="seiva_webhooks/index.html"><code>seiva-webhooks</code></a></li>
+            </ul>
+          </body>
+          </html>
+          HTML
+          # Pages serves no directory listing without an index; the one above is it.
+          echo "landing page written"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
