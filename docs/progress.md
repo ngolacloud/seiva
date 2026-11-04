@@ -9,6 +9,11 @@
 **Fundação + núcleo + facade + lint(×2) + scaffolding + módulo ligado + CI + gateway DORM.**
 
 ### Runtime de workers (`delonix-seiva::worker`)
+- **Ligado ao relay:** `seiva-outbox-relay::run_relay_worker(worker, shutdown, consumer,
+  topic, relay_cfg, publisher)` usa o `run_worker` para drenar o outbox em ciclo —
+  percurso messaging COMPLETO ponta-a-ponta (write→outbox→worker→broker). Compila
+  contra o DORM real; `delonix-seiva` entra no `seiva-outbox-relay` por path (é DORM-free).
+
 - `run_worker(config, shutdown, pass)` — o **ciclo** genérico, DORM-free, que conduz
   qualquer função de **uma passagem** (`forward`/`drain` do relay, `run_once` do RAG,
   leases do dorm-jobs): intervalo, *graceful shutdown* (futuro de shutdown), métricas

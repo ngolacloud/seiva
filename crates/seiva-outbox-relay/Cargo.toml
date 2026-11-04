@@ -15,6 +15,10 @@ publish = false
 
 [dependencies]
 seiva-messaging = { path = "../seiva-messaging" }
+# The framework's worker runtime (the loop/shutdown/metrics) and the boundary
+# error type. `delonix-seiva` is data-layer-free, so no DORM feature is pulled.
+delonix-seiva = { path = "../delonix-seiva", default-features = false }
+seiva-ports = { path = "../seiva-ports" }
 dorm-outbox = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
 dorm-core = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
 serde_json = "1"

@@ -14,7 +14,9 @@
 #![forbid(unsafe_code)]
 
 use std::future::Future;
+use std::sync::Arc;
 
+use delonix_seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 use dorm_core::{Error, Result};
 use dorm_outbox::RelayConfig;
 use seiva_messaging::{CloudEvent, Publisher};
@@ -45,6 +47,42 @@ pub async fn forward<P: Publisher>(
     })
     .await?;
     Ok(stats.processed)
+}
+
+/// Run the outbox → broker relay as a **worker**: the framework's loop
+/// ([`run_worker`]) drives [`forward`] one pass at a time, with an interval,
+/// graceful shutdown and metrics, until `shutdown` resolves. This is the whole
+/// messaging path end to end — a business write lands an event in the outbox
+/// transactionally (DORM), and this worker carries it to the broker,
+/// at-least-once. Returns the accumulated [`WorkerReport`].
+pub async fn run_relay_worker<P, S>(
+    worker: WorkerConfig,
+    shutdown: S,
+    consumer: String,
+    topic: String,
+    relay_cfg: RelayConfig,
+    publisher: P,
+) -> WorkerReport
+where
+    P: Publisher,
+    S: Future<Output = ()>,
+{
+    let publisher = Arc::new(publisher);
+    run_worker(worker, shutdown, move || {
+        // Each pass owns its clones, so the future borrows only its own locals.
+        let publisher = publisher.clone();
+        let consumer = consumer.clone();
+        let topic = topic.clone();
+        // RelayConfig is Copy — each pass gets its own copy.
+        let cfg = relay_cfg;
+        async move {
+            forward(&consumer, &topic, cfg, &*publisher)
+                .await
+                // Bridge the DORM error to the worker's boundary error type.
+                .map_err(|e| Box::new(e) as seiva_ports::BoxError)
+        }
+    })
+    .await
 }
 
 /// Drain the outbox for `consumer`/`topic`, calling `handler` for each event
