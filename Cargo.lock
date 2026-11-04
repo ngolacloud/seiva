@@ -2521,11 +2521,14 @@ dependencies = [
 name = "seiva-server"
 version = "0.1.0"
 dependencies = [
+ "accounts-facade",
  "accounts-interface",
  "axum",
  "delonix-seiva",
+ "notes-facade",
  "seiva-config",
  "seiva-http",
+ "seiva-openapi",
  "serde_json",
  "tokio",
  "tower",

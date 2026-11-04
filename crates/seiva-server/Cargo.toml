@@ -37,11 +37,21 @@ delonix-seiva = { path = "../delonix-seiva", default-features = false }
 # The `accounts` module's HTTP router, merged into the application so a request
 # to an accounts route hits the real module use case. DORM-free (in-memory).
 accounts-interface = { path = "../../examples/accounts/interface" }
+# The OpenAPI 3.1 generator: this crate composes its OWN `/openapi.json` from
+# BOTH mounted facades (notes + accounts), rather than inheriting seiva-http's
+# notes-only document. All three are DORM-free.
+seiva-openapi = { path = "../seiva-openapi" }
+notes-facade = { path = "../../examples/notes/facade" }
+# AccountsFacade::DESCRIPTOR — the accounts contract, so its operations appear in
+# the composed document. Already a transitive dep via accounts-interface; made
+# direct here because this crate now names it.
+accounts-facade = { path = "../../examples/accounts/facade" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"] }
+# Serves the composed OpenAPI document as JSON from `/openapi.json`.
+serde_json = "1"
 
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
-serde_json = "1"

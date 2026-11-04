@@ -6,10 +6,13 @@
 //! framework crate so nothing is re-implemented here:
 //!
 //! - **Mounts the HTTP application** — the facade-driven controllers, the
-//!   generated `/openapi.json` and the `/health/{live,ready}` endpoints — through
-//!   [`seiva_http::router`], which already merges them, then merges the
+//!   `/health/{live,ready}` endpoints and a `/openapi.json` composed from **every**
+//!   mounted facade. It composes the pieces [`seiva_http::router`] offers (its
+//!   `notes` and health routers, the body-limit and request-id layers) with the
 //!   `accounts` module's controller router ([`accounts_interface::router`]) so a
-//!   request to an accounts route hits the real module use case. See [`serve`].
+//!   request to an accounts route hits the real module use case — and serves its
+//!   own broader [`openapi_document`] rather than inheriting `seiva-http`'s
+//!   notes-only one. See [`serve`].
 //! - **Runs a background worker host** on the framework's worker runtime
 //!   ([`delonix_seiva::worker::run_worker`]). See [`run_workers`].
 //! - **Reads 12-factor configuration** from the environment with [`seiva_config`],
@@ -54,12 +57,19 @@ use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use axum::Router;
+use axum::extract::DefaultBodyLimit;
+use axum::middleware::from_fn;
+use axum::routing::get;
+use axum::{Json, Router};
 use delonix_seiva::ports::PortResult;
 use delonix_seiva::worker::{run_worker, WorkerConfig};
 use seiva_config::{EnvReader, FromEnv};
-use seiva_http::{router, Health};
+use seiva_http::{health_router, notes_router, request_id, Health, DEFAULT_BODY_LIMIT_BYTES};
 use tokio::net::TcpListener;
+
+use accounts_facade::AccountsFacade;
+use delonix_seiva::contract::Facade;
+use notes_facade::NotesFacade;
 
 pub use delonix_seiva::worker::WorkerReport;
 pub use seiva_config::{AppEnv, ConfigError};
@@ -207,19 +217,60 @@ impl std::error::Error for ServeError {
     }
 }
 
-/// Builds the full HTTP application: the framework router (the demo `notes`
-/// controller, the health endpoints and `/openapi.json`) from
-/// [`seiva_http::router`], merged with the `accounts` module's controller router
-/// ([`accounts_interface::router`]). The accounts routes live on distinct paths
-/// (`/v1/accounts/...`), so the merge adds them without conflict, and a request
-/// to one hits the real module use case over its in-memory service.
+/// The service's OpenAPI 3.1 document, composed from **both** mounted facades.
 ///
-/// The accounts router is merged at this level (not inside `seiva_http::router`,
-/// which this crate does not own) so its routes sit outside the body-limit and
-/// request-id layers `seiva_http::router` applies to the demo surface — a minor
-/// first-cut limitation, not a correctness issue.
+/// [`seiva_http::openapi_document`] only knows the facade `seiva-http` mounts
+/// (`Notes`), so its document never covers `accounts`. This crate owns the full
+/// mounted surface, so it composes its own document from
+/// `[NotesFacade::DESCRIPTOR, AccountsFacade::DESCRIPTOR]` through the same
+/// generator ([`seiva_openapi::openapi_document`]). Adding a facade to the
+/// application is therefore one more descriptor here — the paths, operations,
+/// permissions and schemas all follow from the descriptors.
+#[must_use]
+pub fn openapi_document() -> serde_json::Value {
+    seiva_openapi::openapi_document(
+        seiva_openapi::ApiInfo {
+            title: "Delonix Seiva service".to_string(),
+            version: delonix_seiva::VERSION.to_string(),
+        },
+        &[NotesFacade::DESCRIPTOR, AccountsFacade::DESCRIPTOR],
+    )
+}
+
+/// `GET /openapi.json` — serves the [`openapi_document`] composed from every
+/// mounted facade.
+async fn openapi_handler() -> Json<serde_json::Value> {
+    Json(openapi_document())
+}
+
+/// Builds the full HTTP application: the demo `notes` controller, the health
+/// endpoints, the `accounts` module's controller router
+/// ([`accounts_interface::router`]) and the composed `/openapi.json`, wrapped in
+/// the body-size limit and request-id layers.
+///
+/// `/openapi.json` is served **here**, from [`openapi_document`] (which covers
+/// both `notes` and `accounts`), rather than inherited from
+/// [`seiva_http::router`]. `seiva_http::router` registers its own, notes-only
+/// `/openapi.json`; mounting that alongside this crate's route would register the
+/// same path twice and panic axum at startup. So this crate composes the pieces
+/// `seiva_http::router` would (its [`notes_router`] and [`health_router`], the
+/// same [`DEFAULT_BODY_LIMIT_BYTES`] and [`request_id`](fn@seiva_http::request_id)
+/// layers — `request_id` names both a module and the middleware function in
+/// `seiva_http`, so the link disambiguates to the function) and serves the broader
+/// document itself — never routing through `seiva_http::router`.
+///
+/// The accounts routes live on distinct paths (`/v1/accounts/...`), so the merge
+/// adds them without conflict, and a request to one hits the real module use case
+/// over its in-memory service. Because the layers wrap the merged router, the
+/// accounts surface now sits inside the body-limit and request-id middleware too.
 fn application(health: Health) -> Router {
-    router(health).merge(accounts_interface::router())
+    Router::new()
+        .merge(notes_router())
+        .merge(health_router(health))
+        .merge(accounts_interface::router())
+        .route("/openapi.json", get(openapi_handler))
+        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES))
+        .layer(from_fn(request_id))
 }
 
 /// Serves the Seiva HTTP application until `shutdown` resolves, then drains.
@@ -392,7 +443,7 @@ mod tests {
     #[tokio::test]
     async fn health_live_is_ok_and_ready_tracks_the_lifecycle() {
         let health = Health::starting();
-        let app = router(health.clone());
+        let app = seiva_http::router(health.clone());
 
         // /health/live is 200 in every state.
         let res = app
@@ -483,6 +534,57 @@ mod tests {
         assert!(
             !rendered.contains("hunter2") && !rendered.contains("$argon2id$"),
             "no secret must appear in the response: {rendered}"
+        );
+    }
+
+    // --- OpenAPI: the served document covers BOTH mounted facades -----------
+
+    /// The `/openapi.json` the application serves is composed from both mounted
+    /// facades, not just `notes`: it carries the `accounts` create operation,
+    /// identified by its `x-seiva-requires` permission extension
+    /// (`accounts.create`). This proves `serve` publishes a document that
+    /// matches the routes it actually mounts, not the notes-only one
+    /// `seiva_http::router` would inherit.
+    #[tokio::test]
+    async fn served_openapi_document_covers_the_accounts_facade() {
+        let app = application(Health::starting());
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        // The notes surface is still present...
+        let paths = doc["paths"].as_object().expect("paths is an object");
+        assert!(
+            paths.contains_key("/v1/notes"),
+            "the notes paths must remain: {:?}",
+            paths.keys().collect::<Vec<_>>()
+        );
+
+        // ...and the accounts create operation is now covered, identified by its
+        // required-permission extension rather than by a hard-coded path.
+        let has_accounts_create = paths.values().any(|path_item| {
+            path_item.as_object().into_iter().flatten().any(|(_, op)| {
+                op.get("x-seiva-requires")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("accounts.create")
+            })
+        });
+        assert!(
+            has_accounts_create,
+            "the composed document must carry the accounts.create operation: {doc}"
         );
     }
 
