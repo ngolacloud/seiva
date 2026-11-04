@@ -13,7 +13,7 @@
 #![allow(async_fn_in_trait)]
 
 use accounts_domain::User;
-use accounts_facade::{Accounts, CreateUser, UserDto};
+use accounts_facade::{Accounts, CreateUser, GetUser, UserDto, UserError};
 use seiva_auth::hash_password;
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 
@@ -139,18 +139,18 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn create_user(&self, cmd: CreateUser) -> Result<UserDto, String> {
+    async fn create_user(&self, cmd: CreateUser) -> Result<UserDto, UserError> {
         // Map the internal error to the contract's error type: no internal
         // detail leaks across the module boundary beyond a message.
         self.create_user_uc(cmd)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| UserError(err.to_string()))
     }
 
-    async fn get_user(&self, username: String) -> Result<UserDto, String> {
-        self.get_user_uc(username)
+    async fn get_user(&self, query: GetUser) -> Result<UserDto, UserError> {
+        self.get_user_uc(query.username)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| UserError(err.to_string()))
     }
 }
 
@@ -267,7 +267,7 @@ mod tests {
 
         let err = svc.create_user(cmd("alice", "different")).await;
         assert!(err.is_err());
-        assert_eq!(err.unwrap_err(), "username already taken");
+        assert_eq!(err.unwrap_err().0, "username already taken");
 
         // Only the first user was saved; the duplicate rolled back.
         assert_eq!(svc.repository.len(), 1);
@@ -295,10 +295,19 @@ mod tests {
         let svc = service();
         svc.create_user(cmd("alice", "hunter2")).await.unwrap();
 
-        let dto = svc.get_user("alice".into()).await.unwrap();
+        let dto = svc
+            .get_user(GetUser {
+                username: "alice".into(),
+            })
+            .await
+            .unwrap();
         assert_eq!(dto.username, "alice");
 
-        let missing = svc.get_user("nobody".into()).await;
-        assert_eq!(missing.unwrap_err(), "user not found");
+        let missing = svc
+            .get_user(GetUser {
+                username: "nobody".into(),
+            })
+            .await;
+        assert_eq!(missing.unwrap_err().0, "user not found");
     }
 }

@@ -23,6 +23,8 @@ name = "accounts-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
+ "serde",
 ]
 
 [[package]]
@@ -41,9 +43,16 @@ dependencies = [
  "accounts-application",
  "accounts-facade",
  "accounts-infrastructure",
+ "async-trait",
+ "axum",
+ "delonix-seiva",
  "seiva-auth",
+ "seiva-http",
+ "seiva-ports",
  "seiva-testing",
+ "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -2510,10 +2519,12 @@ dependencies = [
 name = "seiva-server"
 version = "0.1.0"
 dependencies = [
+ "accounts-interface",
  "axum",
  "delonix-seiva",
  "seiva-config",
  "seiva-http",
+ "serde_json",
  "tokio",
  "tower",
 ]

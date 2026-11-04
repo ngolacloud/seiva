@@ -34,6 +34,9 @@ seiva-config = { path = "../seiva-config" }
 # The framework crate: its worker runtime (`worker::run_worker`) drives the host.
 # default-features = false keeps the `dorm` toggle off (the data layer stays out).
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
+# The `accounts` module's HTTP router, merged into the application so a request
+# to an accounts route hits the real module use case. DORM-free (in-memory).
+accounts-interface = { path = "../../examples/accounts/interface" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"] }
@@ -41,3 +44,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
+serde_json = "1"

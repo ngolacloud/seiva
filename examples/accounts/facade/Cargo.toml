@@ -11,3 +11,8 @@ publish = false
 # default-features off (the workspace declaration): the facade never pulls the
 # DORM data layer, matching examples/notes/facade.
 delonix-seiva = { workspace = true }
+# The generated controller uses the facade's own DTOs as the wire types, so the
+# write DTOs implement `seiva_http::Validate` and the error maps to
+# `seiva_http::Problem` here (matching the scaffold-generated facade).
+seiva-http = { path = "../../../crates/seiva-http" }
+serde = { workspace = true }

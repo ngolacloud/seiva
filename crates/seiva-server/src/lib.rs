@@ -7,7 +7,9 @@
 //!
 //! - **Mounts the HTTP application** — the facade-driven controllers, the
 //!   generated `/openapi.json` and the `/health/{live,ready}` endpoints — through
-//!   [`seiva_http::router`], which already merges them. See [`serve`].
+//!   [`seiva_http::router`], which already merges them, then merges the
+//!   `accounts` module's controller router ([`accounts_interface::router`]) so a
+//!   request to an accounts route hits the real module use case. See [`serve`].
 //! - **Runs a background worker host** on the framework's worker runtime
 //!   ([`delonix_seiva::worker::run_worker`]). See [`run_workers`].
 //! - **Reads 12-factor configuration** from the environment with [`seiva_config`],
@@ -52,6 +54,7 @@ use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
+use axum::Router;
 use delonix_seiva::ports::PortResult;
 use delonix_seiva::worker::{run_worker, WorkerConfig};
 use seiva_config::{EnvReader, FromEnv};
@@ -204,13 +207,30 @@ impl std::error::Error for ServeError {
     }
 }
 
+/// Builds the full HTTP application: the framework router (the demo `notes`
+/// controller, the health endpoints and `/openapi.json`) from
+/// [`seiva_http::router`], merged with the `accounts` module's controller router
+/// ([`accounts_interface::router`]). The accounts routes live on distinct paths
+/// (`/v1/accounts/...`), so the merge adds them without conflict, and a request
+/// to one hits the real module use case over its in-memory service.
+///
+/// The accounts router is merged at this level (not inside `seiva_http::router`,
+/// which this crate does not own) so its routes sit outside the body-limit and
+/// request-id layers `seiva_http::router` applies to the demo surface — a minor
+/// first-cut limitation, not a correctness issue.
+fn application(health: Health) -> Router {
+    router(health).merge(accounts_interface::router())
+}
+
 /// Serves the Seiva HTTP application until `shutdown` resolves, then drains.
 ///
 /// The lifecycle, in order:
 ///
-/// 1. Builds the application with [`seiva_http::router`] over a fresh
-///    [`Health`] handle in the [`Starting`](seiva_http::HealthState::Starting)
-///    state, so `/health/ready` answers `503` until the socket is live.
+/// 1. Builds the application (the framework router merged with the `accounts`
+///    controller router; see the private `application` builder) over a fresh
+///    [`Health`] handle in the
+///    [`Starting`](seiva_http::HealthState::Starting) state, so
+///    `/health/ready` answers `503` until the socket is live.
 /// 2. Binds a [`TcpListener`] to [`ServerConfig::http_addr`]; a bind failure is
 ///    returned as [`ServeError::Bind`].
 /// 3. Flips `Health` [`Starting -> Ready`](seiva_http::Health::set_ready) now the
@@ -232,7 +252,7 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
     let health = Health::starting();
-    let app = router(health.clone());
+    let app = application(health.clone());
 
     let listener = TcpListener::bind(config.http_addr)
         .await
@@ -412,6 +432,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    // --- accounts module: the merged app serves the real use case ----------
+
+    /// The merged application serves the `accounts` create route: an anonymous
+    /// caller is denied with an RFC 9457 `403`, and a caller holding
+    /// `accounts.create` with a valid body succeeds (`200`, the generic write
+    /// branch) with a secret-free user. This proves `serve` mounts the real
+    /// module, not just the demo.
+    #[tokio::test]
+    async fn merged_app_serves_the_accounts_create_route() {
+        let app = application(Health::starting());
+
+        // Without the permission: 403 problem.
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/accounts/create_user")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        // With the permission and a valid body: 200 and a secret-free user.
+        let ok = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/accounts/create_user")
+                    .header("content-type", "application/json")
+                    .extension(seiva_http::Principal::new("user", ["accounts.create"]))
+                    .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["username"], "alice");
+        let rendered = body.to_string();
+        assert!(
+            !rendered.contains("hunter2") && !rendered.contains("$argon2id$"),
+            "no secret must appear in the response: {rendered}"
+        );
     }
 
     // --- serve: binds an ephemeral port, drains on a resolved shutdown ------
