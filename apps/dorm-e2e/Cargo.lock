@@ -467,9 +467,11 @@ version = "0.1.0"
 dependencies = [
  "accounts-application",
  "accounts-domain",
+ "accounts-facade",
  "delonix-seiva",
  "dorm-core",
  "dorm-outbox",
+ "seiva-auth",
  "seiva-data-dorm",
  "seiva-messaging",
  "seiva-outbox-relay",

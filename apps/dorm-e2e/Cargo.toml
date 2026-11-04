@@ -52,3 +52,8 @@ tracing = "0.1"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde_json = "1"
+# The Argon2id verifier the live-Postgres test checks the stored PHC hash with.
+seiva-auth = { path = "../../crates/seiva-auth" }
+# The accounts module's public DTO, used to prove the value crossing the boundary
+# carries no plaintext credential (it structurally has only id + username).
+accounts-facade = { path = "../../examples/accounts/facade" }

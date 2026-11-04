@@ -109,6 +109,24 @@ jobs:
   # a live-Postgres integration test is a later increment.
   dorm-e2e:
     runs-on: ubuntu-latest
+    # A real Postgres so the live integration test exercises the accounts
+    # persistence round-trip (and the outbox relay) end to end. The database
+    # must pre-exist (`connect` does not create it); the tests create their own
+    # tables (`CREATE TABLE IF NOT EXISTS`). The test is env-gated on
+    # DORM_TEST_DSN, so it only runs here, never in the offline gates.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dorm_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
       - name: Detect the DORM access token
@@ -140,6 +158,9 @@ jobs:
         if: steps.gate.outputs.present == 'true'
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # The live integration test connects here; the service above created
+          # the `dorm_e2e` database. Absent this var the test would skip.
+          DORM_TEST_DSN: "host=localhost port=5432 user=postgres password=postgres dbname=dorm_e2e sslmode=disable"
         run: |
           set -euo pipefail
           cargo fmt --manifest-path apps/dorm-e2e/Cargo.toml --all --check
