@@ -39,6 +39,12 @@ members = [
     # The HTTP transport: axum/tower, RFC 9457 errors, facade-driven permission
     # guard, health endpoints. Data-layer-free, so a workspace member.
     "crates/seiva-http",
+    # Password/credential primitives (Argon2id PHC) — accounts out of DORM's CLI.
+    "crates/seiva-auth",
+    # Typed 12-factor configuration + an AppEnv production-safety guard.
+    "crates/seiva-config",
+    # Standard Webhooks signing/verification (HMAC-SHA256, replay window).
+    "crates/seiva-webhooks",
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
     # projects and modules, runs the dev loop, lints the architecture.
     "crates/seiva-cli",

@@ -1,0 +1,36 @@
+# seiva-auth — the framework's password/credential primitives, moved out of
+# DORM's CLI accounts (the brief's Parte DORM-A). Argon2id password hashing in
+# the PHC string format, a no-echo prompt helper, and a tiny permission value
+# type. Data-layer-free: it holds no database handle and is DORM-FREE — the
+# framework core never reaches the ORM through it.
+# The package fields are written literally (not inherited with `.workspace =
+# `version.workspace = true`, `edition.workspace = true`, and so on.
+[package]
+name = "seiva-auth"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+description = "Credential primitives for Delonix Seiva: Argon2id password hashing in the PHC string format, a no-echo prompt helper, and a minimal permission type. Data-layer-free."
+readme = "README.md"
+keywords = ["password", "argon2", "argon2id", "phc", "authentication"]
+categories = ["authentication", "cryptography"]
+
+# without editing the parent workspace manifest. Remove to let it join the
+# parent `seiva` workspace as a member.
+
+[dependencies]
+# Argon2id (the OWASP-recommended password KDF). `argon2` re-exports its
+# `password_hash` crate, so the salt/PHC machinery is reached through
+# `argon2::password_hash::*`.
+argon2 = "0.5"
+# The same `password-hash` crate argon2 depends on, declared explicitly only to
+# turn on its `getrandom` feature: that is what makes `OsRng` (the system
+# CSPRNG used to draw each salt) available. Pinned to argon2's line (0.5) so
+# feature unification lands on one crate version and cannot skew.
+password-hash = { version = "0.5", features = ["getrandom"] }
+# A no-echo console password prompt (the terminal stops echoing keystrokes).
+rpassword = "7"

@@ -1,0 +1,32 @@
+# seiva-config — the framework's typed, 12-factor configuration.
+#
+# Configuration is READ ONLY from process environment variables at runtime (the
+# 12-factor "config" principle), decoded into typed values, and VALIDATED at
+# startup: a service that is misconfigured fails to boot instead of failing on
+# the first request that touches the bad value. `APP_ENV` selects the runtime
+# environment, and the production-safety guard refuses development shortcuts
+# (insecure TLS, data seeding, verbose error leaks) when running in production.
+#
+# Data-layer-free (DORM-FREE): this crate touches no database. It is a leaf with
+# zero third-party dependencies — std only — so it is safe to depend on from any
+# layer, including the otherwise dependency-free `seiva-ports` consumers.
+[package]
+name = "seiva-config"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+description = "Typed, 12-factor (environment-variable) configuration for the Delonix Seiva framework, validated at startup, with a production-safety guard against development shortcuts. Data-layer-free, std-only."
+keywords = ["config", "12-factor", "environment", "validation"]
+categories = ["config"]
+
+# An empty workspace table makes this crate its own workspace root so it builds
+# workspace does not list it as a member yet; wiring it in is an owner decision
+# and must not edit the parent manifest here.
+
+[dependencies]
+# None. std only, on purpose: a configuration leaf pulls in no error library and
+# no config framework, so depending on it never enlarges a downstream tree.

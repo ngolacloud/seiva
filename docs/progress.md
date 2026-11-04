@@ -4,6 +4,24 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-04)
+
+**+ 2.º fan-out de 3 agentes: seiva-auth, seiva-config, seiva-webhooks (membros, DORM-free).**
+
+### Segundo lote de agentes especialistas (integrados, membros)
+- **`seiva-auth`** — Argon2id em PHC (`hash_password`/`verify_password`), `prompt_password`
+  sem eco, `Permission`/`PermissionSet`, `AuthError` compacto. Parte DORM-A (contas, a sair
+  do dorm-cli; construído fresco e DORM-free). 6 testes.
+- **`seiva-config`** — config tipada 12-factor, **zero deps** (só std): `AppEnv`
+  (recusa atalhos de dev em produção via `reject_dev_shortcut`), `ConfigError` que agrega
+  todos os problemas, readers tipados. 12 testes.
+- **`seiva-webhooks`** — Standard Webhooks: assinar/verificar `HMAC-SHA256({id}.{ts}.{payload})`,
+  comparação em tempo constante, janela anti-replay, `now` injectado. Bate no **test vector
+  oficial**. 14+1+2 testes.
+- Fan-out paralelo (crates disjuntos, `[workspace]` próprio, sem raiz/git); integrei como
+  membros. 32 grupos de testes; clippy `--all-features` + doc `-D warnings` limpos; workspace
+  continua DORM-free.
+
 ## Estado (2026-11-03)
 
 **+ Fan-out de 3 agentes especialistas: HTTP, RAG worker, MCP-HTTP (itens 1-3).**

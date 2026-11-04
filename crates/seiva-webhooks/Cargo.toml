@@ -1,0 +1,35 @@
+# seiva-webhooks — signing and verifying webhooks per the Standard Webhooks
+# specification (https://www.standardwebhooks.com/). Both directions: sign an
+# outgoing webhook so a receiver can trust it, and verify an incoming one with
+# constant-time comparison and a replay window.
+#
+# Data-layer-free (DORM-free): it computes an HMAC over bytes and never touches
+# a database, broker or the framework runtime.
+[package]
+name = "seiva-webhooks"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+description = "Sign and verify webhooks per the Standard Webhooks spec: HMAC-SHA256 signatures, constant-time verification and a replay-protection window. Data-layer-free."
+readme = "README.md"
+keywords = ["webhooks", "hmac", "signature", "standard-webhooks", "security"]
+categories = ["web-programming", "cryptography"]
+
+# root so it builds, tests and lints on its own (`cargo build` from inside the
+# directory) without the parent seiva workspace needing to list it as a member.
+
+[dependencies]
+# HMAC construction and constant-time verification (`Mac::verify_slice`).
+hmac = "0.12"
+# The SHA-256 digest the Standard Webhooks v1 scheme is built on.
+sha2 = "0.10"
+# The signature and the signing secret are base64 (standard alphabet, padded).
+base64 = "0.22"
+# A small, unit-variant error enum. `thiserror` keeps the Display/Error impls
+# terse without inflating the type (no inline data -> clippy `result_large_err`
+# stays quiet).
+thiserror = "2"
