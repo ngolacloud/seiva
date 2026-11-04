@@ -46,3 +46,57 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build the docs
         run: cargo doc --no-deps --workspace --document-private-items
+
+  # The git-coupled crates (the DORM data-layer gateway and its relay/RAG/MCP
+  # companions) are EXCLUDED from the workspace, so the jobs above stay DORM-free
+  # and need no credentials. This job builds and tests them against the private
+  # DORM repo — but ONLY when a `DORM_TOKEN` repository secret is configured.
+  # Without the secret every step after the gate is skipped and the job is a
+  # green no-op, so the gate never hangs on a secret that is not there. To
+  # activate: add a `DORM_TOKEN` Actions secret (a token with read access to
+  # github.com/ngolacloud/dorm — a fine-grained PAT or a GitHub App token); the
+  # next run then proves the DORM boundary crossing end to end.
+  dorm-gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Detect the DORM access token
+        id: gate
+        env:
+          DORM_TOKEN: ${{ secrets.DORM_TOKEN }}
+        run: |
+          if [ -n "$DORM_TOKEN" ]; then
+            echo "DORM_TOKEN present — building the git-coupled crates."
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "DORM_TOKEN absent — skipping. Add the secret to build the DORM gateway."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install the toolchain
+        if: steps.gate.outputs.present == 'true'
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.present == 'true'
+      - name: Authenticate cargo to the private DORM repo
+        if: steps.gate.outputs.present == 'true'
+        env:
+          DORM_TOKEN: ${{ secrets.DORM_TOKEN }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${DORM_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+      - name: Build, lint and test the git-coupled crates
+        if: steps.gate.outputs.present == 'true'
+        env:
+          # DORM is fetched by git revision; the CLI transport carries the auth
+          # the `insteadOf` rewrite configured above.
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          set -euo pipefail
+          for crate in seiva-data-dorm seiva-outbox-relay seiva-rag-worker seiva-mcp; do
+            echo "::group::$crate"
+            cargo fmt --manifest-path "crates/$crate/Cargo.toml" --all --check
+            cargo clippy --manifest-path "crates/$crate/Cargo.toml" --all-targets --all-features -- -D warnings
+            cargo test --manifest-path "crates/$crate/Cargo.toml" --all-features
+            echo "::endgroup::"
+          done
