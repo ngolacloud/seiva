@@ -21,8 +21,8 @@
 use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
 use seiva_ports::{BoxError, Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
 
