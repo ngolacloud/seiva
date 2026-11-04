@@ -57,6 +57,11 @@ members = [
     # Standalone proof that `#[seiva::controller]` generates a facade-driven axum
     # router end to end (guards, versioned paths, RFC 9457). Data-layer-free.
     "crates/seiva-controller-test",
+    # The runtime that boots a Seiva service (the `dorm-api` replacement): the
+    # HTTP app (controllers + /openapi.json + /health), a worker host and
+    # 12-factor config with graceful shutdown. Data-layer-free (the DORM outbox
+    # relay is injected behind the `dorm` feature once the CI token exists).
+    "crates/seiva-server",
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
     # projects and modules, runs the dev loop, lints the architecture.
     "crates/seiva-cli",

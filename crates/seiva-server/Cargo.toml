@@ -1,0 +1,43 @@
+# seiva-server — the Delonix Seiva service runtime ("the main a module installs").
+#
+# Boots a Seiva service: mounts the facade-driven HTTP application (controllers +
+# `/openapi.json` + `/health`) from `seiva-http`, runs a background worker host on
+# the `delonix-seiva` worker runtime, reads 12-factor configuration from the
+# environment with `seiva-config`, and shuts down gracefully on Ctrl-C / SIGTERM.
+# It replaces DORM's old `dorm-api`.
+#
+# DORM-FREE, and load-bearing for CI: this crate depends on NO `dorm-*` crate and
+# on NO excluded Seiva crate (`seiva-data-dorm`, `seiva-outbox-relay`,
+# `seiva-rag-worker`, `seiva-mcp`). It declares NO cargo feature that could pull
+# any of them in, so `cargo clippy --all-targets --all-features` stays buildable
+# without the private DORM repo token. The real transactional-outbox relay pass is
+# injected here behind the framework's `dorm` feature once that token exists; see
+# `run_workers` in `src/lib.rs`.
+
+[package]
+name = "seiva-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+description = "Delonix Seiva — the service runtime: mounts the facade-driven HTTP app, runs a worker host, reads 12-factor config, shuts down gracefully. DORM-free."
+
+[dependencies]
+# The HTTP transport: `router(health)` already merges the controllers, the health
+# endpoints and `/openapi.json`; `Health` is the Starting/Ready/Draining handle.
+seiva-http = { path = "../seiva-http" }
+# Typed 12-factor configuration + the AppEnv production-safety guard.
+seiva-config = { path = "../seiva-config" }
+# The framework crate: its worker runtime (`worker::run_worker`) drives the host.
+# default-features = false keeps the `dorm` toggle off (the data layer stays out).
+delonix-seiva = { path = "../delonix-seiva", default-features = false }
+
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"] }
+
+[dev-dependencies]
+# Drives the router without a live server: `ServiceExt::oneshot`.
+tower = { version = "0.5", features = ["util"] }
