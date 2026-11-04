@@ -4,6 +4,62 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-04) — transportes · CQRS · server · módulos · docs
+
+**Framework ligado ponta-a-ponta e verde no CI. 14 crates por agentes, 54 grupos de testes.**
+
+### Fundação de assinaturas + transportes gerados de um descritor (3.º fan-out)
+- **`FacadeDescriptor` enriquecido:** `#[seiva::facade]` passa a captar as assinaturas —
+  `Param { name, ty }` + `MethodDescriptor { params, output }` (tipos renderizados dos tokens
+  do trait, normalizados). Desbloqueia os geradores sem reflexão.
+- **`seiva-grpc`** — `proto_document(&FacadeDescriptor) -> String` (proto3) + mapa Rust→proto
+  auditável; `&Ctx` não é campo de fio; `Result<T,E>`→`T`. Feature `tonic` mapeia erro→`Status`.
+- **`#[seiva::controller]`** (em `seiva-macros`, reexportado por `delonix-seiva`) — gera
+  `<trait>_router`→axum lendo versão+permissão do descritor; provado em `seiva-controller-test`.
+- **`seiva-openapi`** — `openapi_document(ApiInfo, &[FacadeDescriptor])` → OpenAPI 3.1 de modelo
+  tipado; `x-seiva-requires`+bearer nos guardados; schemas-placeholder honestos p/ tipos opacos.
+- **`seiva-http` `/openapi.json`** passou a servir o documento **gerado** (não stub).
+
+### CQRS + CLI (itens 1-2)
+- **`seiva-cqrs`** — bus de aplicação: `Command`/`Query` + handlers, `Mediator<H>` estático
+  (handler em falta = erro de compilação), middleware tipado `Instrument` + `CacheQueries`
+  (costura p/ `#[cached]`/`#[policy]`).
+- **CLI `seiva`** +3 comandos: `openapi`, `proto` (documentos gerados da fachada demonstração),
+  `user create` (lê password de stdin).
+
+### `seiva-server` — o substituto do `dorm-api` (decisão do dono: "servidor que monta tudo")
+- `serve(config, shutdown)` liga TcpListener + `seiva_http::router` (controllers + `/openapi.json`
+  + `/health`), Health `Starting→Ready→Draining`, `axum::serve` graceful; host de workers sobre
+  `delonix_seiva::worker::run_worker` (passo demo; relay DORM atrás da feature `dorm`); config
+  12-factor (`SEIVA_HTTP_ADDR`>`PORT`>`127.0.0.1:8080`, `APP_ENV`+guarda); bin tokio multi-thread
+  ctrl_c+SIGTERM. SEM `[features]` de propósito (clippy `--all-features` não pode puxar excluídos).
+
+### Módulo `accounts` (5 camadas) + `seiva user create` ponta-a-ponta
+- **`examples/accounts`** sobre `seiva-auth`: nunca guarda plaintext (prova `verify_password`
+  ✓/✗), DTO sem segredos, duplicado rejeitado, evento `accounts.user_created`. 11 testes.
+  ADR 0003 respeitada (interface só sobre a fachada; composição em testes/app).
+- **`seiva user create`** passou a compor o `AccountsService` na CLI (ports in-process) e a correr
+  o caso de uso real (Argon2id + regras + evento), imprimindo `{id, username}` sem segredo.
+
+### Scaffold a emitir transportes (item 1 do 2.º pedido)
+- `seiva module new` gera agora módulos com `#[seiva::facade]` + `#[seiva::controller]` (adaptador
+  CONCRETO — o genérico não dá `Send` p/ axum) + helpers `openapi`/`proto` do descritor; app
+  transport-free; repo in-memory DORM-free. Agente **provou a compilação** do gerado (POST→201).
+
+### Pendências (gestos do dono)
+- **PR #30 (DORM)** — depreciar `dorm-messaging`: verificado pronto (MERGEABLE/CLEAN, 3 checks
+  verdes); `gh pr merge` BLOQUEADO pelo classificador → merge à mão.
+- **Token de CI (item 4)** — CI tem job GATED **`dorm-gateway`** que fmt/clippy/testa os 4 crates
+  excluídos contra o DORM privado **só se existir o segredo `DORM_TOKEN`** (sem ele = no-op verde).
+  Adicionar o segredo activa-o e desbloqueia ligar a feature `dorm` ao server/gateway.
+
+### Docs
+- README reescrito (saiu da fase fundacional), `docs/architecture.md` e `docs/quickstart.md` novos,
+  ancorados nos comandos reais (`seiva project new`/`module new`, `openapi`/`proto`/`user create`,
+  `seiva-server`, env vars).
+
+---
+
 ## Estado (2026-11-04)
 
 **+ 2.º fan-out de 3 agentes: seiva-auth, seiva-config, seiva-webhooks (membros, DORM-free).**
