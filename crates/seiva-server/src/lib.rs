@@ -322,10 +322,16 @@ pub async fn serve(
         }
     };
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(draining)
-        .await
-        .map_err(ServeError::Serve)?;
+    // `into_make_service_with_connect_info` installs the peer `SocketAddr` as a
+    // request extension, so the rate limiter in `seiva_http` can key on the
+    // client IP rather than a shared fallback bucket.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(draining)
+    .await
+    .map_err(ServeError::Serve)?;
 
     Ok(())
 }

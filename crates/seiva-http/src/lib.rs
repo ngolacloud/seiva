@@ -35,6 +35,7 @@
 pub mod guard;
 pub mod health;
 pub mod problem;
+pub mod rate_limit;
 pub mod request_id;
 pub mod security;
 pub mod valid;
@@ -53,6 +54,7 @@ use notes_facade::NotesFacade;
 pub use guard::{permission_guard, Principal, RequiredPermission};
 pub use health::{health_router, Health, HealthState};
 pub use problem::{Problem, PROBLEM_JSON};
+pub use rate_limit::{rate_limit, RateLimit, RateLimiter};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};
 pub use security::{cors_layer, security_headers, HttpSecurity};
 pub use valid::{Valid, Validate, ValidationError};
@@ -182,6 +184,10 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
 
     if let Some(cors) = cors_layer(security) {
         app = app.layer(cors);
+    }
+
+    if let Some(limit) = security.rate_limit {
+        app = app.layer(from_fn_with_state(RateLimiter::new(limit), rate_limit));
     }
 
     app.layer(from_fn(request_id))

@@ -28,6 +28,8 @@ use axum::http::Method;
 use axum::{extract::Request, middleware::Next, response::Response};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use crate::rate_limit::RateLimit;
+
 /// `X-XSS-Protection`, set to `0` to disable the legacy, deprecated and
 /// footgun-prone browser XSS auditor (current guidance; the CSP does the real
 /// work). Not a typed constant in `http`, so named here.
@@ -38,19 +40,33 @@ static X_XSS_PROTECTION: HeaderName = HeaderName::from_static("x-xss-protection"
 /// `seiva-server`) and handed to [`router_with_security`](crate::router_with_security).
 ///
 /// [`Default`] is the secure baseline: **no** cross-origin access (same-origin
-/// only). A deployment opts specific origins in explicitly.
-#[derive(Debug, Clone, Default)]
+/// only) and rate limiting **on** at [`RateLimit::default`]. A deployment opts
+/// origins in and tunes (or disables) the limit explicitly.
+#[derive(Debug, Clone)]
 pub struct HttpSecurity {
     /// The exact origins allowed to make cross-origin (CORS) requests, e.g.
     /// `https://app.example.com`. Empty means same-origin only: [`cors_layer`]
     /// returns `None` and no `Access-Control-Allow-Origin` is ever emitted.
     pub cors_allowed_origins: Vec<String>,
+    /// The per-client request rate limit, or `None` to disable rate limiting.
+    /// `Some(RateLimit::default())` by default — disabling it is an explicit
+    /// choice, never the default.
+    pub rate_limit: Option<RateLimit>,
+}
+
+impl Default for HttpSecurity {
+    fn default() -> Self {
+        Self {
+            cors_allowed_origins: Vec::new(),
+            rate_limit: Some(RateLimit::default()),
+        }
+    }
 }
 
 impl HttpSecurity {
-    /// A configuration allowing the given origins for CORS. Each must be a full
-    /// origin (`scheme://host[:port]`), compared verbatim against the request's
-    /// `Origin` header.
+    /// A configuration allowing the given origins for CORS (rate limiting left at
+    /// the default). Each origin must be a full `scheme://host[:port]`, compared
+    /// verbatim against the request's `Origin` header.
     #[must_use]
     pub fn with_cors_origins<I, S>(origins: I) -> Self
     where
@@ -59,6 +75,7 @@ impl HttpSecurity {
     {
         Self {
             cors_allowed_origins: origins.into_iter().map(Into::into).collect(),
+            ..Self::default()
         }
     }
 }

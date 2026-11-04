@@ -2473,6 +2473,7 @@ dependencies = [
  "notes-facade",
  "seiva-openapi",
  "seiva-ports",
+ "seiva-testing",
  "serde",
  "serde_json",
  "tokio",

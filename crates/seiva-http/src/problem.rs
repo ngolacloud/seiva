@@ -69,6 +69,12 @@ impl Problem {
         Self::new(StatusCode::UNPROCESSABLE_ENTITY, "Unprocessable Entity").with_detail(detail)
     }
 
+    /// A `429 Too Many Requests` problem (the caller exceeded a rate limit). The
+    /// caller is expected to add a `Retry-After` response header separately.
+    pub fn too_many_requests(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests").with_detail(detail)
+    }
+
     /// A `500 Internal Server Error` problem.
     pub fn internal(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").with_detail(detail)

@@ -45,3 +45,5 @@ tower-http = { version = "0.6", features = ["cors"] }
 # Drives the router without a live server: `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt", "macros"] }
+# A controllable `Clock` so the rate-limiter's window is tested without sleeping.
+seiva-testing = { path = "../seiva-testing" }
