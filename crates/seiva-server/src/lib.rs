@@ -5,12 +5,12 @@
 //! DORM's old `dorm-api`. It does four things, each delegated to a focused
 //! framework crate so nothing is re-implemented here:
 //!
-//! - **Mounts the HTTP application** — the facade-driven controllers, the
-//!   generated `/openapi.json` and the `/health/{live,ready}` endpoints — through
-//!   [`seiva_http::router`], which already merges them. As the composition root it
-//!   then wires the `accounts` module's generic controller to the in-memory
-//!   repository and merges its generated `accounts_router`, so a request to an
-//!   accounts route hits the real module use case. See [`serve`].
+//! - **Mounts the framework HTTP surface** — `/openapi.json` and the
+//!   `/health/{live,ready}` endpoints — through [`seiva_http::router`]. It is
+//!   **demo-free**: it mounts no example module, so it is publishable. A real
+//!   service's `apps/<name>-api` composition root merges its modules' generated
+//!   controllers and calls [`serve_router`]; the `accounts` composition is
+//!   exercised in this crate's tests. See [`serve`].
 //! - **Runs a background worker host** on the framework's worker runtime
 //!   ([`delonix_seiva::worker::run_worker`]). See [`run_workers`].
 //! - **Reads 12-factor configuration** from the environment with [`seiva_config`],
@@ -236,82 +236,27 @@ impl std::error::Error for ServeError {
     }
 }
 
-/// The service's OpenAPI 3.1 document, composed from **both** mounted facades.
+/// Serves the framework HTTP surface until `shutdown` resolves, then drains.
 ///
-/// [`seiva_http::openapi_document`] only knows the facade `seiva-http` mounts
-/// (`Notes`), so its document never covers `accounts`. This crate owns the full
-/// mounted surface, so it composes its own document from
-/// `[NotesFacade::DESCRIPTOR, AccountsFacade::DESCRIPTOR]` through the same
-/// generator ([`seiva_openapi::openapi_document`]). Adding a facade to the
-/// application is therefore one more descriptor here — the paths, operations,
-/// permissions and schemas all follow from the descriptors.
-#[must_use]
-pub fn openapi_document() -> serde_json::Value {
-    seiva_openapi::openapi_document(
-        seiva_openapi::ApiInfo {
-            title: "Delonix Seiva service".to_string(),
-            version: delonix_seiva::VERSION.to_string(),
-        },
-        &[NotesFacade::DESCRIPTOR, AccountsFacade::DESCRIPTOR],
-    )
-}
-
-/// `GET /openapi.json` — serves the [`openapi_document`] composed from every
-/// mounted facade.
-async fn openapi_handler() -> Json<serde_json::Value> {
-    Json(openapi_document())
-}
-
-/// Builds the full HTTP application: the demo `notes` controller, the health
-/// endpoints, the `accounts` module's controller router
-/// ([`accounts_interface::router`]) and the composed `/openapi.json`, wrapped in
-/// the body-size limit and request-id layers.
-///
-/// `/openapi.json` is served **here**, from [`openapi_document`] (which covers
-/// both `notes` and `accounts`), rather than inherited from
-/// [`seiva_http::router`]. `seiva_http::router` registers its own, notes-only
-/// `/openapi.json`; mounting that alongside this crate's route would register the
-/// same path twice and panic axum at startup. So this crate composes the pieces
-/// `seiva_http::router` would (its [`notes_router`] and [`health_router`], the
-/// same [`DEFAULT_BODY_LIMIT_BYTES`] and [`request_id`](fn@seiva_http::request_id)
-/// layers — `request_id` names both a module and the middleware function in
-/// `seiva_http`, so the link disambiguates to the function) and serves the broader
-/// document itself — never routing through `seiva_http::router`.
-///
-/// The accounts routes live on distinct paths (`/v1/accounts/...`), so the merge
-/// adds them without conflict, and a request to one hits the real module use case
-/// over its in-memory service. Because the layers wrap the merged router, the
-/// accounts surface now sits inside the body-limit and request-id middleware too.
-fn application(health: Health) -> Router {
-    // Composition root: pick the concrete repository (in-memory here) and wire it
-    // into the module's generic controller, then merge the generated router. The
-    // `accounts` interface layer never names the infrastructure crate; this is
-    // where that choice is made.
-    let accounts =
-        accounts_interface::accounts_router(accounts_interface::AccountsController::new(
-            accounts_infrastructure::InMemoryCredentialRepository::new(),
-        ));
-    router(health).merge(accounts)
-}
-
-/// Serves the Seiva HTTP application until `shutdown` resolves, then drains.
+/// It serves the module-free framework router ([`seiva_http::router`]: health,
+/// `/openapi.json`, `/docs`). A real service does not call this — its
+/// `apps/<name>-api` composition root builds its own router (merging its modules'
+/// generated controllers) and calls [`serve_router`] directly. This entrypoint is
+/// the module-free skeleton the binary runs; the example composition
+/// (`accounts`) lives in this crate's tests.
 ///
 /// The lifecycle, in order:
 ///
-/// 1. Builds the application (the framework router merged with the `accounts`
-///    controller router; see the private `application` builder) over a fresh
-///    [`Health`] handle in the
-///    [`Starting`](seiva_http::HealthState::Starting) state, so
+/// 1. A fresh [`Health`] in [`Starting`](seiva_http::HealthState::Starting), so
 ///    `/health/ready` answers `503` until the socket is live.
 /// 2. Binds a [`TcpListener`] to [`ServerConfig::http_addr`]; a bind failure is
-///    returned as [`ServeError::Bind`].
-/// 3. Flips `Health` [`Starting -> Ready`](seiva_http::Health::set_ready) now the
-///    socket is listening, so load balancers may route traffic.
-/// 4. Serves with [`axum::serve()`] and a graceful-shutdown future that, once
-///    `shutdown` resolves, flips `Health` to
-///    [`Draining`](seiva_http::Health::set_draining) *before* the server stops
-///    accepting — so `/health/ready` returns `503` and the process leaves
-///    rotation while in-flight requests finish.
+///    [`ServeError::Bind`].
+/// 3. Flips `Health` [`Starting -> Ready`](seiva_http::Health::set_ready) once the
+///    socket is listening.
+/// 4. Serves with a graceful-shutdown future that, once `shutdown` resolves, flips
+///    `Health` to [`Draining`](seiva_http::Health::set_draining) *before* the
+///    server stops accepting, so the process leaves rotation while in-flight
+///    requests finish.
 ///
 /// # Errors
 ///
@@ -324,7 +269,7 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
     let health = Health::starting();
-    let app = application(health.clone());
+    let app = router(health.clone());
     serve_router(config.http_addr, app, health, shutdown).await
 }
 
@@ -445,6 +390,18 @@ mod tests {
     use seiva_config::load_from;
     use std::collections::HashMap;
     use tower::ServiceExt; // for `oneshot`
+
+    /// The composition a real `apps/<name>-api` performs, exercised here with the
+    /// `accounts` example (a dev-dependency, so it never enters a release build or
+    /// blocks publishing): the framework router merged with the module's generated
+    /// controller router wired to the in-memory repository.
+    fn application(health: Health) -> Router {
+        let accounts =
+            accounts_interface::accounts_router(accounts_interface::AccountsController::new(
+                accounts_infrastructure::InMemoryCredentialRepository::new(),
+            ));
+        router(health).merge(accounts)
+    }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -609,12 +566,13 @@ mod tests {
 
     // --- facade discovery: /openapi.json lists every mounted module ---------
 
-    /// The served `/openapi.json` documents BOTH the demonstration `Notes` facade
-    /// and the mounted `accounts` module, proving link-time discovery
-    /// (`registered_facades`) picks up every `#[seiva::facade]` in the binary
-    /// with no hand-maintained list (OWASP API9).
+    /// The served `/openapi.json` documents the mounted `accounts` module,
+    /// proving link-time discovery (`registered_facades`) picks up every
+    /// `#[seiva::facade]` linked into the binary with no hand-maintained list
+    /// (OWASP API9). The runtime itself is demo-free, so `accounts` is the only
+    /// facade here (it comes from the test's dev-dependency composition).
     #[tokio::test]
-    async fn openapi_discovers_every_mounted_facade() {
+    async fn openapi_discovers_the_mounted_facade() {
         let app = application(Health::starting());
         let res = app
             .oneshot(
@@ -631,11 +589,6 @@ mod tests {
             .unwrap();
         let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let paths = doc["paths"].as_object().expect("paths object");
-        assert!(
-            paths.keys().any(|p| p.contains("/notes")),
-            "the Notes demonstration facade must be documented: {:?}",
-            paths.keys().collect::<Vec<_>>()
-        );
         assert!(
             paths.keys().any(|p| p.contains("/accounts")),
             "the mounted accounts module must be discovered and documented: {:?}",

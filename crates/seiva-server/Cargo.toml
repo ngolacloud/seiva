@@ -34,12 +34,6 @@ seiva-config = { path = "../seiva-config" }
 # The framework crate: its worker runtime (`worker::run_worker`) drives the host.
 # default-features = false keeps the `dorm` toggle off (the data layer stays out).
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
-# The `accounts` module's interface (the generic controller + generated router)
-# and its infrastructure (the in-memory repository). seiva-server is the
-# composition root, so it legitimately names the infrastructure crate to inject
-# the concrete repository into the module's controller.
-accounts-interface = { path = "../../examples/accounts/interface" }
-accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"] }
@@ -51,3 +45,9 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
+serde_json = "1"
+# The `accounts` example composition, exercised in tests only — the runtime
+# itself ships demo-free. Dev-dependencies on example crates are stripped on
+# publish, so they do not block it.
+accounts-interface = { path = "../../examples/accounts/interface" }
+accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
