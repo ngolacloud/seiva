@@ -401,3 +401,22 @@ Scaffold gera módulos lint-clean. Fitness nova
 (`generated_interface_does_not_depend_on_infrastructure`) guarda o gerador.
 Regra do lint inalterada. (Os exemplos continuam fora do scan do lint por não
 terem `module.toml` — a fitness do gerador cobre o artefacto que importa.)
+
+## S5 — Skills e agents (Parte G) + caminho para referência da comunidade (2026-11-04)
+
+Instalados em `.claude/` (versionados via exceção no `.gitignore`; o resto de
+`.claude/` fica local): 5 skills (`seiva-security-review`, `seiva-pattern-fitness`,
+`seiva-cloud-native-check`, `seiva-dx-parity`, `seiva-community-adr`) + 5 agents
+(`security-reviewer`, `rust-framework-architect`, `cloud-native-validator`,
+`dx-advocate`, `community-maintainer`). Ver `.claude/README.md`. A auditoria passa
+a gate permanente: uma sessão nova usa-os sem reler o prompt original.
+
+### Framework padrão da comunidade — fase futura (fora do âmbito desta auditoria)
+Falta, para o Seiva ser referência pública ao nível de axum/loco.rs/shuttle:
+- **Getting-started de 5 minutos** executável (quando os crates do framework
+  publicarem e um projeto gerado compilar standalone — ver dívida de S3).
+- **Site de documentação próprio** (mdBook/rustdoc publicado; hoje há `docs/` + Pages de API).
+- **Canal de anúncio de breaking changes** (RFCs/discussions + política de SemVer).
+- **`CHANGELOG.md`** seguindo *Keep a Changelog* (hoje ausente).
+- **Publicação dos crates** (crates.io ou git tag) — desbloqueia o getting-started
+  e o `seiva start` ponta-a-ponta num projeto gerado.

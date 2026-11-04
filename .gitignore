@@ -4,4 +4,9 @@ target/
 **/*.rs.bk
 Cargo.lock.orig
 .env
-.claude/
+# Local Claude Code state (settings, session data) is ignored, but the shared
+# audit skills and agents are versioned so the whole team (and a fresh session)
+# gets them — see .claude/skills/ and .claude/agents/.
+.claude/*
+!.claude/skills/
+!.claude/agents/
