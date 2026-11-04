@@ -2551,7 +2551,7 @@ dependencies = [
 name = "seiva-server"
 version = "0.1.0"
 dependencies = [
- "accounts-facade",
+ "accounts-infrastructure",
  "accounts-interface",
  "axum",
  "delonix-seiva",

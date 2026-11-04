@@ -336,8 +336,14 @@ fn app_main_rs(name: &str) -> String {
          \x20   }};\n\n\
          \x20   let health = Health::starting();\n\
          \x20   // The framework application: /health, /openapi.json and /docs.\n\
-         \x20   // Merge each module's router here as you add it, for example:\n\
-         \x20   //   let app = router(health.clone()).merge(notes_interface::router());\n\
+         \x20   // This is the composition root: for each module you add, pick its\n\
+         \x20   // adapters and merge its generated router, for example:\n\
+         \x20   //   let app = router(health.clone()).merge(notes_interface::notes_router(\n\
+         \x20   //       notes_interface::NotesController::new(\n\
+         \x20   //           notes_infrastructure::InMemoryRecordRepository::new(),\n\
+         \x20   //           notes_infrastructure::CounterIdGenerator::default(),\n\
+         \x20   //       ),\n\
+         \x20   //   ));\n\
          \x20   let app = router(health.clone());\n\n\
          \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
          \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
@@ -598,47 +604,46 @@ fn interface_lib(snake: &str, pascal: &str) -> String {
          //! to the real framework transports.\n\
          //!\n\
          //! LAYERING DECISION: the `#[seiva::controller]` lives HERE, not in\n\
-         //! `application`, so the application layer stays transport-free (it depends\n\
-         //! only on `domain`, `facade` and `seiva-ports`, like the canonical\n\
-         //! example). The controller is applied to the CONCRETE [`{pascal}Controller`]\n\
-         //! adapter, which delegates to the module's default service wired here.\n\
-         //! A concrete self type is required: `#[seiva::controller]` dispatches\n\
-         //! through the facade trait, whose `async fn` methods are only known to\n\
-         //! return `Send` futures (as axum's router demands) for a concrete type —\n\
-         //! a generic service would leave the trait's return-position future\n\
-         //! unbounded. The composition root in `apps/` can build its own router over\n\
-         //! a different service by wrapping it the same way.\n\
+         //! `application`, so the application layer stays transport-free. The\n\
+         //! controller [`{pascal}Controller<R, G>`] is GENERIC over the repository\n\
+         //! and id-generator ports, so this layer depends only on `application` (the\n\
+         //! service and the `RecordRepository` port) and NEVER on `infrastructure` —\n\
+         //! the layering rule forbids `interface -> infrastructure`. A concrete self\n\
+         //! type is still what `#[seiva::controller]` dispatches through, but\n\
+         //! `{pascal}Controller<R, G>` is concrete once the ports are chosen, and the\n\
+         //! macro propagates the generics + their bounds onto the generated router.\n\
          //!\n\
          //! The macro generates a `{snake}_router(service)` builder whose route\n\
          //! version and per-route permission come from the facade descriptor at run\n\
-         //! time. The same descriptor drives this module's OpenAPI and proto\n\
-         //! documents ([`openapi`] and [`proto`]), so the wire contract is\n\
-         //! generated, never hand-maintained.\n\
+         //! time. The COMPOSITION ROOT in `apps/` picks the concrete adapters and\n\
+         //! calls `{snake}_router({pascal}Controller::new(repo, ids))`. The same\n\
+         //! descriptor drives this module's OpenAPI and proto documents ([`openapi`]\n\
+         //! and [`proto`]), so the wire contract is generated, never hand-maintained.\n\
          //!\n\
          //! The generated handlers return `Result<_, seiva_http::Problem>`, a large\n\
          //! value, so the large-`Err` lint is allowed crate-wide (as `seiva-http`\n\
          //! itself does).\n\
          #![allow(clippy::result_large_err)]\n\n\
+         use std::sync::Arc;\n\n\
          use delonix_seiva::contract::Facade;\n\
          use delonix_seiva::controller;\n\
-         use {snake}_application::RecordService;\n\
-         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\
-         use {snake}_infrastructure::{{CounterIdGenerator, InMemoryRecordRepository}};\n\n\
-         /// The module's default, in-memory `{pascal}` service: the application\n\
-         /// service over the in-memory repository and counter id generator. Swap\n\
-         /// these ports (e.g. a DORM-backed repository) in the composition root.\n\
-         pub type DefaultService = RecordService<InMemoryRecordRepository, CounterIdGenerator>;\n\n\
-         /// Transport adapter: a concrete `{pascal}` service exposed over HTTP. It is\n\
-         /// `Clone` so the generated `{snake}_router` can hold it as axum state.\n\
-         #[derive(Clone)]\n\
-         pub struct {pascal}Controller(pub DefaultService);\n\n\
-         impl {pascal}Controller {{\n    /// Builds the controller over the default in-memory service.\n    pub fn new() -> Self {{\n        {pascal}Controller(RecordService {{\n            repository: InMemoryRecordRepository::new(),\n            ids: CounterIdGenerator::default(),\n        }})\n    }}\n}}\n\n\
-         impl Default for {pascal}Controller {{\n    fn default() -> Self {{\n        Self::new()\n    }}\n}}\n\n\
+         use seiva_ports::IdGenerator;\n\
+         use {snake}_application::{{RecordRepository, RecordService}};\n\
+         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\n\
+         /// Transport adapter: a concrete `{pascal}` service exposed over HTTP,\n\
+         /// generic over the repository port `R` and the id-generator port `G`.\n\
+         /// Held behind an [`Arc`] so it is `Clone + Send + Sync + 'static` — the\n\
+         /// bound the generated `{snake}_router` places on its axum state — without\n\
+         /// requiring the service or its ports to be `Clone`.\n\
+         pub struct {pascal}Controller<R, G>(Arc<RecordService<R, G>>);\n\n\
+         // Manual `Clone` (not derived): the controller is `Clone` for ANY `R`/`G`\n\
+         // because it only holds an `Arc`; the derive would wrongly demand both be\n\
+         // `Clone`.\n\
+         impl<R, G> Clone for {pascal}Controller<R, G> {{\n    fn clone(&self) -> Self {{\n        Self(Arc::clone(&self.0))\n    }}\n}}\n\n\
+         impl<R: RecordRepository, G: IdGenerator> {pascal}Controller<R, G> {{\n    /// Builds the controller over the given ports. The composition root in\n    /// `apps/` chooses them (the in-memory adapters, or DORM-backed ones); the\n    /// interface never names a concrete adapter.\n    pub fn new(repository: R, ids: G) -> Self {{\n        {pascal}Controller(Arc::new(RecordService {{ repository, ids }}))\n    }}\n}}\n\n\
          #[controller]\n\
-         impl {pascal} for {pascal}Controller {{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n}}\n\n\
-         /// Builds the module's HTTP router, wired to the default in-memory service.\n\
-         /// Merge it into the application router in the composition root.\n\
-         pub fn router() -> ::axum::Router {{\n    {snake}_router({pascal}Controller::new())\n}}\n\n\
+         impl<R, G> {pascal} for {pascal}Controller<R, G>\n\
+         where\n    R: RecordRepository + Send + Sync + 'static,\n    G: IdGenerator + Send + Sync + 'static,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n}}\n\n\
          /// The module's OpenAPI 3.1 document, generated from the facade descriptor.\n\
          pub fn openapi() -> serde_json::Value {{\n    seiva_openapi::openapi_document(\n        seiva_openapi::ApiInfo {{\n            title: \"{snake} API\".to_string(),\n            version: {pascal}Facade::DESCRIPTOR.version.to_string(),\n        }},\n        &[{pascal}Facade::DESCRIPTOR],\n    )\n}}\n\n\
          /// The module's proto3 service document, generated from the facade descriptor.\n\
@@ -705,17 +710,19 @@ fn interface_cargo_toml(module: &str) -> String {
         "[package]\nname = \"{module}-interface\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
          [dependencies]\n\
          {module}-facade = {{ path = \"../facade\" }}\n\
-         # The transport wires a default concrete service (application over the\n\
-         # in-memory infrastructure adapters) so the module ships a runnable router.\n\
-         # A production composition root in `apps/` can wrap a different service.\n\
+         # The controller is generic over the repository and id-generator ports, so\n\
+         # the interface depends on `application` (the service + the repository\n\
+         # port) but NEVER on `infrastructure` — the layering rule forbids\n\
+         # `interface -> infrastructure`. The composition root in `apps/` injects\n\
+         # the concrete adapters.\n\
          {module}-application = {{ path = \"../application\" }}\n\
-         {module}-infrastructure = {{ path = \"../infrastructure\" }}\n\
          # The controller macro + contract, the HTTP primitives it emits, and the\n\
          # OpenAPI/proto generators — all driven by the facade descriptor.\n\
          delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
          seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
          seiva-grpc = {{ path = \"{FRAMEWORK_CRATES}/seiva-grpc\" }}\n\
          seiva-openapi = {{ path = \"{FRAMEWORK_CRATES}/seiva-openapi\" }}\n\
+         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\
          axum = \"0.8\"\n\
          serde_json = \"1\"\n"
     )
@@ -849,6 +856,29 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "modules/notes/module.toml"));
     }
 
+    /// Fitness: the generated `interface` layer must NOT declare a production
+    /// dependency on the module's `infrastructure` crate — the layering rule
+    /// (`interface -> infrastructure` forbidden) that `seiva lint` enforces. The
+    /// controller is generic over the ports, so `interface` names only
+    /// `application`; the composition root injects the concrete adapters.
+    #[test]
+    fn generated_interface_does_not_depend_on_infrastructure() {
+        let files = module_files("notes").unwrap();
+        let cargo = contents(&files, "modules/notes/interface/Cargo.toml");
+        let deps = cargo
+            .split("[dev-dependencies]")
+            .next()
+            .expect("the [dependencies] section precedes any dev-dependencies");
+        assert!(
+            !deps.contains("notes-infrastructure"),
+            "generated interface must not depend on infrastructure in production:\n{deps}"
+        );
+        assert!(
+            deps.contains("notes-application"),
+            "generated interface depends on application (allowed):\n{deps}"
+        );
+    }
+
     #[test]
     fn every_generated_lib_has_balanced_brackets() {
         let files = module_files("order_items").unwrap();
@@ -926,22 +956,20 @@ mod tests {
     fn generated_interface_holds_controller_and_transport_generation() {
         let files = module_files("notes").unwrap();
         let interface = contents(&files, "modules/notes/interface/src/lib.rs");
-        // The controller macro is imported and applied to a concrete adapter impl
-        // (a concrete self type is required for the generated router to be Send).
+        // The controller macro is imported and applied to a GENERIC adapter impl:
+        // generic over the repository/id-generator ports, so the interface never
+        // names the infrastructure crate (the layering rule).
         assert!(interface.contains("use delonix_seiva::controller;"));
         assert!(interface.contains("#[controller]"));
-        assert!(interface.contains("pub struct NotesController(pub DefaultService);"));
-        assert!(interface.contains("impl Notes for NotesController {"));
-        // The default service is composed from the application + infrastructure.
-        assert!(interface.contains(
-            "pub type DefaultService = RecordService<InMemoryRecordRepository, CounterIdGenerator>;"
-        ));
-        assert!(interface.contains("use notes_application::RecordService;"));
-        assert!(interface
-            .contains("use notes_infrastructure::{CounterIdGenerator, InMemoryRecordRepository};"));
-        // A runnable router builder that calls the macro-generated `notes_router`.
-        assert!(interface.contains("pub fn router() -> ::axum::Router {"));
-        assert!(interface.contains("notes_router(NotesController::new())"));
+        assert!(interface.contains("pub struct NotesController<R, G>(Arc<RecordService<R, G>>);"));
+        assert!(interface.contains("impl<R, G> Notes for NotesController<R, G>"));
+        // It depends on application (allowed), NOT infrastructure.
+        assert!(interface.contains("use notes_application::{RecordRepository, RecordService};"));
+        assert!(!interface.contains("notes_infrastructure"));
+        // The ports are injected via `new(repository, ids)`; there is no no-arg
+        // `router()` default that would need to name a concrete adapter.
+        assert!(interface.contains("pub fn new(repository: R, ids: G) -> Self {"));
+        assert!(!interface.contains("pub fn router()"));
         // Transport generation from the facade descriptor.
         assert!(interface.contains("seiva_openapi::openapi_document("));
         assert!(interface.contains("seiva_grpc::proto_document(&NotesFacade::DESCRIPTOR)"));
@@ -978,11 +1006,16 @@ mod tests {
         assert!(infra.contains("notes-application = { path = \"../application\" }"));
         assert!(infra.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
 
-        // The interface carries the transport crates + the layers it composes.
+        // The interface carries the transport crates + `application` (allowed),
+        // but NOT `infrastructure` (the layering rule forbids it).
         let interface = contents(&files, "modules/notes/interface/Cargo.toml");
         assert!(interface.contains("notes-facade = { path = \"../facade\" }"));
         assert!(interface.contains("notes-application = { path = \"../application\" }"));
-        assert!(interface.contains("notes-infrastructure = { path = \"../infrastructure\" }"));
+        assert!(
+            !interface.contains("notes-infrastructure = {"),
+            "interface must not depend on infrastructure (layering rule)"
+        );
+        assert!(interface.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
         assert!(interface.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\""));
         assert!(interface.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
         assert!(interface.contains("seiva-grpc = { path = \"../../../../crates/seiva-grpc\" }"));

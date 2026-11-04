@@ -34,18 +34,12 @@ seiva-config = { path = "../seiva-config" }
 # The framework crate: its worker runtime (`worker::run_worker`) drives the host.
 # default-features = false keeps the `dorm` toggle off (the data layer stays out).
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
-# The `accounts` module's HTTP router, merged into the application so a request
-# to an accounts route hits the real module use case. DORM-free (in-memory).
+# The `accounts` module's interface (the generic controller + generated router)
+# and its infrastructure (the in-memory repository). seiva-server is the
+# composition root, so it legitimately names the infrastructure crate to inject
+# the concrete repository into the module's controller.
 accounts-interface = { path = "../../examples/accounts/interface" }
-# The OpenAPI 3.1 generator: this crate composes its OWN `/openapi.json` from
-# BOTH mounted facades (notes + accounts), rather than inheriting seiva-http's
-# notes-only document. All three are DORM-free.
-seiva-openapi = { path = "../seiva-openapi" }
-notes-facade = { path = "../../examples/notes/facade" }
-# AccountsFacade::DESCRIPTOR — the accounts contract, so its operations appear in
-# the composed document. Already a transitive dep via accounts-interface; made
-# direct here because this crate now names it.
-accounts-facade = { path = "../../examples/accounts/facade" }
+accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"] }

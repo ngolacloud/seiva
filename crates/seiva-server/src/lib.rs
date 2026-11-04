@@ -6,13 +6,11 @@
 //! framework crate so nothing is re-implemented here:
 //!
 //! - **Mounts the HTTP application** — the facade-driven controllers, the
-//!   `/health/{live,ready}` endpoints and a `/openapi.json` composed from **every**
-//!   mounted facade. It composes the pieces [`seiva_http::router`] offers (its
-//!   `notes` and health routers, the body-limit and request-id layers) with the
-//!   `accounts` module's controller router ([`accounts_interface::router`]) so a
-//!   request to an accounts route hits the real module use case — and serves its
-//!   own broader [`openapi_document`] rather than inheriting `seiva-http`'s
-//!   notes-only one. See [`serve`].
+//!   generated `/openapi.json` and the `/health/{live,ready}` endpoints — through
+//!   [`seiva_http::router`], which already merges them. As the composition root it
+//!   then wires the `accounts` module's generic controller to the in-memory
+//!   repository and merges its generated `accounts_router`, so a request to an
+//!   accounts route hits the real module use case. See [`serve`].
 //! - **Runs a background worker host** on the framework's worker runtime
 //!   ([`delonix_seiva::worker::run_worker`]). See [`run_workers`].
 //! - **Reads 12-factor configuration** from the environment with [`seiva_config`],
@@ -285,13 +283,15 @@ async fn openapi_handler() -> Json<serde_json::Value> {
 /// over its in-memory service. Because the layers wrap the merged router, the
 /// accounts surface now sits inside the body-limit and request-id middleware too.
 fn application(health: Health) -> Router {
-    Router::new()
-        .merge(notes_router())
-        .merge(health_router(health))
-        .merge(accounts_interface::router())
-        .route("/openapi.json", get(openapi_handler))
-        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES))
-        .layer(from_fn(request_id))
+    // Composition root: pick the concrete repository (in-memory here) and wire it
+    // into the module's generic controller, then merge the generated router. The
+    // `accounts` interface layer never names the infrastructure crate; this is
+    // where that choice is made.
+    let accounts =
+        accounts_interface::accounts_router(accounts_interface::AccountsController::new(
+            accounts_infrastructure::InMemoryCredentialRepository::new(),
+        ));
+    router(health).merge(accounts)
 }
 
 /// Serves the Seiva HTTP application until `shutdown` resolves, then drains.

@@ -16,11 +16,11 @@ publish = false
 
 [dependencies]
 accounts-facade = { path = "../facade" }
-# The transport wires a default concrete service (the application over the
-# in-memory infrastructure adapters) so the module ships a runnable router. A
-# production composition root in `apps/` can wrap a different service.
+# The controller is generic over the repository port, so the interface depends on
+# `application` (the service + the `CredentialRepository` port) but NEVER on the
+# `infrastructure` crate — the layering rule forbids `interface -> infrastructure`.
+# The composition root injects the concrete repository.
 accounts-application = { path = "../application" }
-accounts-infrastructure = { path = "../infrastructure" }
 # The controller macro + contract, the HTTP primitives it emits, and the
 # trait-only ports the in-process `runtime` adapters implement.
 delonix-seiva = { workspace = true }
@@ -28,14 +28,16 @@ seiva-http = { path = "../../../crates/seiva-http" }
 seiva-ports = { path = "../../../crates/seiva-ports" }
 async-trait = { workspace = true }
 axum = "0.8"
-# `spawn_blocking` + a current-thread runtime confine the use-case future (which
-# `seiva-ports`' `UnitOfWork` cannot make `Send` today) off the axum handler's
-# `Send` future; see `AccountsController::run`.
-tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]
+# Tests wire the in-memory repository into the controller — the composition the
+# real `apps/` root performs. A dev-dependency, so the layering rule (which reads
+# only `[dependencies]`) still forbids a production `interface -> infrastructure`
+# edge.
+accounts-infrastructure = { path = "../infrastructure" }
 seiva-testing = { path = "../../../crates/seiva-testing" }
 seiva-auth = { path = "../../../crates/seiva-auth" }
+# `tokio` is here only for `#[tokio::test]`.
 tokio = { version = "1", features = ["rt", "macros"] }
 # Drives the generated router without a live server via `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
