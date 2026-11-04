@@ -19,6 +19,9 @@ exclude = [
     # RAG worker and the MCP-over-HTTP endpoint are DORM-git-coupled too.
     "crates/seiva-rag-worker",
     "crates/seiva-mcp",
+    # The DORM end-to-end proof: the real "main" composing the gateway, the
+    # outbox relay and the server over real DORM. Built by the `dorm-e2e` CI job.
+    "apps/dorm-e2e",
 ]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,

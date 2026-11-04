@@ -100,3 +100,48 @@ jobs:
             cargo test --manifest-path "crates/$crate/Cargo.toml" --all-features
             echo "::endgroup::"
           done
+
+  # The DORM end-to-end proof (`apps/dorm-e2e`): the real "main" composing the
+  # gateway, the transactional-outbox relay and the HTTP server over real DORM
+  # — the `dorm` feature path end to end. Like `dorm-gateway` it is token-gated
+  # (a green no-op without `DORM_TOKEN`), keeping the default build credential-
+  # free. The offline gates here prove compilation/linking and the no-DB logic;
+  # a live-Postgres integration test is a later increment.
+  dorm-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Detect the DORM access token
+        id: gate
+        env:
+          DORM_TOKEN: ${{ secrets.DORM_TOKEN }}
+        run: |
+          if [ -n "$DORM_TOKEN" ]; then
+            echo "DORM_TOKEN present — building the DORM end-to-end app."
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "DORM_TOKEN absent — skipping. Add the secret to build apps/dorm-e2e."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install the toolchain
+        if: steps.gate.outputs.present == 'true'
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.present == 'true'
+      - name: Authenticate cargo to the private DORM repo
+        if: steps.gate.outputs.present == 'true'
+        env:
+          DORM_TOKEN: ${{ secrets.DORM_TOKEN }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${DORM_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+      - name: Build, lint and test the DORM end-to-end app
+        if: steps.gate.outputs.present == 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path apps/dorm-e2e/Cargo.toml --all --check
+          cargo clippy --manifest-path apps/dorm-e2e/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo test --manifest-path apps/dorm-e2e/Cargo.toml --all-features
