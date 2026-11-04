@@ -432,3 +432,19 @@ certificados do `rustls-webpki` 0.102 via `async-nats`). Novo license transitivo
 adicionado à allowlist. O passo `--all-features` do CI passou a **gate duro**
 (fim do `continue-on-error`); `deny.toml` sem exceções. Workspace verde com
 `cargo test --workspace --all-features`.
+
+## Autorização object-level / BOLA fail-closed (2026-11-04, ADR 0005)
+
+`permission_guard` só cobre API5 (function-level). Para API1/BOLA havia
+`Principal::require_owns`, mas era **consultivo**: um handler que o esquecesse
+servia dados de outro tenant em silêncio. ADR 0005 fecha a porta por tipo:
+`Scoped<T>` (em `seiva-http::guard`) embrulha um recurso com o seu tenant e só
+deixa ler o valor via `owned_by(&Principal) -> Result<T, Problem>` — sem
+`into_inner`/campo público/`Deref`, logo esquecer a verificação é **erro de
+compilação**, não fuga em runtime. `require_owns` fica como escotilha explícita
+(ex.: lista já filtrada por `WHERE tenant = $1`).
+
+Dívida aceite: adoção é por-módulo e opt-in; e o primitivo vive em `seiva-http`
+(construído na costura do interface), por isso a `application` ainda não devolve
+`Scoped<T>` diretamente — mover o primitivo para um crate sem transporte é o
+refactor que o primeiro módulo multi-tenant real vai forçar.

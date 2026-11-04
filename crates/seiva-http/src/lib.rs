@@ -44,7 +44,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 
 pub use docs::{docs_handler, DOCS_HTML};
-pub use guard::{permission_guard, Principal, RequiredPermission};
+pub use guard::{permission_guard, Principal, RequiredPermission, Scoped};
 pub use health::{health_router, Health, HealthState};
 pub use problem::{Problem, PROBLEM_JSON};
 pub use rate_limit::{rate_limit, RateLimit, RateLimiter};

@@ -119,6 +119,69 @@ impl Principal {
     }
 }
 
+/// A value that belongs to a tenant and cannot be read without proving the caller
+/// owns it — the **fail-closed** object-level (OWASP API1 / BOLA) counterpart to
+/// the advisory [`Principal::require_owns`] (ADR 0005).
+///
+/// Build it where the resource is loaded, from the record's own tenant column:
+///
+/// ```
+/// # use seiva_http::{Principal, Scoped};
+/// # struct NoteDto { title: String }
+/// // In the use case / handler, right after the load:
+/// let note = Scoped::new("acme", NoteDto { title: "hi".into() });
+///
+/// // The ONLY way to reach the value is to pass the ownership check:
+/// let caller = Principal::in_tenant("alice", "acme", ["notes.read"]);
+/// let dto = note.owned_by(&caller).expect("same tenant");
+/// assert_eq!(dto.title, "hi");
+/// ```
+///
+/// There is no `into_inner`, no public field and no `Deref`: a handler that
+/// forgets the check cannot reach the resource to return it, so the omission is a
+/// compile error rather than a silent cross-tenant leak. `#[must_use]` means even
+/// dropping it unused warns.
+#[must_use = "a Scoped value must be unwrapped with `owned_by` — dropping it skips the ownership check"]
+pub struct Scoped<T> {
+    tenant: String,
+    value: T,
+}
+
+impl<T> Scoped<T> {
+    /// Tags `value` as belonging to `tenant`. The caller passes the resource's
+    /// own tenant (its database column, say), not the requester's.
+    pub fn new(tenant: impl Into<String>, value: T) -> Self {
+        Self {
+            tenant: tenant.into(),
+            value,
+        }
+    }
+
+    /// The tenant this value belongs to, readable without unwrapping — for a log
+    /// line or a metric label, never as a substitute for [`owned_by`](Self::owned_by).
+    #[must_use]
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+
+    /// Unwraps the value **iff** `principal` owns its tenant, returning a `403`
+    /// [`Problem`] otherwise. This is the only accessor of the inner value, so
+    /// the ownership check cannot be skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `403` [`Problem`] when the caller does not own the resource.
+    pub fn owned_by(self, principal: &Principal) -> Result<T, Problem> {
+        if principal.owns(&self.tenant) {
+            Ok(self.value)
+        } else {
+            Err(Problem::forbidden(
+                "caller does not own the requested resource",
+            ))
+        }
+    }
+}
+
 /// The permission a route requires, read from a facade method's descriptor. An
 /// empty string marks an unguarded route. Used as the state of
 /// [`permission_guard`].
@@ -182,5 +245,32 @@ mod tests {
 
         let denied = p.require_owns("globex").unwrap_err();
         assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn scoped_unwraps_only_for_the_owning_tenant() {
+        let owner = Principal::in_tenant("alice", "acme", ["notes.read"]);
+        let scoped = Scoped::new("acme", "secret-note");
+        assert_eq!(scoped.tenant(), "acme");
+        assert_eq!(scoped.owned_by(&owner).unwrap(), "secret-note");
+    }
+
+    #[test]
+    fn scoped_forbids_a_cross_tenant_caller() {
+        let intruder = Principal::in_tenant("mallory", "globex", ["notes.read"]);
+        let scoped = Scoped::new("acme", "secret-note");
+        let denied = scoped.owned_by(&intruder).unwrap_err();
+        assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn scoped_forbids_a_tenantless_or_anonymous_caller() {
+        // A permission alone (no tenant) must never unwrap a tenant's resource.
+        assert!(Scoped::new("acme", 1)
+            .owned_by(&Principal::new("svc", ["notes.read"]))
+            .is_err());
+        assert!(Scoped::new("acme", 1)
+            .owned_by(&Principal::anonymous())
+            .is_err());
     }
 }
