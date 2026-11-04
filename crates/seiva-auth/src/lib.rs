@@ -22,6 +22,10 @@
 //! assert!(!verify_password("wrong", &phc).unwrap());
 //! ```
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
+
 use argon2::password_hash::{
     rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
 };
@@ -187,6 +191,144 @@ impl FromIterator<Permission> for PermissionSet {
     }
 }
 
+/// How aggressively [`LoginThrottle`] locks a key out after repeated failures.
+///
+/// A sane default (5 failures within 15 minutes → locked for 15 minutes) blunts
+/// online password guessing (OWASP API2) without punishing a fat-fingered human.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThrottlePolicy {
+    /// Failures within [`window`](Self::window) that trigger a lockout.
+    pub max_failures: u32,
+    /// The rolling window failures are counted over.
+    pub window: Duration,
+    /// How long a key stays locked once it trips the limit.
+    pub lockout: Duration,
+}
+
+impl Default for ThrottlePolicy {
+    fn default() -> Self {
+        Self {
+            max_failures: 5,
+            window: Duration::from_secs(15 * 60),
+            lockout: Duration::from_secs(15 * 60),
+        }
+    }
+}
+
+/// The per-key failure state the throttle tracks.
+#[derive(Debug, Clone, Copy)]
+struct Attempts {
+    failures: u32,
+    window_start: SystemTime,
+    locked_until: Option<SystemTime>,
+}
+
+/// An in-memory account-lockout throttle for authentication attempts (OWASP
+/// API2: Broken Authentication).
+///
+/// It counts failed attempts per *key* — typically a username, or a
+/// username+client-IP pair the caller composes — and locks the key out for
+/// [`ThrottlePolicy::lockout`] once [`max_failures`](ThrottlePolicy::max_failures)
+/// failures land within [`window`](ThrottlePolicy::window). A success clears the
+/// key immediately.
+///
+/// Time is passed in by the caller (`now: SystemTime`) rather than read from a
+/// global clock, so this crate stays dependency-free and the behaviour is tested
+/// deterministically without sleeping. Production calls pass
+/// [`SystemTime::now`]; a login middleware owns one `LoginThrottle` behind an
+/// `Arc` and calls [`check`](Self::check) before verifying a password and
+/// [`record_failure`](Self::record_failure)/[`record_success`](Self::record_success)
+/// after.
+///
+/// ```
+/// use seiva_auth::{LoginThrottle, ThrottlePolicy};
+/// use std::time::{Duration, SystemTime};
+///
+/// let policy = ThrottlePolicy { max_failures: 3, window: Duration::from_secs(60), lockout: Duration::from_secs(300) };
+/// let throttle = LoginThrottle::new(policy);
+/// let now = SystemTime::UNIX_EPOCH;
+///
+/// // Three failures trip the lockout; the key is then refused.
+/// for _ in 0..3 { throttle.record_failure("alice", now); }
+/// assert!(throttle.check("alice", now).is_err());
+///
+/// // After the lockout elapses the key is allowed to try again.
+/// assert!(throttle.check("alice", now + Duration::from_secs(301)).is_ok());
+/// ```
+#[derive(Debug)]
+pub struct LoginThrottle {
+    policy: ThrottlePolicy,
+    keys: Mutex<HashMap<String, Attempts>>,
+}
+
+impl LoginThrottle {
+    /// A throttle enforcing `policy`.
+    #[must_use]
+    pub fn new(policy: ThrottlePolicy) -> Self {
+        Self {
+            policy,
+            keys: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Whether `key` may attempt an authentication now.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(remaining)` — the time left on the lockout — when `key` is
+    /// currently locked out.
+    pub fn check(&self, key: &str, now: SystemTime) -> Result<(), Duration> {
+        let keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        match keys.get(key).and_then(|a| a.locked_until) {
+            Some(until) => match until.duration_since(now) {
+                Ok(remaining) if !remaining.is_zero() => Err(remaining),
+                _ => Ok(()),
+            },
+            None => Ok(()),
+        }
+    }
+
+    /// Records a failed attempt for `key`, returning `true` when this failure
+    /// tripped the lockout. Failures outside the rolling window start a fresh
+    /// count rather than accumulating forever.
+    pub fn record_failure(&self, key: &str, now: SystemTime) -> bool {
+        let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        let attempts = keys.entry(key.to_owned()).or_insert(Attempts {
+            failures: 0,
+            window_start: now,
+            locked_until: None,
+        });
+
+        // A new window (the previous one elapsed) resets the count.
+        let elapsed = now
+            .duration_since(attempts.window_start)
+            .unwrap_or(Duration::ZERO);
+        if elapsed >= self.policy.window {
+            attempts.window_start = now;
+            attempts.failures = 0;
+        }
+
+        attempts.failures += 1;
+        if attempts.failures >= self.policy.max_failures {
+            attempts.locked_until = Some(now + self.policy.lockout);
+            // Reset the counter so that, once the lockout expires, the key gets a
+            // fresh window rather than being re-locked by one more failure.
+            attempts.failures = 0;
+            attempts.window_start = now;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clears all failure state for `key` — called after a successful
+    /// authentication so a user who eventually succeeds is not penalised.
+    pub fn record_success(&self, key: &str) {
+        let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        keys.remove(key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +376,76 @@ mod tests {
         assert!(!set.contains(&Permission::new("notes.delete")));
         assert_eq!(set.len(), 2);
         assert!(!set.is_empty());
+    }
+
+    // --- LoginThrottle (API2: account lockout) ------------------------------
+
+    fn policy() -> ThrottlePolicy {
+        ThrottlePolicy {
+            max_failures: 3,
+            window: Duration::from_secs(60),
+            lockout: Duration::from_secs(300),
+        }
+    }
+
+    #[test]
+    fn locks_out_after_max_failures_and_releases_after_lockout() {
+        let throttle = LoginThrottle::new(policy());
+        let t0 = SystemTime::UNIX_EPOCH;
+
+        assert!(throttle.check("alice", t0).is_ok());
+        assert!(!throttle.record_failure("alice", t0));
+        assert!(!throttle.record_failure("alice", t0));
+        // The third failure trips the lockout.
+        assert!(throttle.record_failure("alice", t0));
+        assert!(throttle.check("alice", t0).is_err());
+
+        // Still locked just before the lockout elapses...
+        assert!(throttle
+            .check("alice", t0 + Duration::from_secs(299))
+            .is_err());
+        // ...and allowed again once it has.
+        assert!(throttle
+            .check("alice", t0 + Duration::from_secs(301))
+            .is_ok());
+    }
+
+    #[test]
+    fn success_clears_failures() {
+        let throttle = LoginThrottle::new(policy());
+        let t0 = SystemTime::UNIX_EPOCH;
+        throttle.record_failure("bob", t0);
+        throttle.record_failure("bob", t0);
+        throttle.record_success("bob");
+        // After a success the count is gone: two fresh failures do not lock out.
+        assert!(!throttle.record_failure("bob", t0));
+        assert!(!throttle.record_failure("bob", t0));
+        assert!(throttle.check("bob", t0).is_ok());
+    }
+
+    #[test]
+    fn failures_outside_the_window_do_not_accumulate() {
+        let throttle = LoginThrottle::new(policy());
+        let t0 = SystemTime::UNIX_EPOCH;
+        throttle.record_failure("carol", t0);
+        throttle.record_failure("carol", t0);
+        // A third failure well after the window starts a fresh count, so it does
+        // not trip the lockout.
+        assert!(!throttle.record_failure("carol", t0 + Duration::from_secs(120)));
+        assert!(throttle
+            .check("carol", t0 + Duration::from_secs(120))
+            .is_ok());
+    }
+
+    #[test]
+    fn keys_are_independent() {
+        let throttle = LoginThrottle::new(policy());
+        let t0 = SystemTime::UNIX_EPOCH;
+        for _ in 0..3 {
+            throttle.record_failure("attacker", t0);
+        }
+        assert!(throttle.check("attacker", t0).is_err());
+        // A different key is unaffected.
+        assert!(throttle.check("victim", t0).is_ok());
     }
 }
