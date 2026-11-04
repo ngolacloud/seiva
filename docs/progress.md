@@ -420,3 +420,15 @@ Falta, para o Seiva ser referência pública ao nível de axum/loco.rs/shuttle:
 - **`CHANGELOG.md`** seguindo *Keep a Changelog* (hoje ausente).
 - **Publicação dos crates** (crates.io ou git tag) — desbloqueia o getting-started
   e o `seiva start` ponta-a-ponta num projeto gerado.
+
+## Brokers: advisories RESOLVIDOS (2026-11-04)
+
+Decisão de S1 fechada na opção (a). Subidos os clientes de broker opcionais de
+`seiva-messaging`: `async-nats` 0.45→0.51, `lapin` 2.5→4 (um ajuste de API:
+`basic_publish` passou a receber `ShortString`), `rskafka` 0.5→0.6. Os 8
+advisories RUSTSEC desapareceram (incl. as 5 vulnerabilidades de verificação de
+certificados do `rustls-webpki` 0.102 via `async-nats`). Novo license transitivo
+`CDLA-Permissive-2.0` (bundle de certificados CA `webpki-root-certs`, dados)
+adicionado à allowlist. O passo `--all-features` do CI passou a **gate duro**
+(fim do `continue-on-error`); `deny.toml` sem exceções. Workspace verde com
+`cargo test --workspace --all-features`.

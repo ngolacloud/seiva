@@ -13,16 +13,12 @@
 version = 2
 # A yanked dependency is treated as hard a failure as a vulnerable one.
 yanked = "deny"
-# The default-feature gate (`cargo deny check`) is clean today and needs NO
-# exception. The OPTIONAL broker backends of seiva-messaging (features nats /
-# amqp / kafka — none in `default`) do carry advisories (async-nats -> an old
-# rustls-webpki, lapin -> unmaintained instant/rustls-pemfile, rskafka -> an old
-# zstd-safe); the real fix is bumping those broker clients, tracked in
-# docs/progress.md. The CI runs an all-features advisory pass that SURFACES them
-# (informational), so they are never hidden, rather than burying real
-# cert-verification vulnerabilities behind blanket ignores here.
+# Both gates (default AND --all-features) are clean and need NO exception. The
+# optional broker backends of seiva-messaging (nats/amqp/kafka) were bumped
+# (async-nats 0.51, lapin 4, rskafka 0.6) so their TLS/compression stacks no
+# longer carry advisories.
 #
-# Format for a genuine exception, when one is unavoidable:
+# Format for a genuine exception, when one is ever unavoidable:
 #   # RUSTSEC-YYYY-NNNN — <crate>: <why it does not affect Seiva>. Reviewed
 #   # YYYY-MM-DD; remove once <fixed-version> is reachable.
 ignore = []
@@ -40,6 +36,10 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
+    # The Mozilla CA root bundle (`webpki-root-certs`, pulled by the TLS stack of
+    # the optional broker backends) ships its certificate DATA under this
+    # permissive Community Data License. Data, not code; safe to allow.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 

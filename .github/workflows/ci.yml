@@ -38,15 +38,11 @@ jobs:
   # RUSTSEC scan (a superset of cargo-audit) and is feature-aware, so it gates on
   # exactly what a build pulls. Config in /deny.toml.
   #
-  # Two passes:
-  #   1. DEFAULT features — the hard gate. What a Seiva service ships by default
-  #      must be free of known vulnerabilities, yanked crates, disallowed licences
-  #      and bad sources. Clean today.
-  #   2. ALL features — informational (continue-on-error). seiva-messaging's
-  #      OPTIONAL broker backends (nats/amqp/kafka) pull clients with open
-  #      advisories; this surfaces them every run so they stay visible and
-  #      tracked (docs/progress.md) until those clients are bumped — never hidden,
-  #      never silently blocking.
+  # Two HARD passes (both must be clean):
+  #   1. DEFAULT features — what a Seiva service ships.
+  #   2. ALL features — everything, including seiva-messaging's OPTIONAL broker
+  #      backends (nats/amqp/kafka). Clean since their clients were bumped, so
+  #      this is a hard gate too (no exceptions on file).
   audit:
     runs-on: ubuntu-latest
     steps:
@@ -58,11 +54,10 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
-      - name: cargo-deny — default build (the gate)
+      - name: cargo-deny — default build
         run: cargo deny check
-      - name: cargo-deny — optional backends (informational, tracked)
-        run: cargo deny --all-features check advisories
-        continue-on-error: true
+      - name: cargo-deny — all features (incl. optional broker backends)
+        run: cargo deny --all-features check
 
   # Documentation builds with intra-doc links treated as errors, matching DORM's
   # gate: a redundant or dangling `[`link`]` fails here rather than shipping.

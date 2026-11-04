@@ -242,8 +242,9 @@ pub mod amqp {
                 .map_err(|e| Error::Broker(format!("CloudEvent serialize failed: {e}")))?;
             self.channel
                 .basic_publish(
-                    "",
-                    topic,
+                    // lapin 4 takes `ShortString` for the exchange and routing key.
+                    "".into(),
+                    topic.into(),
                     BasicPublishOptions::default(),
                     &bytes,
                     BasicProperties::default(),
