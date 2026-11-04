@@ -23,8 +23,9 @@
 //!   arrives via the `dorm` feature); depends on `application` + `domain` +
 //!   `seiva-ports`.
 //! - `interface` — the transport. It holds the `#[seiva::controller]` adapter
-//!   that yields `<trait>_router`, and generates the module's OpenAPI and proto
-//!   documents from the facade descriptor via `seiva-openapi`/`seiva-grpc`.
+//!   that yields `<trait>_router`, and generates the module's OpenAPI document
+//!   from the facade descriptor via `seiva-openapi`. (Proto generation is a CLI
+//!   tool, not a per-module dependency, so the module crate stays gRPC-free.)
 //!
 //! The controller is placed in `interface` (not `application`) by deliberate
 //! layering choice, so the application layer stays transport-free; the decision
@@ -617,8 +618,8 @@ fn interface_lib(snake: &str, pascal: &str) -> String {
          //! version and per-route permission come from the facade descriptor at run\n\
          //! time. The COMPOSITION ROOT in `apps/` picks the concrete adapters and\n\
          //! calls `{snake}_router({pascal}Controller::new(repo, ids))`. The same\n\
-         //! descriptor drives this module's OpenAPI and proto documents ([`openapi`]\n\
-         //! and [`proto`]), so the wire contract is generated, never hand-maintained.\n\
+         //! descriptor drives this module's OpenAPI document ([`openapi`]), so the\n\
+         //! wire contract is generated, never hand-maintained.\n\
          //!\n\
          //! The generated handlers return `Result<_, seiva_http::Problem>`, a large\n\
          //! value, so the large-`Err` lint is allowed crate-wide (as `seiva-http`\n\
@@ -645,9 +646,10 @@ fn interface_lib(snake: &str, pascal: &str) -> String {
          impl<R, G> {pascal} for {pascal}Controller<R, G>\n\
          where\n    R: RecordRepository + Send + Sync + 'static,\n    G: IdGenerator + Send + Sync + 'static,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n}}\n\n\
          /// The module's OpenAPI 3.1 document, generated from the facade descriptor.\n\
-         pub fn openapi() -> serde_json::Value {{\n    seiva_openapi::openapi_document(\n        seiva_openapi::ApiInfo {{\n            title: \"{snake} API\".to_string(),\n            version: {pascal}Facade::DESCRIPTOR.version.to_string(),\n        }},\n        &[{pascal}Facade::DESCRIPTOR],\n    )\n}}\n\n\
-         /// The module's proto3 service document, generated from the facade descriptor.\n\
-         pub fn proto() -> String {{\n    seiva_grpc::proto_document(&{pascal}Facade::DESCRIPTOR)\n}}\n"
+         /// (A proto3 document is available from the same descriptor via\n\
+         /// `seiva proto`; it is not generated per-module to keep this crate free\n\
+         /// of the gRPC generator.)\n\
+         pub fn openapi() -> serde_json::Value {{\n    seiva_openapi::openapi_document(\n        seiva_openapi::ApiInfo {{\n            title: \"{snake} API\".to_string(),\n            version: {pascal}Facade::DESCRIPTOR.version.to_string(),\n        }},\n        &[{pascal}Facade::DESCRIPTOR],\n    )\n}}\n"
     )
 }
 
@@ -720,7 +722,6 @@ fn interface_cargo_toml(module: &str) -> String {
          # OpenAPI/proto generators — all driven by the facade descriptor.\n\
          delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
          seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
-         seiva-grpc = {{ path = \"{FRAMEWORK_CRATES}/seiva-grpc\" }}\n\
          seiva-openapi = {{ path = \"{FRAMEWORK_CRATES}/seiva-openapi\" }}\n\
          seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\
          axum = \"0.8\"\n\
@@ -970,9 +971,11 @@ mod tests {
         // `router()` default that would need to name a concrete adapter.
         assert!(interface.contains("pub fn new(repository: R, ids: G) -> Self {"));
         assert!(!interface.contains("pub fn router()"));
-        // Transport generation from the facade descriptor.
+        // OpenAPI generation from the facade descriptor. Proto generation is NOT
+        // per-module (it would pull the gRPC generator into every module crate);
+        // it is available from the same descriptor via the `seiva proto` CLI.
         assert!(interface.contains("seiva_openapi::openapi_document("));
-        assert!(interface.contains("seiva_grpc::proto_document(&NotesFacade::DESCRIPTOR)"));
+        assert!(!interface.contains("seiva_grpc"));
         assert!(interface.contains("NotesFacade::DESCRIPTOR"));
         // The large-Err lint allowance the generated handlers need.
         assert!(interface.contains("#![allow(clippy::result_large_err)]"));
@@ -1018,7 +1021,8 @@ mod tests {
         assert!(interface.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
         assert!(interface.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\""));
         assert!(interface.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
-        assert!(interface.contains("seiva-grpc = { path = \"../../../../crates/seiva-grpc\" }"));
+        // No seiva-grpc: proto generation is not per-module (it is a CLI tool).
+        assert!(!interface.contains("seiva-grpc = {"));
         assert!(
             interface.contains("seiva-openapi = { path = \"../../../../crates/seiva-openapi\" }")
         );

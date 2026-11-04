@@ -23,11 +23,13 @@ disponíveis por versão (crates.io) ou por git tag — hoje o scaffold emite de
 (`seiva-data-dorm`, `seiva-outbox-relay`, `seiva-rag-worker`, `seiva-mcp`),
 excluídos do workspace.
 
-**BLOQUEADORES RESTANTES (decisão do dono — release pass):**
-- `seiva-grpc` é `publish = false`, **mas o módulo gerado depende dele** (para
-  `proto()`). Decisão: publicar `seiva-grpc` (se a geração proto é para enviar) ou
-  tirar a dependência do módulo gerado (gerar proto só via CLI, não no crate do
-  módulo). Até lá, um projeto gerado não resolve `seiva-grpc` de crates.io.
+**`seiva-grpc` — RESOLVIDO (decisão a):** o módulo gerado já **não** depende de
+`seiva-grpc`; o `interface` gerado só gera o documento OpenAPI (`seiva-openapi`).
+A geração proto fica como ferramenta de CLI (`seiva proto`), a partir do mesmo
+descritor. `seiva-grpc` continua `publish = false` sem bloquear o projeto gerado,
+cujo grafo é agora inteiramente publicável.
+
+**BLOQUEADOR RESTANTE (decisão do dono — release pass):**
 - `seiva-cli` depende dos exemplos (`notes-facade`, `accounts-*`) porque os
   comandos-demo `user create`/`openapi`/`proto` operam sobre eles. Decisão de
   produto: esses comandos são demo-only (extrair para exemplos/testes), feature-
