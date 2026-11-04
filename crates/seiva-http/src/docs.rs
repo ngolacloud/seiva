@@ -8,10 +8,19 @@
 //! The page points at the **relative** `/openapi.json`, so it works behind any
 //! host or path prefix. The Scalar bundle itself loads from a CDN (as FastAPI's
 //! Swagger assets do); this is a developer-facing documentation page, not a
-//! data-plane response, so the CDN dependency is acceptable here while the
-//! strict `default-src 'none'` CSP still protects the API's JSON responses.
+//! data-plane response, so the CDN dependency is acceptable here.
+//!
+//! Because the framework's default response CSP is `default-src 'none'` (see
+//! [`security_headers`](crate::security_headers)), this page would otherwise load
+//! nothing — the CDN script and the inline bootstrap would both be blocked and
+//! the page would render blank. So [`docs_handler`] sets its **own**, narrower
+//! CSP ([`DOCS_CSP`]) that permits exactly Scalar's CDN and the same-origin spec
+//! fetch; `security_headers` only fills in a header that is *absent*, so this
+//! scoped policy wins for `/docs` while every API/JSON response keeps the strict
+//! default.
 
-use axum::response::Html;
+use axum::http::header::CONTENT_SECURITY_POLICY;
+use axum::response::{Html, IntoResponse, Response};
 
 /// The self-contained HTML for the API reference page. It loads the service's
 /// `/openapi.json` and renders it with Scalar.
@@ -29,9 +38,23 @@ pub const DOCS_HTML: &str = r#"<!doctype html>
 </html>
 "#;
 
-/// `GET /docs` — serves the interactive [`DOCS_HTML`] API reference page.
-pub async fn docs_handler() -> Html<&'static str> {
-    Html(DOCS_HTML)
+/// The Content-Security-Policy for the `/docs` page specifically — narrower than
+/// a wildcard, wider than the API's `default-src 'none'`. It permits only what
+/// Scalar needs: its script from jsDelivr (plus the inline bootstrap tag), the
+/// styles it injects, and a same-origin fetch of `/openapi.json`. Everything
+/// else stays denied, so the documentation page is no softer than it must be.
+pub const DOCS_CSP: &str = "default-src 'none'; \
+    script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
+    style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
+    img-src 'self' data: https://cdn.jsdelivr.net; \
+    font-src 'self' data: https://cdn.jsdelivr.net; \
+    connect-src 'self' https://cdn.jsdelivr.net; \
+    frame-ancestors 'none'";
+
+/// `GET /docs` — serves the interactive [`DOCS_HTML`] API reference page under
+/// the scoped [`DOCS_CSP`] (so the strict default CSP does not blank it out).
+pub async fn docs_handler() -> Response {
+    ([(CONTENT_SECURITY_POLICY, DOCS_CSP)], Html(DOCS_HTML)).into_response()
 }
 
 #[cfg(test)]
@@ -60,5 +83,26 @@ mod tests {
         // It renders the service's OWN spec with Scalar.
         assert!(body.contains("/openapi.json"));
         assert!(body.contains("@scalar/api-reference"));
+    }
+
+    #[tokio::test]
+    async fn docs_csp_permits_scalar_instead_of_the_strict_default() {
+        // Served through the full router, so `security_headers` has run. The page
+        // must carry its OWN CSP (allowing Scalar's CDN), not the API's
+        // `default-src 'none'` that would block the script and leave it blank.
+        let app = router(Health::starting());
+        let res = app
+            .oneshot(Request::builder().uri("/docs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let csp = res.headers()["content-security-policy"].to_str().unwrap();
+        assert!(
+            csp.contains("https://cdn.jsdelivr.net"),
+            "the /docs CSP must allow Scalar's CDN, got: {csp}"
+        );
+        assert_ne!(
+            csp, "default-src 'none'; frame-ancestors 'none'",
+            "the /docs page must not inherit the API's blank-page CSP"
+        );
     }
 }
