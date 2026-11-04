@@ -357,3 +357,33 @@ precisa de validação da crate `seiva-messaging`):
 **Decisão do dono pendente:** (a) manter o gate duro sobre default + fix dos brokers
 numa sessão dedicada [recomendado]; ou (b) gate `--all-features` com as 8 exceções
 datadas em `deny.toml` até ao bump. Hoje está em (a).
+
+## S3 — Cloud native real (2026-11-04)
+
+- **App gerado = servidor real**: `apps/<name>-api/main.rs` usa `serve_router` +
+  `observability::init` + `Health` + graceful shutdown (fim do stub `println!`).
+- **Observabilidade**: `seiva_server::observability::init()` instala subscriber
+  `tracing` JSON para stdout (12-factor; fecha a lacuna do S0).
+- **Packaging**: o scaffold emite `Delonixfile` (multi-stage, distroless
+  `cc-debian12:nonroot`, não-root), `compose.yaml` e `.dockerignore`.
+- **`seiva start`**: corre o app em dev; hot-reload via `cargo watch` se presente.
+- **Fitness**: teste `project_is_cloud_native_ready` (app real + Delonixfile
+  distroless/multi-stage/não-root + compose mapeia porta).
+
+### Prova (docker, 2026-11-04)
+A receita do Delonixfile aplicada ao `seiva-server` real:
+- imagem **28.2 MB**, **sem `/bin/sh`** (distroless), **`User=nonroot`**;
+- contentor responde `/health/ready` **200**, `/health/live` **200**, `/docs` **200**;
+- `/openapi.json` descobre `/v1/accounts/*` + `/v1/notes` (API9 em runtime);
+- logs **JSON** em stdout: `{"timestamp":...,"level":"INFO","fields":{"message":"starting",...}}`.
+
+### Dívida / pendente de S3
+- **Projeto gerado não compila standalone**: `FRAMEWORK_CRATES` é path placeholder
+  (profundidades app vs módulo inconsistentes). Resolve quando os crates do
+  framework publicarem (crates.io/git). A prova acima usa o `seiva-server` real.
+- **`seiva-server` arrasta a demo `accounts`**: os pedaços de runtime
+  (`serve_router`/`observability`/`shutdown_signal`/`ServerConfig`) deviam viver
+  num crate demo-free `seiva-runtime`; `seiva-server` = `seiva-runtime` + demo.
+- **Verbos CLI em falta**: `stack up/down`, `cluster on/off`, `logs -f` (açúcar
+  sobre `delonix`/compose; o `compose.yaml` gerado já funciona com `delonix stack
+  up`/`docker compose up` diretamente).
