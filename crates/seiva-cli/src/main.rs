@@ -443,6 +443,90 @@ fn openapi(compact: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `seiva start`: runs the project's `apps/<name>-api` server in development,
+/// with hot-reload when `cargo watch` is available.
+///
+/// Resolves the project name from `seiva.toml` (so the app crate is
+/// `<name>-api`), sets `APP_ENV=development`, and execs cargo. With `cargo watch`
+/// installed it rebuilds-and-restarts on change (the FastAPI `--reload`
+/// equivalent); without it, a plain `cargo run` plus a hint to install it.
+fn start() -> ExitCode {
+    let manifest = match std::fs::read_to_string("seiva.toml") {
+        Ok(contents) => contents,
+        Err(_) => {
+            eprintln!(
+                "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let name = match scaffold::project_name(&manifest) {
+        Some(name) => name,
+        None => {
+            eprintln!("seiva: seiva.toml has no `[project] name`.");
+            return ExitCode::FAILURE;
+        }
+    };
+    let app = format!("{name}-api");
+
+    let hot_reload = has_cargo_watch();
+    if !hot_reload {
+        eprintln!(
+            "seiva: `cargo watch` not found — running without hot-reload \
+             (install it with `cargo install cargo-watch`)."
+        );
+    }
+    let (program, args) = start_plan(&app, hot_reload);
+    println!(
+        "seiva: starting `{app}` in development{} ...",
+        if hot_reload { " with hot-reload" } else { "" }
+    );
+
+    match std::process::Command::new(&program)
+        .args(&args)
+        .env("APP_ENV", "development")
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(error) => {
+            eprintln!("seiva: failed to launch `{program}`: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The command and arguments `start` runs, split out as a pure function so both
+/// branches (hot-reload and plain) are unit-tested without spawning a process.
+fn start_plan(app: &str, has_cargo_watch: bool) -> (String, Vec<String>) {
+    if has_cargo_watch {
+        (
+            "cargo".to_owned(),
+            vec![
+                "watch".to_owned(),
+                "-x".to_owned(),
+                format!("run --bin {app}"),
+            ],
+        )
+    } else {
+        (
+            "cargo".to_owned(),
+            vec!["run".to_owned(), "--bin".to_owned(), app.to_owned()],
+        )
+    }
+}
+
+/// Whether `cargo watch` is available (so `start` can offer hot-reload).
+fn has_cargo_watch() -> bool {
+    std::process::Command::new("cargo")
+        .args(["watch", "--version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 /// `seiva proto`: prints the proto3 service document for the built-in facades.
 fn proto() -> ExitCode {
     eprintln!(
@@ -516,7 +600,7 @@ fn main() -> ExitCode {
         },
         Command::Lint => lint(),
         Command::Expand => not_yet("expand", "the macros phase"),
-        Command::Start => not_yet("start", "the runtime phase"),
+        Command::Start => start(),
         Command::Openapi { compact, .. } => openapi(compact),
         Command::Proto => proto(),
         Command::User { action } => match action {
@@ -570,6 +654,19 @@ mod tests {
             proto.contains("rpc Create(CreateRequest) returns (CreateResponse);"),
             "proto was:\n{proto}"
         );
+    }
+
+    #[test]
+    fn start_plan_uses_cargo_watch_when_available_else_plain_run() {
+        // Hot-reload: `cargo watch -x "run --bin shop-api"`.
+        let (program, args) = start_plan("shop-api", true);
+        assert_eq!(program, "cargo");
+        assert_eq!(args, vec!["watch", "-x", "run --bin shop-api"]);
+
+        // No cargo-watch: a plain `cargo run --bin shop-api`.
+        let (program, args) = start_plan("shop-api", false);
+        assert_eq!(program, "cargo");
+        assert_eq!(args, vec!["run", "--bin", "shop-api"]);
     }
 
     #[test]

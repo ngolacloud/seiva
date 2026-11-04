@@ -101,6 +101,19 @@ pub fn module_member_paths(module: &str) -> Vec<String> {
     .collect()
 }
 
+/// The project name read from a `seiva.toml` manifest's `[project].name`, or
+/// `None` when the manifest is unparseable or lacks it. Pure, so the CLI's
+/// `start` can resolve the app crate (`<name>-api`) deterministically.
+#[must_use]
+pub fn project_name(manifest: &str) -> Option<String> {
+    let value: toml::Value = toml::from_str(manifest).ok()?;
+    value
+        .get("project")?
+        .get("name")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
 /// Files for a new project `name`. Paths are relative to the new `name/` dir.
 pub fn project_files(name: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
     validate_name(name)?;
@@ -1015,6 +1028,13 @@ mod tests {
         let out = register_module_in_seiva_toml(&seiva, "notes").unwrap();
         assert!(out.contains("[modules.notes]"));
         assert!(register_module_in_seiva_toml(&out, "notes").is_err());
+    }
+
+    #[test]
+    fn project_name_reads_the_manifest() {
+        assert_eq!(project_name(&seiva_toml("shop")).as_deref(), Some("shop"));
+        assert_eq!(project_name("not = valid").as_deref(), None);
+        assert_eq!(project_name("[other]\nname = \"x\"").as_deref(), None);
     }
 
     #[test]
