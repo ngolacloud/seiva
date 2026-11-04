@@ -223,6 +223,15 @@ struct Attempts {
     locked_until: Option<SystemTime>,
 }
 
+/// The ceiling on distinct keys the throttle tracks at once. Reaching it sweeps
+/// keys that are neither locked nor inside their window (see
+/// [`LoginThrottle::record_failure`]). It bounds the table so a flood of attempts
+/// under many distinct usernames cannot exhaust memory — the lockout control must
+/// not itself become a resource-consumption vector (OWASP API4). A key under
+/// active attack keeps failures within its window, so it survives the sweep and
+/// still locks out.
+pub const MAX_TRACKED_KEYS: usize = 100_000;
+
 /// An in-memory account-lockout throttle for authentication attempts (OWASP
 /// API2: Broken Authentication).
 ///
@@ -293,6 +302,25 @@ impl LoginThrottle {
     /// count rather than accumulating forever.
     pub fn record_failure(&self, key: &str, now: SystemTime) -> bool {
         let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Bound the table before inserting a new key: a flood of distinct
+        // usernames must not grow it without end.
+        if keys.len() >= MAX_TRACKED_KEYS && !keys.contains_key(key) {
+            // Keep only keys that still matter — locked out, or mid-window. A key
+            // under active attack is mid-window, so it survives and still locks.
+            keys.retain(|_, a| {
+                a.locked_until.is_some_and(|until| until > now)
+                    || now.duration_since(a.window_start).unwrap_or(Duration::ZERO)
+                        < self.policy.window
+            });
+            // Still saturated with live state: do not track this new key (treat as
+            // not-yet-locked). Targeting a specific account still works — that
+            // account's key is live and tracked.
+            if keys.len() >= MAX_TRACKED_KEYS && !keys.contains_key(key) {
+                return false;
+            }
+        }
+
         let attempts = keys.entry(key.to_owned()).or_insert(Attempts {
             failures: 0,
             window_start: now,
@@ -447,5 +475,30 @@ mod tests {
         assert!(throttle.check("attacker", t0).is_err());
         // A different key is unaffected.
         assert!(throttle.check("victim", t0).is_ok());
+    }
+
+    #[test]
+    fn the_key_table_is_bounded_and_a_targeted_account_still_locks() {
+        let throttle = LoginThrottle::new(policy());
+        let t0 = SystemTime::UNIX_EPOCH;
+
+        // A specific account under attack: it must still lock out despite the flood.
+        for _ in 0..3 {
+            throttle.record_failure("target", t0);
+        }
+        assert!(throttle.check("target", t0).is_err());
+
+        // Flood far more distinct usernames than the cap, all within the window.
+        for i in 0..(MAX_TRACKED_KEYS as u64 + 5_000) {
+            let _ = throttle.record_failure(&format!("junk-{i}"), t0);
+        }
+
+        let tracked = throttle.keys.lock().unwrap().len();
+        assert!(
+            tracked <= MAX_TRACKED_KEYS,
+            "key table must stay bounded, got {tracked}"
+        );
+        // The real target's lockout survived the sweep.
+        assert!(throttle.check("target", t0).is_err());
     }
 }
