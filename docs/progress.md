@@ -387,3 +387,17 @@ A receita do Delonixfile aplicada ao `seiva-server` real:
 - **Verbos CLI em falta**: `stack up/down`, `cluster on/off`, `logs -f` (açúcar
   sobre `delonix`/compose; o `compose.yaml` gerado já funciona com `delonix stack
   up`/`docker compose up` diretamente).
+
+## S4 — Limpeza do anti-pattern da Parte C (2026-11-04)
+
+Único anti-pattern real da Parte C: `interface -> infrastructure` em produção
+(scaffold + accounts), contra a regra do `seiva lint`, não apanhado porque o
+`lint_project` só varre `modules/` (os exemplos não têm `module.toml`).
+
+**Decisão do dono: MANTER a regra.** Controller passou a genérico sobre os ports
+(`interface` depende só de `application`); a infra é injetada pela raiz de
+composição (`seiva-server`); nos exemplos a infra foi para `[dev-dependencies]`.
+Scaffold gera módulos lint-clean. Fitness nova
+(`generated_interface_does_not_depend_on_infrastructure`) guarda o gerador.
+Regra do lint inalterada. (Os exemplos continuam fora do scan do lint por não
+terem `module.toml` — a fitness do gerador cobre o artefacto que importa.)
