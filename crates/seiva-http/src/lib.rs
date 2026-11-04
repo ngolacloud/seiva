@@ -27,6 +27,10 @@
 //! [`notes_router`].
 
 #![forbid(unsafe_code)]
+// `Problem` is a rich RFC 9457 payload (several owned strings) and handlers
+// return it by value on the error path — that is the design, not a footgun to
+// box away, so the large-Err lint is allowed crate-wide.
+#![allow(clippy::result_large_err)]
 
 pub mod guard;
 pub mod health;
