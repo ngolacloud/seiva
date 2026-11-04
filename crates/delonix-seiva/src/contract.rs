@@ -98,6 +98,37 @@ impl FacadeDescriptor {
     }
 }
 
+/// A facade's registration in the link-time inventory.
+///
+/// `#[seiva::facade]` emits one `inventory::submit!` of this per facade, so
+/// every facade *linked into a binary* is discoverable through
+/// [`registered_facades`] without a hand-maintained list. This is how the
+/// runtime's `/openapi.json` lists every mounted facade (OWASP API9: Improper
+/// Inventory Management) rather than a single hard-coded one.
+pub struct FacadeRegistration {
+    /// The registered facade's contract.
+    pub descriptor: FacadeDescriptor,
+}
+
+inventory::collect!(FacadeRegistration);
+
+/// Every facade registered by `#[seiva::facade]` and linked into the current
+/// binary, sorted by `(name, version)` so the order is deterministic regardless
+/// of link order.
+///
+/// A standalone tool (the `seiva` CLI) sees only the facades compiled into it,
+/// not a user project's own crates; the *runtime* binary that mounts the modules
+/// sees them all, so its generated document is the complete one.
+#[must_use]
+pub fn registered_facades() -> Vec<FacadeDescriptor> {
+    let mut facades: Vec<FacadeDescriptor> = inventory::iter::<FacadeRegistration>
+        .into_iter()
+        .map(|registration| registration.descriptor)
+        .collect();
+    facades.sort_by(|a, b| (a.name, a.version).cmp(&(b.name, b.version)));
+    facades
+}
+
 /// Implemented by the `<Trait>Facade` type that `#[seiva::facade]` generates.
 /// Read [`DESCRIPTOR`](Facade::DESCRIPTOR) to inspect the contract without any
 /// macro expansion.

@@ -15,14 +15,21 @@ use seiva_openapi::{openapi_document, ApiInfo};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// The facades the CLI knows at compile time.
+/// The facades this `seiva` binary can render, discovered through the link-time
+/// inventory ([`delonix_seiva::contract::registered_facades`]) rather than a
+/// hard-coded list.
 ///
-/// The CLI cannot introspect a user's own crate at runtime, so this first cut
-/// documents and serves only the built-in demonstration facade shipped with the
-/// framework (`notes-facade`'s `NotesFacade`). A later phase will discover a
-/// project's own facades; until then `seiva openapi` and `seiva proto` operate
-/// on this fixed set.
-const BUILTIN_FACADES: &[FacadeDescriptor] = &[NotesFacade::DESCRIPTOR];
+/// A standalone CLI only links the demonstration facade the framework ships
+/// (`notes-facade`'s `NotesFacade`), so that is what `seiva openapi`/`seiva proto`
+/// document here — the CLI is not compiled against a user's project crates. The
+/// *runtime* binary that mounts a project's modules links their facades, so its
+/// `/openapi.json` is the complete, discovered document. Referencing
+/// `NotesFacade` below anchors the demo crate into this binary so its
+/// `#[seiva::facade]` registration runs.
+fn cli_facades() -> Vec<FacadeDescriptor> {
+    let _anchor = NotesFacade::DESCRIPTOR;
+    delonix_seiva::contract::registered_facades()
+}
 
 #[derive(Parser)]
 #[command(
@@ -303,7 +310,7 @@ fn builtin_openapi_json(compact: bool) -> String {
         title: "Seiva API (built-in facades)".to_string(),
         version: delonix_seiva::VERSION.to_string(),
     };
-    let document = openapi_document(info, BUILTIN_FACADES);
+    let document = openapi_document(info, &cli_facades());
     if compact {
         serde_json::to_string(&document).expect("a serde_json::Value always serialises")
     } else {
@@ -316,7 +323,7 @@ fn builtin_openapi_json(compact: bool) -> String {
 /// One document per facade, separated by a blank line. Today there is a single
 /// built-in facade, so this is `proto_document` of `NotesFacade::DESCRIPTOR`.
 fn builtin_proto() -> String {
-    BUILTIN_FACADES
+    cli_facades()
         .iter()
         .map(proto_document)
         .collect::<Vec<_>>()

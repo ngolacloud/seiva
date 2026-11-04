@@ -22,6 +22,10 @@ seiva-macros = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
+# Link-time facade discovery: `#[seiva::facade]` submits each descriptor into an
+# inventory the runtime collects, so `/openapi.json` lists every mounted facade
+# with no central registry to keep in sync (closes OWASP API9).
+inventory = "0.3"
 # The worker runtime's loop needs an interval and select; `tracing` is a facade
 # (no subscriber installed = near-zero cost), for the worker's metrics spans.
 tokio = { workspace = true, features = ["time", "macros"] }

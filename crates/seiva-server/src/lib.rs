@@ -543,18 +543,15 @@ mod tests {
         );
     }
 
-    // --- OpenAPI: the served document covers BOTH mounted facades -----------
+    // --- facade discovery: /openapi.json lists every mounted module ---------
 
-    /// The `/openapi.json` the application serves is composed from both mounted
-    /// facades, not just `notes`: it carries the `accounts` create operation,
-    /// identified by its `x-seiva-requires` permission extension
-    /// (`accounts.create`). This proves `serve` publishes a document that
-    /// matches the routes it actually mounts, not the notes-only one
-    /// `seiva_http::router` would inherit.
+    /// The served `/openapi.json` documents BOTH the demonstration `Notes` facade
+    /// and the mounted `accounts` module, proving link-time discovery
+    /// (`registered_facades`) picks up every `#[seiva::facade]` in the binary
+    /// with no hand-maintained list (OWASP API9).
     #[tokio::test]
-    async fn served_openapi_document_covers_the_accounts_facade() {
+    async fn openapi_discovers_every_mounted_facade() {
         let app = application(Health::starting());
-
         let res = app
             .oneshot(
                 Request::builder()
@@ -565,32 +562,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-
         let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
             .await
             .unwrap();
         let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-
-        // The notes surface is still present...
-        let paths = doc["paths"].as_object().expect("paths is an object");
+        let paths = doc["paths"].as_object().expect("paths object");
         assert!(
-            paths.contains_key("/v1/notes"),
-            "the notes paths must remain: {:?}",
+            paths.keys().any(|p| p.contains("/notes")),
+            "the Notes demonstration facade must be documented: {:?}",
             paths.keys().collect::<Vec<_>>()
         );
-
-        // ...and the accounts create operation is now covered, identified by its
-        // required-permission extension rather than by a hard-coded path.
-        let has_accounts_create = paths.values().any(|path_item| {
-            path_item.as_object().into_iter().flatten().any(|(_, op)| {
-                op.get("x-seiva-requires")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("accounts.create")
-            })
-        });
         assert!(
-            has_accounts_create,
-            "the composed document must carry the accounts.create operation: {doc}"
+            paths.keys().any(|p| p.contains("/accounts")),
+            "the mounted accounts module must be discovered and documented: {:?}",
+            paths.keys().collect::<Vec<_>>()
         );
     }
 

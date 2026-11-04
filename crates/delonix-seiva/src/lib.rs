@@ -34,6 +34,11 @@ pub mod worker;
 /// [`contract`] for what it generates and the hand-written equivalent.
 pub use seiva_macros::facade;
 
+/// Re-exported so the code `#[seiva::facade]` generates can submit each facade
+/// into the discovery inventory via `::delonix_seiva::inventory::submit!` without
+/// the facade crate depending on `inventory` directly.
+pub use inventory;
+
 /// Generates a facade-driven axum router from an `impl <Facade> for <Service>`
 /// block: one route per method, its path version and required permission read
 /// from the facade descriptor (never hard-coded). Applied as

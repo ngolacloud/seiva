@@ -136,18 +136,21 @@ pub fn notes_router() -> Router {
         ))
 }
 
-/// Builds the service's OpenAPI 3.1 document from the mounted facade
-/// descriptors with [`seiva_openapi`]. Nothing here is hand-written: the paths,
-/// operations, permissions and schemas follow the descriptors, so adding a
-/// facade adds its operations. The service mounts the `Notes` facade, so its
-/// descriptor is the single input today.
+/// Builds the service's OpenAPI 3.1 document from **every facade linked into the
+/// binary**, discovered through [`delonix_seiva::contract::registered_facades`]
+/// (each `#[seiva::facade]` registers itself in a link-time inventory). Nothing
+/// here is hand-written and no central list is kept: a module mounted into the
+/// runtime contributes its operations automatically (OWASP API9). A binary that
+/// links only the `Notes` demonstration documents just that; the full runtime
+/// (see `seiva-server`) documents every mounted module.
 pub fn openapi_document() -> serde_json::Value {
+    let facades = delonix_seiva::contract::registered_facades();
     seiva_openapi::openapi_document(
         seiva_openapi::ApiInfo {
             title: "Delonix Seiva service".to_string(),
             version: delonix_seiva::VERSION.to_string(),
         },
-        &[NotesFacade::DESCRIPTOR],
+        &facades,
     )
 }
 

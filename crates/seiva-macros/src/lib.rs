@@ -185,6 +185,15 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
                     methods: &[ #(#method_descs),* ],
                 };
         }
+
+        // Register the facade in the link-time inventory so the runtime can
+        // discover every mounted facade for `/openapi.json` (OWASP API9) without
+        // a hand-maintained list.
+        ::delonix_seiva::inventory::submit! {
+            ::delonix_seiva::contract::FacadeRegistration {
+                descriptor: <#facade_ty as ::delonix_seiva::contract::Facade>::DESCRIPTOR,
+            }
+        }
     }
     .into()
 }
