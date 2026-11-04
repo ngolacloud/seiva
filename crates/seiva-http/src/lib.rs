@@ -36,6 +36,7 @@ pub mod guard;
 pub mod health;
 pub mod problem;
 pub mod request_id;
+pub mod security;
 pub mod valid;
 
 use axum::extract::DefaultBodyLimit;
@@ -53,6 +54,7 @@ pub use guard::{permission_guard, Principal, RequiredPermission};
 pub use health::{health_router, Health, HealthState};
 pub use problem::{Problem, PROBLEM_JSON};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};
+pub use security::{cors_layer, security_headers, HttpSecurity};
 pub use valid::{Valid, Validate, ValidationError};
 
 /// The default maximum request body size (1 MiB). Oversized bodies are rejected
@@ -152,15 +154,35 @@ async fn openapi_handler() -> Json<serde_json::Value> {
     Json(openapi_document())
 }
 
+/// Builds the full application router with the framework's **default** security
+/// posture ([`HttpSecurity::default`]: secure response headers on, same-origin
+/// only — no CORS). Equivalent to [`router_with_security`] with the default
+/// configuration; kept as the zero-config entrypoint.
+pub fn router(health: Health) -> Router {
+    router_with_security(health, &HttpSecurity::default())
+}
+
 /// Builds the full application router: the `Notes` demonstration, the health
-/// endpoints and the OpenAPI stub, wrapped with a body-size limit and the
+/// endpoints and the OpenAPI stub, wrapped (innermost to outermost) with the
+/// security response headers, an optional CORS layer, a body-size limit and the
 /// [`request_id()`] middleware (outermost, so every response — problems included —
 /// carries a correlation id).
-pub fn router(health: Health) -> Router {
-    Router::new()
+///
+/// `security` controls the transport-level API8 defences: the response headers
+/// are always applied, and CORS is mounted only when
+/// [`HttpSecurity::cors_allowed_origins`] is non-empty (otherwise the browser
+/// enforces same-origin).
+pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
+    let mut app = Router::new()
         .merge(notes_router())
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
-        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES))
-        .layer(from_fn(request_id))
+        .layer(from_fn(security_headers))
+        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
+
+    if let Some(cors) = cors_layer(security) {
+        app = app.layer(cors);
+    }
+
+    app.layer(from_fn(request_id))
 }
