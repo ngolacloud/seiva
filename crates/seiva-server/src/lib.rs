@@ -55,19 +55,12 @@ use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use axum::extract::DefaultBodyLimit;
-use axum::middleware::from_fn;
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::Router;
 use delonix_seiva::ports::PortResult;
 use delonix_seiva::worker::{run_worker, WorkerConfig};
 use seiva_config::{EnvReader, FromEnv};
-use seiva_http::{health_router, notes_router, request_id, Health, DEFAULT_BODY_LIMIT_BYTES};
+use seiva_http::{router, Health};
 use tokio::net::TcpListener;
-
-use accounts_facade::AccountsFacade;
-use delonix_seiva::contract::Facade;
-use notes_facade::NotesFacade;
 
 pub use delonix_seiva::worker::WorkerReport;
 pub use seiva_config::{AppEnv, ConfigError};
