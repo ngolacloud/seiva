@@ -27,6 +27,9 @@ description = "Delonix Seiva — HTTP transport (axum/tower): RFC 9457 problems,
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
 # The trait-only ports: we map their opaque `BoxError` into an RFC 9457 problem.
 seiva-ports = { path = "../seiva-ports" }
+# The OpenAPI 3.1 generator: `/openapi.json` is generated from the mounted
+# facade descriptors, not hand-written. Data-layer-free like this crate.
+seiva-openapi = { path = "../seiva-openapi" }
 # The demonstration subject: one facade mounted as a route, guarded by its
 # descriptor. Brought in as a normal dependency so `router` can serve it.
 notes-facade = { path = "../../examples/notes/facade" }

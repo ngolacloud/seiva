@@ -1,0 +1,33 @@
+# seiva-controller-test — a standalone proof crate for `#[seiva::controller]`.
+#
+# It is NOT a member of the parent Seiva workspace (note the `[workspace]` table
+# at the end): it builds on its own so the controller macro can be exercised
+# end-to-end without touching the repo-root manifest. It carries the runtime
+# dependencies the GENERATED code references (axum, seiva-http, serde) — the
+# proc-macro crate must stay free of them.
+[package]
+name = "seiva-controller-test"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+publish = false
+description = "Standalone proof that #[seiva::controller] generates a facade-driven axum router."
+
+[dependencies]
+# The contract crate, data layer OFF: it provides both macros under test through
+# their public path (`#[seiva::facade]`, `#[seiva::controller]`) and the
+# generated facade descriptor the router reads.
+delonix-seiva = { path = "../delonix-seiva", default-features = false }
+# The transport the generated code references: Problem, Valid/Validate, the
+# permission guard and RequiredPermission.
+seiva-http = { path = "../seiva-http" }
+
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# Drives the generated router without a live server via `ServiceExt::oneshot`.
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["rt", "macros"] }

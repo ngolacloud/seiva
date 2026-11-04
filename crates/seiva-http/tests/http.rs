@@ -189,9 +189,11 @@ async fn health_endpoints_track_lifecycle() {
     assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
-/// The OpenAPI stub is served and advertises the framework version.
+/// The generated OpenAPI document is served: a 3.1 document that advertises the
+/// framework version and carries the mounted `Notes` facade's operation,
+/// generated from its descriptor (not a hand-written stub).
 #[tokio::test]
-async fn openapi_stub_is_served() {
+async fn openapi_document_is_served() {
     let response = router(Health::starting())
         .oneshot(
             Request::builder()
@@ -205,4 +207,9 @@ async fn openapi_stub_is_served() {
     let body = json_body(response.into_body()).await;
     assert_eq!(body["openapi"], "3.1.0");
     assert!(body["info"]["version"].is_string());
+    // The document is generated from the facade descriptor: the `Notes` create
+    // operation appears under its versioned path, carrying its permission.
+    let op = &body["paths"]["/v1/notes"]["post"];
+    assert_eq!(op["operationId"], "notes_create");
+    assert_eq!(op["x-seiva-requires"], "notes.create");
 }

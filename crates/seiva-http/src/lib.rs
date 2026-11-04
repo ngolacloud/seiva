@@ -15,8 +15,8 @@
 //! - [`mod@request_id`] — per-request correlation ([`RequestId`]).
 //!
 //! It is **DORM-free**: it depends only on the contract crate (with the data
-//! layer off) and the trait-only ports. OpenAPI is stubbed ([`openapi_stub`])
-//! pending its own phase.
+//! layer off) and the trait-only ports. `/openapi.json` is generated from the
+//! mounted facade descriptors by `seiva-openapi` ([`openapi_document`]).
 //!
 //! # The demonstration
 //!
@@ -132,24 +132,24 @@ pub fn notes_router() -> Router {
         ))
 }
 
-/// A minimal OpenAPI stub. The real document is generated from the facade
-/// descriptors in a later phase; this placeholder lets clients discover the
-/// service name and version today.
-pub fn openapi_stub() -> serde_json::Value {
-    serde_json::json!({
-        "openapi": "3.1.0",
-        "info": {
-            "title": "Delonix Seiva service",
-            "version": delonix_seiva::VERSION,
+/// Builds the service's OpenAPI 3.1 document from the mounted facade
+/// descriptors with [`seiva_openapi`]. Nothing here is hand-written: the paths,
+/// operations, permissions and schemas follow the descriptors, so adding a
+/// facade adds its operations. The service mounts the `Notes` facade, so its
+/// descriptor is the single input today.
+pub fn openapi_document() -> serde_json::Value {
+    seiva_openapi::openapi_document(
+        seiva_openapi::ApiInfo {
+            title: "Delonix Seiva service".to_string(),
+            version: delonix_seiva::VERSION.to_string(),
         },
-        "paths": {},
-        "x-seiva-note": "stub — generated OpenAPI is a later phase",
-    })
+        &[NotesFacade::DESCRIPTOR],
+    )
 }
 
-/// `GET /openapi.json` — serves the [`openapi_stub`].
+/// `GET /openapi.json` — serves the generated [`openapi_document`].
 async fn openapi_handler() -> Json<serde_json::Value> {
-    Json(openapi_stub())
+    Json(openapi_document())
 }
 
 /// Builds the full application router: the `Notes` demonstration, the health

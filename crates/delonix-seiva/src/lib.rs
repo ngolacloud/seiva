@@ -34,6 +34,12 @@ pub mod worker;
 /// [`contract`] for what it generates and the hand-written equivalent.
 pub use seiva_macros::facade;
 
+/// Generates a facade-driven axum router from an `impl <Facade> for <Service>`
+/// block: one route per method, its path version and required permission read
+/// from the facade descriptor (never hard-coded). Applied as
+/// `#[seiva::controller]`; the HTTP primitives it emits live in `seiva-http`.
+pub use seiva_macros::controller;
+
 /// The framework version, surfaced to the CLI and to `health` endpoints.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

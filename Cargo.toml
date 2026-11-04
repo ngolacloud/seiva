@@ -45,6 +45,15 @@ members = [
     "crates/seiva-config",
     # Standard Webhooks signing/verification (HMAC-SHA256, replay window).
     "crates/seiva-webhooks",
+    # gRPC artefact generation (proto3 + tonic Status) from a facade descriptor.
+    # Data-layer-free: reads only the contract, so a workspace member.
+    "crates/seiva-grpc",
+    # OpenAPI 3.1 document generation from facade descriptors (replaces the
+    # seiva-http stub). Data-layer-free.
+    "crates/seiva-openapi",
+    # Standalone proof that `#[seiva::controller]` generates a facade-driven axum
+    # router end to end (guards, versioned paths, RFC 9457). Data-layer-free.
+    "crates/seiva-controller-test",
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
     # projects and modules, runs the dev loop, lints the architecture.
     "crates/seiva-cli",

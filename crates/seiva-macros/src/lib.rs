@@ -7,7 +7,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, ItemTrait, LitStr, Pat, ReturnType, TraitItem};
+use syn::{FnArg, ImplItem, ItemImpl, ItemTrait, LitStr, Pat, ReturnType, TraitItem, Type};
 
 /// A method parameter captured from the trait: its name and canonical type.
 struct ParamInfo {
@@ -184,6 +184,369 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
                     version: #version,
                     methods: &[ #(#method_descs),* ],
                 };
+        }
+    }
+    .into()
+}
+
+/// Converts a `CamelCase` trait name into a `snake_case` identifier fragment, so
+/// the trait `Notes` yields the router builder `notes_router` and `UserAccounts`
+/// yields `user_accounts_router`.
+fn to_snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Whether a parameter type is the framework context (`Ctx` or `&Ctx`), which a
+/// generated controller skips when mapping parameters to the wire. The match is
+/// on the type's final path segment, so `&Ctx`, `Ctx`, `&self::Ctx` and
+/// `crate::ctx::Ctx` are all recognised.
+fn is_ctx_type(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(reference) => is_ctx_type(&reference.elem),
+        Type::Path(type_path) => type_path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "Ctx"),
+        _ => false,
+    }
+}
+
+/// Generates an axum [`Router`](https://docs.rs/axum)-builder from a facade trait
+/// impl, mounting each method as an HTTP route whose path **version** and
+/// **required permission** are read from the facade descriptor at run time — never
+/// hard-coded. Apply it to the trait impl of a facade already marked with
+/// [`macro@facade`]:
+///
+/// ```ignore
+/// #[seiva::controller]
+/// impl Notes for NotesService { /* the trait methods */ }
+/// ```
+///
+/// Alongside the **re-emitted, unchanged** impl, it generates a public function
+/// `fn <trait>_router(service) -> axum::Router` (the trait `Notes` yields
+/// `notes_router`). Inject a service value, get back a router ready to `.merge`
+/// into an application. The impl itself is not touched — "no hidden magic": the
+/// macro only ADDS the builder.
+///
+/// # Routing convention
+///
+/// The **resource** is the facade's descriptor name, lowercased and naively
+/// pluralised (append `s` unless it already ends in one): `Notes` → `notes`,
+/// `User` → `users`. The rule is deliberately naive; name a facade to suit it
+/// (e.g. already-plural `Notes`). The **version** is `descriptor.version`
+/// verbatim. The method name chooses the HTTP method and path shape:
+///
+/// | method name | HTTP route                          | success | request data |
+/// |-------------|-------------------------------------|---------|--------------|
+/// | `create`    | `POST /{version}/{resource}`        | `201`   | JSON body    |
+/// | `get`       | `GET /{version}/{resource}/{id}`    | `200`   | path `{id}`  |
+/// | `list`      | `GET /{version}/{resource}`         | `200`   | query (opt.) |
+/// | *other*     | `POST /{version}/{resource}/{name}` | `200`   | JSON body    |
+///
+/// The required permission for each route is the method's
+/// `#[requires(..)]`, read from the descriptor and enforced by
+/// `seiva_http::permission_guard`. A method whose `requires` is empty is
+/// unguarded.
+///
+/// # The generated handler
+///
+/// For every route the handler extracts the injected service from axum state,
+/// deserialises the request into the facade's parameter DTO, calls the facade
+/// method, maps the error to a `seiva_http::Problem` and serialises the `Ok`
+/// value to JSON:
+///
+/// - **write** methods (`create` and the `POST` fallback): the single primary
+///   parameter is read with `seiva_http::Valid<T>` (a validated JSON body); a
+///   write with no primary parameter takes no body.
+/// - **`get`**: the single primary parameter is read from the path with
+///   `axum::extract::Path<T>`.
+/// - **`list`**: an optional single primary parameter is read from the query
+///   string with `axum::extract::Query<T>`.
+///
+/// # Simplifying assumptions (first cut)
+///
+/// - The facade's **own** parameter DTO is the wire type: a write DTO must
+///   implement `serde::Deserialize` + `seiva_http::Validate`, a `get`/`list`
+///   parameter must implement `serde::Deserialize`, and every `Ok` type must
+///   implement `serde::Serialize`.
+/// - The method's **error** type must implement `Into<seiva_http::Problem>`, so
+///   each facade maps its failures to an RFC 9457 document (define
+///   `impl From<MyError> for seiva_http::Problem` in the interface layer).
+/// - A `&Ctx`/`Ctx` parameter is a framework context and is **skipped** when
+///   mapping to the wire; it leaves at most one *primary* parameter per method.
+/// - The service is injected as axum state, so its type must be
+///   `Clone + Send + Sync + 'static`.
+/// - The generated handlers return `Result<_, Problem>` and `Problem` is a large
+///   value, so the consuming crate needs `#![allow(clippy::result_large_err)]`
+///   (as `seiva-http` itself does).
+///
+/// Anything outside these shapes is a **compile error**, never silently wrong
+/// code:
+///
+/// - applied to something other than `impl Trait for Type`;
+/// - a `get` method without exactly one primary parameter;
+/// - a `list` or write method with more than one primary parameter;
+/// - any argument passed to `#[controller]` (it takes none).
+///
+/// # The hand-written equivalent
+///
+/// For the `Notes` facade (one guarded `create`), the macro generates exactly
+/// what `seiva-http`'s `notes_router` writes by hand — the route path and the
+/// guard permission both taken from `NotesFacade::DESCRIPTOR`:
+///
+/// ```ignore
+/// pub fn notes_router<__S>(service: __S) -> axum::Router
+/// where
+///     __S: Notes + Clone + Send + Sync + 'static,
+/// {
+///     let descriptor = <NotesFacade as delonix_seiva::contract::Facade>::DESCRIPTOR;
+///     let resource = /* "notes", from descriptor.name */;
+///     let create = descriptor.method("create").expect("…");
+///     axum::Router::new()
+///         .route(
+///             &format!("/{}/{}", descriptor.version, resource), // "/v1/notes"
+///             axum::routing::post(/* handler calling service.create */).layer(
+///                 axum::middleware::from_fn_with_state(
+///                     seiva_http::RequiredPermission(create.requires), // "notes.create"
+///                     seiva_http::permission_guard,
+///                 ),
+///             ),
+///         )
+///         .with_state(service)
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = proc_macro2::TokenStream::from(attr);
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(attr, "`#[seiva::controller]` takes no arguments")
+            .to_compile_error()
+            .into();
+    }
+
+    let item_impl = syn::parse_macro_input!(item as ItemImpl);
+
+    // The impl must name a trait (`impl Trait for Type`): the trait path drives
+    // the method calls and the `<Trait>Facade` descriptor lookup.
+    let Some((trait_path, _)) = item_impl.trait_.clone() else {
+        return syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "`#[seiva::controller]` expects a trait impl, e.g. `impl Notes for NotesService`",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    // `NotesFacade` lives beside the `Notes` trait: take the trait path and
+    // rename its final segment, dropping any trait generic arguments.
+    let mut facade_path = trait_path.clone();
+    if let Some(last) = facade_path.segments.last_mut() {
+        last.ident = format_ident!("{}Facade", last.ident);
+        last.arguments = syn::PathArguments::None;
+    }
+
+    let trait_ident = &trait_path.segments.last().unwrap().ident;
+    let fn_name = format_ident!("{}_router", to_snake_case(&trait_ident.to_string()));
+    let self_ty = &item_impl.self_ty;
+
+    // Build one leaf `Router` per method so that two methods sharing a path (e.g.
+    // `create` POST and `list` GET both on `/{v}/{resource}`) coexist via `merge`
+    // while keeping their own per-method permission guard.
+    let mut route_blocks: Vec<proc_macro2::TokenStream> = Vec::new();
+    for impl_item in &item_impl.items {
+        let ImplItem::Fn(method) = impl_item else {
+            continue;
+        };
+        let method_ident = &method.sig.ident;
+        let method_name = method_ident.to_string();
+
+        // Primary parameters: every typed argument that is not the `&Ctx` context.
+        let primary: Vec<&Type> = method
+            .sig
+            .inputs
+            .iter()
+            .filter_map(|input| match input {
+                FnArg::Typed(pat_type) if !is_ctx_type(&pat_type.ty) => Some(pat_type.ty.as_ref()),
+                _ => None,
+            })
+            .collect();
+
+        // Derive the HTTP method, path, request extractor, call argument and the
+        // success status from the convention. `extractor`/`call_arg` are 0-or-1
+        // element lists so the `#(, #x)*` splices add nothing for an empty one.
+        let http_fn: proc_macro2::TokenStream;
+        let path_expr: proc_macro2::TokenStream;
+        let mut extractor: Vec<proc_macro2::TokenStream> = Vec::new();
+        let mut call_arg: Vec<proc_macro2::TokenStream> = Vec::new();
+        let ok_status: proc_macro2::TokenStream;
+
+        match method_name.as_str() {
+            "get" => {
+                if primary.len() != 1 {
+                    return syn::Error::new_spanned(
+                        &method.sig,
+                        "a `get` controller method must take exactly one id parameter \
+                         (besides an optional `&Ctx`)",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                let ty = primary[0];
+                http_fn = quote!(get);
+                path_expr = quote!(::std::format!(
+                    "/{}/{}/{{id}}",
+                    __descriptor.version,
+                    __resource
+                ));
+                extractor.push(quote!(::axum::extract::Path(__arg): ::axum::extract::Path<#ty>));
+                call_arg.push(quote!(__arg));
+                ok_status = quote!(::axum::http::StatusCode::OK);
+            }
+            "list" => {
+                if primary.len() > 1 {
+                    return syn::Error::new_spanned(
+                        &method.sig,
+                        "a `list` controller method must take at most one query parameter \
+                         (besides an optional `&Ctx`)",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                http_fn = quote!(get);
+                path_expr = quote!(::std::format!("/{}/{}", __descriptor.version, __resource));
+                if let Some(ty) = primary.first() {
+                    extractor
+                        .push(quote!(::axum::extract::Query(__arg): ::axum::extract::Query<#ty>));
+                    call_arg.push(quote!(__arg));
+                }
+                ok_status = quote!(::axum::http::StatusCode::OK);
+            }
+            other => {
+                // `create` and every other name are write routes (a `POST`).
+                if primary.len() > 1 {
+                    return syn::Error::new_spanned(
+                        &method.sig,
+                        "a write controller method must take at most one body parameter \
+                         (besides an optional `&Ctx`)",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                http_fn = quote!(post);
+                if other == "create" {
+                    path_expr = quote!(::std::format!("/{}/{}", __descriptor.version, __resource));
+                    ok_status = quote!(::axum::http::StatusCode::CREATED);
+                } else {
+                    path_expr = quote!(::std::format!(
+                        "/{}/{}/{}",
+                        __descriptor.version,
+                        __resource,
+                        #method_name
+                    ));
+                    ok_status = quote!(::axum::http::StatusCode::OK);
+                }
+                if let Some(ty) = primary.first() {
+                    extractor.push(quote!(::seiva_http::Valid(__arg): ::seiva_http::Valid<#ty>));
+                    call_arg.push(quote!(__arg));
+                }
+            }
+        }
+
+        let missing = format!("facade descriptor is missing method `{method_name}`");
+        route_blocks.push(quote! {
+            {
+                let __method = __descriptor
+                    .method(#method_name)
+                    .expect(#missing);
+                let __path = #path_expr;
+                let __leaf: ::axum::Router<#self_ty> = ::axum::Router::new().route(
+                    &__path,
+                    ::axum::routing::#http_fn(
+                        |
+                            ::axum::extract::State(__service): ::axum::extract::State<#self_ty>
+                            #(, #extractor)*
+                        | async move {
+                            match <#self_ty as #trait_path>::#method_ident(
+                                &__service #(, #call_arg)*
+                            ).await {
+                                ::core::result::Result::Ok(__value) =>
+                                    ::core::result::Result::<
+                                        ::axum::response::Response,
+                                        ::seiva_http::Problem,
+                                    >::Ok(::axum::response::IntoResponse::into_response((
+                                        #ok_status,
+                                        ::axum::Json(__value),
+                                    ))),
+                                ::core::result::Result::Err(__err) =>
+                                    ::core::result::Result::Err(
+                                        ::core::convert::Into::into(__err),
+                                    ),
+                            }
+                        },
+                    )
+                    .layer(::axum::middleware::from_fn_with_state(
+                        ::seiva_http::RequiredPermission(__method.requires),
+                        ::seiva_http::permission_guard,
+                    )),
+                );
+                __router = __router.merge(__leaf);
+            }
+        });
+    }
+
+    // Copy the impl's generics/where-clause onto the builder and add the axum
+    // state bound on the concrete service type.
+    let (impl_generics, _type_generics, where_clause) = item_impl.generics.split_for_impl();
+    let user_predicates = where_clause.map(|wc| {
+        let predicates = &wc.predicates;
+        quote!(#predicates)
+    });
+
+    let fn_doc = format!(
+        "Builds the `{trait_ident}` controller router, mounting each facade \
+         method as an HTTP route. Generated by `#[seiva::controller]`; the route \
+         version and each route's required permission come from the facade \
+         descriptor at run time. Inject a `Clone + Send + Sync + 'static` service."
+    );
+
+    quote! {
+        #item_impl
+
+        #[doc = #fn_doc]
+        pub fn #fn_name #impl_generics (service: #self_ty) -> ::axum::Router
+        where
+            #self_ty: ::core::clone::Clone
+                + ::core::marker::Send
+                + ::core::marker::Sync
+                + 'static,
+            #user_predicates
+        {
+            let __descriptor =
+                <#facade_path as ::delonix_seiva::contract::Facade>::DESCRIPTOR;
+            // Resource name from the descriptor: lowercased, naively pluralised.
+            let __resource = {
+                let __lower = __descriptor.name.to_ascii_lowercase();
+                if __lower.ends_with('s') {
+                    __lower
+                } else {
+                    ::std::format!("{__lower}s")
+                }
+            };
+            let mut __router: ::axum::Router<#self_ty> = ::axum::Router::new();
+            #(#route_blocks)*
+            __router.with_state(service)
         }
     }
     .into()

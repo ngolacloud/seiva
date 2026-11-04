@@ -1,0 +1,34 @@
+# seiva-grpc — turns a facade descriptor into gRPC artefacts (proto3 + tonic).
+#
+# The companion to `seiva-http`: where that crate serves a module's facades over
+# HTTP, this one renders the same machine-readable `FacadeDescriptor` (ADR 0001)
+# into a proto3 service document and a tonic `Status` mapping — all from the
+# descriptor, known at compile time, with zero reflection.
+#
+# DORM-free by construction: it depends only on the contract crate (data layer
+# off) and, for its tests, the real `notes-facade` descriptor. tonic is an
+# OPTIONAL, dependency-light dependency (no transport/codegen/prost) behind the
+# `tonic` feature; the proto-string generation itself needs nothing but std.
+[package]
+name = "seiva-grpc"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Delonix Seiva — gRPC artefact generation (proto3 + tonic Status) from a facade descriptor. DORM-free."
+publish = false
+
+[dependencies]
+delonix-seiva = { path = "../delonix-seiva", default-features = false }
+# Optional and deliberately light: with default features off, tonic contributes
+# only its `Status`/`Code` core — no hyper/h2/tower/prost. Used solely to map a
+# facade error into a gRPC `Status` under the `tonic` feature.
+tonic = { version = "0.12", default-features = false, optional = true }
+
+[dev-dependencies]
+# The real facade descriptor the tests render a `.proto` from.
+notes-facade = { path = "../../examples/notes/facade" }
+
+[features]
+# Compile the `status` module (facade-error -> tonic `Status` mapping). Off by
+# default so the core proto generation stays std-only.
+tonic = ["dep:tonic"]

@@ -1,0 +1,21 @@
+# seiva-openapi — the OpenAPI 3.1 generator for Delonix Seiva.
+#
+# Turns one or more facade descriptors (the machine-readable contracts produced
+# by `#[seiva::facade]`) into a valid OpenAPI 3.1 document, with zero reflection.
+# This is the real generator that replaces `seiva-http`'s `openapi_stub`.
+#
+# DORM-free by construction: it depends only on the contract crate (data layer
+# off), serde and serde_json. The `notes-facade` example is a dev-dependency so
+# the tests generate from the real `NotesFacade::DESCRIPTOR`.
+[package]
+name = "seiva-openapi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+delonix-seiva = { path = "../delonix-seiva", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+notes-facade = { path = "../../examples/notes/facade" }
