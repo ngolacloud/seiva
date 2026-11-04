@@ -42,16 +42,19 @@ where
         let id = u128::from_be_bytes(self.ids.new_id().0);
         let note = Note::new(id, cmd.title).map_err(BoxError::from)?;
 
-        // One transaction per use case: the save runs inside it and the port
-        // commits iff the body returns Ok (scope-based UnitOfWork, ADR 0004).
+        // One transaction per use case (scope-based UnitOfWork, ADR 0004): the
+        // save AND the event publish run inside it, so with the DORM gateway the
+        // event lands in the transactional outbox in the SAME transaction as the
+        // business change — they commit together or not at all. The relay worker
+        // forwards the event to the broker afterwards. The id bytes stand in for
+        // a serialized event envelope.
         self.uow
-            .transaction(|| async { self.repository.save(&note).await })
-            .await?;
-
-        // Publish after a successful commit (the relay model); the id bytes
-        // stand in for a serialized event envelope.
-        self.events
-            .publish("notes.created", &note.id.to_be_bytes())
+            .transaction(|| async {
+                self.repository.save(&note).await?;
+                self.events
+                    .publish("notes.created", &note.id.to_be_bytes())
+                    .await
+            })
             .await?;
 
         Ok(NoteDto {

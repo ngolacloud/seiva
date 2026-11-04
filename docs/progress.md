@@ -54,7 +54,10 @@
   depois `transaction`), e o gateway (`DormUnitOfWork` → `with_session`+`db::atomic`).
 - `NoteRepository::save` passou a `-> impl Future + Send` (o future tem de ser Send
   para correr dentro do `transaction`). ADR 0002 emendada; ADR 0004 regista a resolução.
-- Falta só o port `EventPublisher` no gateway (precisa do `dorm-outbox` na mesma transacção).
+- **EventPublisher FEITO no gateway:** `DormOutboxPublisher` escreve o evento no outbox
+  (`dorm-outbox`) na transacção corrente (padrão transactional-outbox); o relay-worker
+  reencaminha depois. O gateway implementa agora **os 4 ports**. `examples/notes` ajustado:
+  save+publish dentro do `transaction()` (outbox na mesma tx).
 
 ### Travessia da fronteira — `seiva-data-dorm` (ADR 0004)
 - **DORM integrado:** os 4 PRs (DORM-C, B1×2, B2) mergeados; DORM `main` em `f43d873`.

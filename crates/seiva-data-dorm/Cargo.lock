@@ -310,6 +310,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dorm-outbox"
+version = "0.1.0"
+source = "git+https://github.com/ngolacloud/dorm?rev=f43d8738e37e054669a9a6ac8971c0af57717191#f43d8738e37e054669a9a6ac8971c0af57717191"
+dependencies = [
+ "dorm-core",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -943,8 +954,11 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 name = "seiva-data-dorm"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "dorm-core",
+ "dorm-outbox",
  "seiva-ports",
+ "serde_json",
  "uuid",
 ]
 

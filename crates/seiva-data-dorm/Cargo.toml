@@ -20,4 +20,9 @@ publish = false
 seiva-ports = { path = "../seiva-ports" }
 # DORM by pinned git revision (main @ the merged DORM-C + B1 + B2 campaign).
 dorm-core = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
+# The transactional outbox: EventPublisher writes the event here in the same
+# transaction as the business change (dorm-outbox stays in DORM — the data layer).
+dorm-outbox = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
 uuid = { version = "1", features = ["v4"] }
+serde_json = "1"
+async-trait = "0.1"

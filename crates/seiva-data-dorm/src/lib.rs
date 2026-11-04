@@ -6,19 +6,20 @@
 //! the DORM data layer off is simply not compiling this crate (the brief's Parte
 //! C), which is why the coupling is confined to one place.
 //!
-//! It compiles against DORM pinned by git revision and implements the ports:
-//! [`Clock`], [`IdGenerator`], and the scope-based [`UnitOfWork`] via
+//! It compiles against DORM pinned by git revision and implements **all four
+//! ports**: [`Clock`], [`IdGenerator`], the scope-based [`UnitOfWork`] via
 //! [`DormUnitOfWork`] (which maps straight onto DORM's `with_session` +
-//! `db::atomic` — the resolution ADR 0004 chose for the tx-model mismatch).
+//! `db::atomic` — the resolution ADR 0004 chose for the tx-model mismatch), and
+//! [`EventPublisher`] via [`DormOutboxPublisher`] (writes to the transactional
+//! outbox in the current transaction; the relay worker forwards it afterwards).
 //! [`connect`] builds a module's `Database` while enforcing the two boundary
 //! invariants a framework must not forget — strict sessions on (no silent global
 //! `DEFAULT_DB`) and the keyset cursor key configured (no forgeable default).
-//! `EventPublisher` is the one port still to come, once the transactional outbox
-//! (`dorm-outbox`) is wired.
 
 #![forbid(unsafe_code)]
 
-use seiva_ports::{BoxError, Clock, Id, IdGenerator, PortResult, UnitOfWork};
+use async_trait::async_trait;
+use seiva_ports::{BoxError, Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -122,6 +123,28 @@ impl UnitOfWork for DormUnitOfWork {
         })
         .await;
         outcome.map_err(|e| Box::new(e) as BoxError)
+    }
+}
+
+/// The DORM-backed [`EventPublisher`]: writes the event to the transactional
+/// outbox (`dorm-outbox`) **in the current transaction**. Paired with
+/// [`DormUnitOfWork`], the event and the business change commit together (the
+/// transactional-outbox pattern) — so it must be called inside a
+/// [`UnitOfWork::transaction`]; `dorm-outbox` refuses a publish outside one. The
+/// relay worker (`seiva-outbox-relay`) forwards the events to the broker
+/// afterwards. The payload is the serialized event as JSON (the interface's
+/// CloudEvents envelope).
+pub struct DormOutboxPublisher;
+
+#[async_trait]
+impl EventPublisher for DormOutboxPublisher {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> PortResult<()> {
+        let value: serde_json::Value =
+            serde_json::from_slice(payload).map_err(|e| Box::new(e) as BoxError)?;
+        dorm_outbox::publish(topic, &value)
+            .await
+            .map(|_| ())
+            .map_err(|e| Box::new(e) as BoxError)
     }
 }
 
