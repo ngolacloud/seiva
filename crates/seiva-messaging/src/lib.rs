@@ -134,7 +134,7 @@ pub trait Publisher {
 
 /// The NATS broker backend (ADR 0031/0051), behind the `nats` feature.
 ///
-/// A [`NatsPublisher`] carries [`CloudEvent`]s to a NATS subject in
+/// A [`NatsPublisher`](nats::NatsPublisher) carries [`CloudEvent`]s to a NATS subject in
 /// CloudEvents **structured** JSON (the whole envelope is the message body).
 /// Drive it from the outbox relay worker for the durable, at-least-once path:
 /// business writes land in the outbox transactionally, and the relay forwards
@@ -186,7 +186,7 @@ pub mod nats {
 
 /// The AMQP broker backend (ADR 0052), behind the `amqp` feature.
 ///
-/// An [`AmqpPublisher`] carries [`CloudEvent`]s to an AMQP 0-9-1 broker (RabbitMQ)
+/// An [`AmqpPublisher`](amqp::AmqpPublisher) carries [`CloudEvent`]s to an AMQP 0-9-1 broker (RabbitMQ)
 /// as CloudEvents **structured** JSON, on the default exchange with the topic as
 /// the routing key (so a queue of the topic's name receives it). Publisher
 /// **confirms** are on, so [`Publisher::publish`] returns only once the broker has
@@ -259,15 +259,16 @@ pub mod amqp {
 
 /// The Kafka broker backend (ADR 0053), behind the `kafka` feature.
 ///
-/// A [`KafkaPublisher`] carries [`CloudEvent`]s to a Kafka topic as CloudEvents
-/// **structured** JSON, using the pure-Rust `rskafka` client — no `librdkafka`/C.
-/// The event `id` is the record key, and the publisher hashes it to choose the
-/// partition, so all events with the same key keep their order on one partition
-/// while the stream spreads across the rest (ADR 0053). A `produce` returns only
-/// once the broker has acked, so the relay does not advance its cursor on an
-/// unacknowledged publish. Drive it from the outbox relay worker for the durable,
-/// at-least-once path. TLS/SASL are available through `rskafka`'s `ClientBuilder`
-/// (`tls_config`/`sasl_config`); [`KafkaPublisher::from_client`] takes a
+/// A [`KafkaPublisher`](kafka::KafkaPublisher) carries [`CloudEvent`]s to a Kafka
+/// topic as CloudEvents **structured** JSON, using the pure-Rust `rskafka` client
+/// — no `librdkafka`/C. The event `id` is the record key, and the publisher
+/// hashes it to choose the partition, so all events with the same key keep their
+/// order on one partition while the stream spreads across the rest (ADR 0053). A
+/// `produce` returns only once the broker has acked, so the relay does not advance
+/// its cursor on an unacknowledged publish. Drive it from the outbox relay worker
+/// for the durable, at-least-once path. TLS/SASL are available through `rskafka`'s
+/// `ClientBuilder` (`tls_config`/`sasl_config`);
+/// [`KafkaPublisher::from_client`](kafka::KafkaPublisher::from_client) takes a
 /// pre-built client for that.
 #[cfg(feature = "kafka")]
 pub mod kafka {

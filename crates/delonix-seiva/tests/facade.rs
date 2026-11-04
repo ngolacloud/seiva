@@ -1,6 +1,6 @@
 //! Proves `#[seiva::facade]` generates the contract descriptor (ADR 0001).
 
-use delonix_seiva::contract::Facade;
+use delonix_seiva::contract::{Facade, Param};
 use delonix_seiva::facade;
 
 // A module's public contract, written the way a real `notes` module would.
@@ -43,6 +43,37 @@ fn descriptor_captures_name_version_and_methods() {
     assert_eq!(d.methods[2].name, "ping");
     assert_eq!(d.methods[2].requires, "");
     assert!(!d.methods[2].is_guarded());
+}
+
+#[test]
+fn descriptor_captures_method_signatures() {
+    let d = NotesFacade::DESCRIPTOR;
+
+    // `create(&self, ctx: &Ctx, cmd: CreateNote) -> Result<NoteDto>`: the
+    // receiver is dropped, both typed args are captured in order, and the type
+    // tokens are rendered canonically (no space against the `&` or the `<>`).
+    let create = d.method("create").unwrap();
+    assert_eq!(
+        create.params,
+        &[
+            Param {
+                name: "ctx",
+                ty: "&Ctx"
+            },
+            Param {
+                name: "cmd",
+                ty: "CreateNote"
+            },
+        ]
+    );
+    assert_eq!(create.output, "Result<NoteDto>");
+    assert_eq!(create.param("cmd").unwrap().ty, "CreateNote");
+    assert!(create.param("self").is_none());
+
+    // `ping(&self) -> Result<()>` has no parameters once the receiver is gone.
+    let ping = d.method("ping").unwrap();
+    assert!(ping.params.is_empty());
+    assert_eq!(ping.output, "Result<()>");
 }
 
 #[test]
