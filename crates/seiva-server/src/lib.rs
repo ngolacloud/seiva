@@ -74,6 +74,27 @@ use notes_facade::NotesFacade;
 pub use delonix_seiva::worker::WorkerReport;
 pub use seiva_config::{AppEnv, ConfigError};
 
+/// Structured logging for a Seiva service (12-factor: logs are an event stream
+/// written to stdout, for the platform to collect).
+pub mod observability {
+    use tracing_subscriber::{fmt, EnvFilter};
+
+    /// Installs the global JSON tracing subscriber, writing one JSON object per
+    /// event to **stdout**. The level filter comes from `RUST_LOG` (e.g.
+    /// `RUST_LOG=info,seiva_server=debug`), defaulting to `info`.
+    ///
+    /// Idempotent and panic-free: a second call (or a test that already set a
+    /// subscriber) is a no-op, so binaries and tests can both call it.
+    pub fn init() {
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let _ = fmt()
+            .json()
+            .with_current_span(false)
+            .with_env_filter(filter)
+            .try_init();
+    }
+}
+
 /// The environment variable holding the full HTTP bind address (`host:port`).
 /// Highest precedence; see [`ServerConfig`].
 pub const HTTP_ADDR_VAR: &str = "SEIVA_HTTP_ADDR";
@@ -304,10 +325,35 @@ pub async fn serve(
 ) -> Result<(), ServeError> {
     let health = Health::starting();
     let app = application(health.clone());
+    serve_router(config.http_addr, app, health, shutdown).await
+}
 
-    let listener = TcpListener::bind(config.http_addr)
-        .await
-        .map_err(ServeError::Bind)?;
+/// Serves an arbitrary application `router` on `addr` with the framework's
+/// lifecycle: bind, flip `health` [`Starting -> Ready`](seiva_http::Health::set_ready)
+/// once the socket is live, and on `shutdown` flip to
+/// [`Draining`](seiva_http::Health::set_draining) *before* the server stops
+/// accepting so `/health/ready` goes `503` while in-flight requests finish.
+///
+/// This is the loop a generated project's `apps/<name>-api` composition root
+/// calls: it builds its own router (`seiva_http::router(health.clone())` merged
+/// with its modules' routers) and hands it here, instead of writing its own
+/// `main`. The demo [`serve`] is exactly this over the built-in application.
+///
+/// The peer `SocketAddr` is installed as a request extension
+/// (`into_make_service_with_connect_info`), so `seiva_http`'s rate limiter keys
+/// on the real client IP.
+///
+/// # Errors
+///
+/// Returns [`ServeError::Bind`] if the listener cannot bind, or
+/// [`ServeError::Serve`] if serving fails.
+pub async fn serve_router(
+    addr: SocketAddr,
+    router: Router,
+    health: Health,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), ServeError> {
+    let listener = TcpListener::bind(addr).await.map_err(ServeError::Bind)?;
 
     // The socket is live: Starting -> Ready, so /health/ready passes.
     health.set_ready();
@@ -316,18 +362,13 @@ pub async fn serve(
         let health = health.clone();
         async move {
             shutdown.await;
-            // Draining BEFORE the server stops accepting: /health/ready goes 503
-            // and a load balancer takes us out of rotation while we drain.
             health.set_draining();
         }
     };
 
-    // `into_make_service_with_connect_info` installs the peer `SocketAddr` as a
-    // request extension, so the rate limiter in `seiva_http` can key on the
-    // client IP rather than a shared fallback bucket.
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        router.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(draining)
     .await
