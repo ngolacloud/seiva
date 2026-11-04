@@ -6,11 +6,31 @@
 //! are themselves pure string transforms ([`add_members_to_workspace`],
 //! [`register_module_in_seiva_toml`], [`append_namespace_block`]).
 //!
-//! This first cut lays down the five-layer structure with the dependency rule
-//! enforced by the crate graph (the point of "one layer per crate"). The
-//! generated crates compile standalone; wiring them to the framework runtime
-//! (the facade macro, HTTP/gRPC, DI) lands in a later phase and is flagged in
-//! the generated files.
+//! The generated module is wired to the REAL framework transports, not a
+//! hand-rolled controller. Its five layers mirror [`examples/notes`] and follow
+//! the dependency rule enforced by the crate graph (the point of "one layer per
+//! crate"):
+//!
+//! - `facade` — a `#[seiva::facade(version = "v1")]` trait plus serde wire DTOs,
+//!   the `Validate` impl and the error→`Problem` mapping. The facade's own DTOs
+//!   are the wire types, so this layer depends on `delonix-seiva`, `serde` and
+//!   `seiva-http`.
+//! - `domain` — entities and rules; depends on nothing but `shared/kernel`.
+//! - `application` — the service implementing the facade over an outbound
+//!   repository port and the `seiva-ports` cross-cutting ports. Transport-free:
+//!   it names no `delonix-seiva`, `seiva-http` or `axum` item.
+//! - `infrastructure` — an in-memory repository adapter (a DORM-backed one
+//!   arrives via the `dorm` feature); depends on `application` + `domain` +
+//!   `seiva-ports`.
+//! - `interface` — the transport. It holds the `#[seiva::controller]` adapter
+//!   that yields `<trait>_router`, and generates the module's OpenAPI and proto
+//!   documents from the facade descriptor via `seiva-openapi`/`seiva-grpc`.
+//!
+//! The controller is placed in `interface` (not `application`) by deliberate
+//! layering choice, so the application layer stays transport-free; the decision
+//! is documented in the generated `interface` crate itself.
+//!
+//! [`examples/notes`]: https://docs.rs/delonix-seiva
 
 /// A file to be written, with a path relative to the project root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,63 +135,69 @@ pub fn project_files(name: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
 }
 
 /// Files for a new module `module`, relative to the project root.
+///
+/// The emitted crates are wired to the real framework transports: the `facade`
+/// carries a `#[seiva::facade]` trait, the `interface` a `#[seiva::controller]`
+/// adapter that yields `<trait>_router` plus the OpenAPI/proto generation, and
+/// the `application` implements the facade over `seiva-ports`. See the module
+/// docs for the full shape and the layering decision.
 pub fn module_files(module: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
     validate_name(module)?;
+    // A validated name is already lowercase snake_case, so `snake == module`;
+    // we keep the name explicit for the crate-import spellings (`<snake>_facade`).
     let snake = module.replace('-', "_");
+    // The facade trait (and its `<Trait>Facade` descriptor, router name and
+    // resource path) is named after the module in PascalCase: `order_items`
+    // yields the trait `OrderItems` and the builder `order_items_router`.
+    let pascal = to_pascal_case(&snake);
     let base = format!("modules/{module}");
     let file = |path: String, contents: String| GeneratedFile { path, contents };
 
-    let dep = |layer: &str| (format!("{module}-{layer}"), format!("../{layer}"));
-    let domain_dep = dep("domain");
-    let application_dep = dep("application");
-    let facade_dep = dep("facade");
-
     Ok(vec![
         file(format!("{base}/module.toml"), module_toml(module)),
-        // facade
+        // facade: the versioned contract + wire DTOs (serde + Validate + Problem).
         file(
             format!("{base}/facade/Cargo.toml"),
-            lib_cargo_toml(&format!("{module}-facade"), &[]),
+            facade_cargo_toml(module),
         ),
-        file(format!("{base}/facade/src/lib.rs"), facade_lib()),
-        // domain
+        file(
+            format!("{base}/facade/src/lib.rs"),
+            facade_lib(module, &pascal),
+        ),
+        // domain: entities and rules; depends only on shared/kernel.
         file(
             format!("{base}/domain/Cargo.toml"),
-            lib_cargo_toml(&format!("{module}-domain"), &[]),
+            domain_cargo_toml(module),
         ),
         file(format!("{base}/domain/src/lib.rs"), domain_lib()),
-        // application (depends on domain)
+        // application: facade impl over the repository port + seiva-ports. No
+        // transport, no framework runtime, no DORM.
         file(
             format!("{base}/application/Cargo.toml"),
-            lib_cargo_toml(&format!("{module}-application"), &[&domain_dep]),
+            application_cargo_toml(module),
         ),
         file(
             format!("{base}/application/src/lib.rs"),
-            application_lib(&snake),
+            application_lib(&snake, &pascal),
         ),
-        // infrastructure (depends on application + domain)
+        // infrastructure: the in-memory repository adapter (DORM via `dorm`).
         file(
             format!("{base}/infrastructure/Cargo.toml"),
-            lib_cargo_toml(
-                &format!("{module}-infrastructure"),
-                &[&application_dep, &domain_dep],
-            ),
+            infrastructure_cargo_toml(module),
         ),
         file(
             format!("{base}/infrastructure/src/lib.rs"),
             infrastructure_lib(&snake),
         ),
-        // interface (depends on application + facade)
+        // interface: the transport — the #[seiva::controller] adapter and the
+        // OpenAPI/proto generation from the facade descriptor.
         file(
             format!("{base}/interface/Cargo.toml"),
-            lib_cargo_toml(
-                &format!("{module}-interface"),
-                &[&application_dep, &facade_dep],
-            ),
+            interface_cargo_toml(module),
         ),
         file(
             format!("{base}/interface/src/lib.rs"),
-            interface_lib(&snake),
+            interface_lib(&snake, &pascal),
         ),
     ])
 }
@@ -283,71 +309,292 @@ fn module_toml(module: &str) -> String {
     )
 }
 
-fn facade_lib() -> String {
-    "//! Facade layer: the module's versioned public contract and DTOs.\n\
-     //! May depend only on `shared/kernel` and the Seiva macros. Must NOT depend\n\
-     //! on `domain`, `application` or `infrastructure`.\n\
-     //!\n\
-     //! Later phase: annotate the trait with `#[seiva::facade(version = \"v1\")]`\n\
-     //! once the framework dependency is wired. Until then it is a plain trait.\n\
-     #![allow(async_fn_in_trait)]\n\n\
-     /// What other modules see of this module. Keep DTOs here, not domain types.\n\
-     pub trait Contract {\n    async fn ping(&self) -> Result<(), String>;\n}\n"
-        .to_owned()
+/// The relative path, from a module layer crate's directory
+/// (`modules/<module>/<layer>/`), to the framework's `crates/` directory. It
+/// assumes the project is generated next to a framework checkout; a published
+/// project uses version dependencies (`delonix-seiva = "0.1"`) instead, as the
+/// generated manifests note.
+const FRAMEWORK_CRATES: &str = "../../../../crates";
+
+/// Converts a validated snake_case name to PascalCase for the facade trait and
+/// its generated descriptor/router names (`order_items` → `OrderItems`).
+fn to_pascal_case(snake: &str) -> String {
+    snake
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// The REST resource segment the controller derives from a facade name:
+/// lowercased, then naively pluralised (append `s` unless it already ends in
+/// one). Used only to render the route in a generated doc comment.
+fn resource_of(pascal: &str) -> String {
+    let lower = pascal.to_ascii_lowercase();
+    if lower.ends_with('s') {
+        lower
+    } else {
+        format!("{lower}s")
+    }
+}
+
+fn facade_lib(module: &str, pascal: &str) -> String {
+    let resource = resource_of(pascal);
+    format!(
+        "//! Facade layer: the module's versioned public contract and wire DTOs.\n\
+         //!\n\
+         //! This is what other modules and the HTTP/gRPC transports see. The\n\
+         //! `#[seiva::facade]` macro (imported here as `facade`) keeps the trait as\n\
+         //! the single source of truth and generates the `{pascal}Facade`\n\
+         //! descriptor read by the OpenAPI/proto generators and the contract checks.\n\
+         //!\n\
+         //! The generated controller uses the facade's OWN DTOs as the wire types,\n\
+         //! so the write DTO derives `serde` and implements `seiva_http::Validate`,\n\
+         //! the response DTO derives `serde::Serialize`, and the error maps to an\n\
+         //! RFC 9457 `Problem` here — the module owns its wire contract. Hence this\n\
+         //! layer depends on `delonix-seiva`, `serde` and `seiva-http`.\n\
+         #![allow(async_fn_in_trait)]\n\n\
+         use delonix_seiva::facade;\n\
+         use seiva_http::{{Problem, Validate, ValidationError}};\n\
+         use serde::{{Deserialize, Serialize}};\n\n\
+         /// Command DTO: the JSON body of `create`, validated by the controller's\n\
+         /// `Valid<T>` extractor. Rename `Record`/`title` to the real shape.\n\
+         #[derive(Debug, Clone, Deserialize, Serialize)]\n\
+         pub struct CreateRecord {{\n    /// The record's title; must be non-empty after trimming.\n    pub title: String,\n}}\n\n\
+         impl Validate for CreateRecord {{\n    fn validate(&self) -> Result<(), ValidationError> {{\n        if self.title.trim().is_empty() {{\n            return Err(ValidationError::new(\"title must not be empty\"));\n        }}\n        Ok(())\n    }}\n}}\n\n\
+         /// Response DTO: what `create` returns. Never a domain type — the\n\
+         /// application layer maps the domain entity to this at the boundary.\n\
+         #[derive(Debug, Clone, PartialEq, Eq, Serialize)]\n\
+         pub struct RecordDto {{\n    /// The record's identifier.\n    pub id: u128,\n    /// The record's title.\n    pub title: String,\n}}\n\n\
+         /// The facade's error type. The controller maps it to an RFC 9457 problem\n\
+         /// via this `Into<Problem>`, so the module owns how failures surface.\n\
+         #[derive(Debug, Clone)]\n\
+         pub struct RecordError(pub String);\n\n\
+         impl From<RecordError> for Problem {{\n    fn from(error: RecordError) -> Self {{\n        Problem::unprocessable_entity(error.0)\n    }}\n}}\n\n\
+         /// The `{module}` module's versioned public contract.\n\
+         #[facade(version = \"v1\")]\n\
+         pub trait {pascal} {{\n    /// Create a record (guarded; `POST /v1/{resource}`).\n    #[requires(\"{module}.create\")]\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError>;\n}}\n"
+    )
 }
 
 fn domain_lib() -> String {
-    "//! Domain layer: entities, value objects, domain events and rules.\n\
-     //! May depend only on `shared/kernel`. Must NOT depend on any other layer,\n\
-     //! the framework or DORM — the crate graph enforces this.\n\n\
-     /// An example aggregate. Replace with the module's real domain model.\n\
+    "//! Domain layer: entities, value objects and rules.\n\
+     //!\n\
+     //! Depends on nothing but `shared/kernel`. The rule — a record's title must\n\
+     //! not be empty — lives here, not in the application or the database. Must\n\
+     //! NOT depend on any other layer, the framework or DORM.\n\n\
+     /// A record. Construct it through [`Record::new`] so the rule is enforced.\n\
      #[derive(Debug, Clone, PartialEq, Eq)]\n\
-     pub struct Record {\n    pub id: u64,\n    pub title: String,\n}\n\n\
-     impl Record {\n    pub fn new(id: u64, title: impl Into<String>) -> Self {\n        Self { id, title: title.into() }\n    }\n}\n"
+     pub struct Record {\n    /// The record's identifier.\n    pub id: u128,\n    /// The record's title.\n    pub title: String,\n}\n\n\
+     impl Record {\n    /// Creates a record, rejecting an empty or whitespace-only title.\n    pub fn new(id: u128, title: impl Into<String>) -> Result<Self, DomainError> {\n        let title = title.into();\n        if title.trim().is_empty() {\n            return Err(DomainError::EmptyTitle);\n        }\n        Ok(Self { id, title })\n    }\n}\n\n\
+     /// A domain rule was violated.\n\
+     #[derive(Debug, Clone, PartialEq, Eq)]\n\
+     pub enum DomainError {\n    /// The record's title was empty or whitespace only.\n    EmptyTitle,\n}\n\n\
+     impl std::fmt::Display for DomainError {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        match self {\n            DomainError::EmptyTitle => write!(f, \"record title must not be empty\"),\n        }\n    }\n}\n\n\
+     impl std::error::Error for DomainError {}\n\n\
+     #[cfg(test)]\n\
+     mod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_empty_title() {\n        assert_eq!(Record::new(1, \"   \"), Err(DomainError::EmptyTitle));\n        assert!(Record::new(1, \"hello\").is_ok());\n    }\n}\n"
         .to_owned()
 }
 
-fn application_lib(snake: &str) -> String {
+fn application_lib(snake: &str, pascal: &str) -> String {
     format!(
-        "//! Application layer: use cases and outbound ports. Depends on `domain`\n\
-         //! (and, once wired, `seiva-ports` and this module's facade DTOs). Must\n\
-         //! NOT depend on infrastructure, interface, the framework or DORM.\n\
+        "//! Application layer: the service implementing the facade over an outbound\n\
+         //! repository port and the framework's cross-cutting `seiva-ports`.\n\
+         //!\n\
+         //! Depends on `domain`, this module's `facade` (DTOs + trait) and\n\
+         //! `seiva-ports`. It names NO transport, framework-runtime or DORM item —\n\
+         //! the HTTP coupling lives in `interface`, the persistence in\n\
+         //! `infrastructure`. This is what keeps the use case independently testable.\n\
          #![allow(async_fn_in_trait)]\n\n\
-         use {snake}_domain::Record;\n\n\
-         /// Outbound port the use case needs; implemented in `infrastructure`.\n\
-         pub trait RecordRepository {{\n    async fn save(&self, record: &Record) -> Result<(), String>;\n}}\n\n\
-         /// Example use case (command). Generic over the port so it tests with a fake.\n\
-         pub struct CreateRecord<R: RecordRepository> {{\n    pub repository: R,\n}}\n\n\
-         impl<R: RecordRepository> CreateRecord<R> {{\n    pub async fn execute(&self, id: u64, title: &str) -> Result<Record, String> {{\n        let record = Record::new(id, title);\n        self.repository.save(&record).await?;\n        Ok(record)\n    }}\n}}\n"
+         use std::future::Future;\n\n\
+         use {snake}_domain::Record;\n\
+         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}}};\n\
+         use seiva_ports::{{BoxError, IdGenerator, PortResult}};\n\n\
+         /// Outbound port: persistence of records in the domain's language.\n\
+         /// Implemented in `infrastructure` (in-memory by default, DORM-backed via\n\
+         /// the `dorm` feature). The future is `Send` so a use case can `.await` it\n\
+         /// on a multi-threaded runtime.\n\
+         pub trait RecordRepository {{\n    /// Persists a record.\n    fn save(&self, record: &Record) -> impl Future<Output = PortResult<()>> + Send;\n}}\n\n\
+         /// The application service: it implements the [`{pascal}`] facade by running\n\
+         /// the use case and mapping the domain entity to the DTO. Generic over the\n\
+         /// repository port and an [`IdGenerator`] so it unit-tests with fakes. It is\n\
+         /// `Clone` (when its ports are) so the transport layer can hold it as state.\n\
+         #[derive(Clone)]\n\
+         pub struct RecordService<R, G> {{\n    /// The outbound persistence port.\n    pub repository: R,\n    /// The framework id generator.\n    pub ids: G,\n}}\n\n\
+         impl<R, G> RecordService<R, G>\n\
+         where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n{{\n    async fn create_record(&self, cmd: CreateRecord) -> PortResult<RecordDto> {{\n        let id = u128::from_be_bytes(self.ids.new_id().0);\n        let record = Record::new(id, cmd.title).map_err(BoxError::from)?;\n        self.repository.save(&record).await?;\n        Ok(RecordDto {{\n            id: record.id,\n            title: record.title,\n        }})\n    }}\n}}\n\n\
+         impl<R, G> {pascal} for RecordService<R, G>\n\
+         where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        // Map the internal error to the contract's error type: no internal\n        // detail leaks across the module boundary beyond a message.\n        self.create_record(cmd)\n            .await\n            .map_err(|err| RecordError(err.to_string()))\n    }}\n}}\n\n\
+         #[cfg(test)]\n\
+         mod tests {{\n    use super::*;\n    use seiva_ports::Id;\n    use std::sync::Mutex;\n\n    #[derive(Default)]\n    struct FakeRepo {{\n        saved: Mutex<Vec<Record>>,\n    }}\n\n    impl RecordRepository for FakeRepo {{\n        async fn save(&self, record: &Record) -> PortResult<()> {{\n            self.saved.lock().unwrap().push(record.clone());\n            Ok(())\n        }}\n    }}\n\n    struct FixedIds;\n    impl IdGenerator for FixedIds {{\n        fn new_id(&self) -> Id {{\n            Id([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])\n        }}\n    }}\n\n    #[tokio::test]\n    async fn create_persists_and_returns_the_dto() {{\n        let service = RecordService {{\n            repository: FakeRepo::default(),\n            ids: FixedIds,\n        }};\n        let dto = service\n            .create(CreateRecord {{ title: \"hello\".into() }})\n            .await\n            .unwrap();\n        assert_eq!(dto.id, 1);\n        assert_eq!(dto.title, \"hello\");\n        assert_eq!(service.repository.saved.lock().unwrap().len(), 1);\n    }}\n}}\n"
     )
 }
 
 fn infrastructure_lib(snake: &str) -> String {
     format!(
-        "//! Infrastructure layer: adapters implementing the application's ports —\n\
-         //! repositories (over DORM or an external library), messaging, clients to\n\
-         //! other modules' facades. Depends on `application` + `domain`. Must NOT\n\
-         //! depend on `interface`.\n\n\
-         use std::sync::Mutex;\n\
+        "//! Infrastructure layer: adapters implementing the application's outbound\n\
+         //! ports. Depends on `application` + `domain` + `seiva-ports`; never on\n\
+         //! `interface`.\n\
+         //!\n\
+         //! The default adapters are in-memory, so a scaffolded project compiles and\n\
+         //! runs with NO database. A DORM-backed repository arrives via the `dorm`\n\
+         //! feature (the `seiva-data-dorm` gateway) — swap this type for it in the\n\
+         //! composition root when you turn the feature on. The adapters are `Clone`\n\
+         //! (state behind an `Arc`) so the transport can hold the service as axum\n\
+         //! state.\n\n\
+         use std::sync::atomic::{{AtomicU64, Ordering}};\n\
+         use std::sync::{{Arc, Mutex}};\n\n\
          use {snake}_application::RecordRepository;\n\
-         use {snake}_domain::Record;\n\n\
-         /// A simple in-memory adapter. Replace with a DORM-backed or external one.\n\
-         #[derive(Default)]\n\
-         pub struct InMemoryRecordRepository {{\n    saved: Mutex<Vec<Record>>,\n}}\n\n\
-         impl RecordRepository for InMemoryRecordRepository {{\n    async fn save(&self, record: &Record) -> Result<(), String> {{\n        self.saved.lock().map_err(|_| \"lock poisoned\".to_string())?.push(record.clone());\n        Ok(())\n    }}\n}}\n"
+         use {snake}_domain::Record;\n\
+         use seiva_ports::{{Id, IdGenerator, PortResult}};\n\n\
+         /// An in-memory [`RecordRepository`]. Replace with the DORM-backed adapter\n\
+         /// (feature `dorm`) or an external one for production.\n\
+         #[derive(Clone, Default)]\n\
+         pub struct InMemoryRecordRepository {{\n    saved: Arc<Mutex<Vec<Record>>>,\n}}\n\n\
+         impl InMemoryRecordRepository {{\n    /// Creates an empty repository.\n    pub fn new() -> Self {{\n        Self::default()\n    }}\n\n    /// Every record saved so far — for composition-level assertions.\n    pub fn saved(&self) -> Vec<Record> {{\n        self.saved.lock().expect(\"repository poisoned\").clone()\n    }}\n}}\n\n\
+         impl RecordRepository for InMemoryRecordRepository {{\n    async fn save(&self, record: &Record) -> PortResult<()> {{\n        self.saved\n            .lock()\n            .map_err(|_| \"repository lock poisoned\")?\n            .push(record.clone());\n        Ok(())\n    }}\n}}\n\n\
+         /// A process-local monotonic [`IdGenerator`] adapter: it hands out\n\
+         /// 1, 2, 3, … as 128-bit ids. Replace with a ULID/UUID generator in\n\
+         /// production; this keeps the scaffold dependency-free and deterministic.\n\
+         #[derive(Clone, Default)]\n\
+         pub struct CounterIdGenerator {{\n    next: Arc<AtomicU64>,\n}}\n\n\
+         impl IdGenerator for CounterIdGenerator {{\n    fn new_id(&self) -> Id {{\n        let value = self.next.fetch_add(1, Ordering::Relaxed) + 1;\n        let mut bytes = [0u8; 16];\n        bytes[8..].copy_from_slice(&value.to_be_bytes());\n        Id(bytes)\n    }}\n}}\n"
     )
 }
 
-fn interface_lib(snake: &str) -> String {
+fn interface_lib(snake: &str, pascal: &str) -> String {
     format!(
-        "//! Interface layer: REST, gRPC and event consumers. Depends on\n\
-         //! `application` + `facade` + the framework. Must NOT depend on\n\
-         //! `infrastructure` or `domain`.\n\
+        "//! Interface layer: the HTTP/gRPC transport. It wires this module's facade\n\
+         //! to the real framework transports.\n\
          //!\n\
-         //! Later phase: the framework generates route/gRPC wiring here.\n\n\
-         use {snake}_application::{{CreateRecord, RecordRepository}};\n\n\
-         /// Example controller shell. The framework will attach routes here.\n\
-         pub struct Controller<R: RecordRepository> {{\n    pub create_record: CreateRecord<R>,\n}}\n"
+         //! LAYERING DECISION: the `#[seiva::controller]` lives HERE, not in\n\
+         //! `application`, so the application layer stays transport-free (it depends\n\
+         //! only on `domain`, `facade` and `seiva-ports`, like the canonical\n\
+         //! example). The controller is applied to the CONCRETE [`{pascal}Controller`]\n\
+         //! adapter, which delegates to the module's default service wired here.\n\
+         //! A concrete self type is required: `#[seiva::controller]` dispatches\n\
+         //! through the facade trait, whose `async fn` methods are only known to\n\
+         //! return `Send` futures (as axum's router demands) for a concrete type —\n\
+         //! a generic service would leave the trait's return-position future\n\
+         //! unbounded. The composition root in `apps/` can build its own router over\n\
+         //! a different service by wrapping it the same way.\n\
+         //!\n\
+         //! The macro generates a `{snake}_router(service)` builder whose route\n\
+         //! version and per-route permission come from the facade descriptor at run\n\
+         //! time. The same descriptor drives this module's OpenAPI and proto\n\
+         //! documents ([`openapi`] and [`proto`]), so the wire contract is\n\
+         //! generated, never hand-maintained.\n\
+         //!\n\
+         //! The generated handlers return `Result<_, seiva_http::Problem>`, a large\n\
+         //! value, so the large-`Err` lint is allowed crate-wide (as `seiva-http`\n\
+         //! itself does).\n\
+         #![allow(clippy::result_large_err)]\n\n\
+         use delonix_seiva::contract::Facade;\n\
+         use delonix_seiva::controller;\n\
+         use {snake}_application::RecordService;\n\
+         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\
+         use {snake}_infrastructure::{{CounterIdGenerator, InMemoryRecordRepository}};\n\n\
+         /// The module's default, in-memory `{pascal}` service: the application\n\
+         /// service over the in-memory repository and counter id generator. Swap\n\
+         /// these ports (e.g. a DORM-backed repository) in the composition root.\n\
+         pub type DefaultService = RecordService<InMemoryRecordRepository, CounterIdGenerator>;\n\n\
+         /// Transport adapter: a concrete `{pascal}` service exposed over HTTP. It is\n\
+         /// `Clone` so the generated `{snake}_router` can hold it as axum state.\n\
+         #[derive(Clone)]\n\
+         pub struct {pascal}Controller(pub DefaultService);\n\n\
+         impl {pascal}Controller {{\n    /// Builds the controller over the default in-memory service.\n    pub fn new() -> Self {{\n        {pascal}Controller(RecordService {{\n            repository: InMemoryRecordRepository::new(),\n            ids: CounterIdGenerator::default(),\n        }})\n    }}\n}}\n\n\
+         impl Default for {pascal}Controller {{\n    fn default() -> Self {{\n        Self::new()\n    }}\n}}\n\n\
+         #[controller]\n\
+         impl {pascal} for {pascal}Controller {{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n}}\n\n\
+         /// Builds the module's HTTP router, wired to the default in-memory service.\n\
+         /// Merge it into the application router in the composition root.\n\
+         pub fn router() -> ::axum::Router {{\n    {snake}_router({pascal}Controller::new())\n}}\n\n\
+         /// The module's OpenAPI 3.1 document, generated from the facade descriptor.\n\
+         pub fn openapi() -> serde_json::Value {{\n    seiva_openapi::openapi_document(\n        seiva_openapi::ApiInfo {{\n            title: \"{snake} API\".to_string(),\n            version: {pascal}Facade::DESCRIPTOR.version.to_string(),\n        }},\n        &[{pascal}Facade::DESCRIPTOR],\n    )\n}}\n\n\
+         /// The module's proto3 service document, generated from the facade descriptor.\n\
+         pub fn proto() -> String {{\n    seiva_grpc::proto_document(&{pascal}Facade::DESCRIPTOR)\n}}\n"
+    )
+}
+
+// --- module crate manifests --------------------------------------------------
+
+fn facade_cargo_toml(module: &str) -> String {
+    format!(
+        "[package]\nname = \"{module}-facade\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n\
+         # The framework macros (`#[facade]`) and contract descriptor. A published\n\
+         # project uses a version dependency (`delonix-seiva = \"0.1\"`); this scaffold\n\
+         # uses a path so it builds against a local framework checkout. The data\n\
+         # layer is off here — the facade needs none.\n\
+         delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
+         # The controller uses the facade's own DTOs as wire types, so the write DTO\n\
+         # implements `seiva_http::Validate` and the error maps to `seiva_http::Problem`.\n\
+         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
+         serde = {{ version = \"1\", features = [\"derive\"] }}\n"
+    )
+}
+
+fn domain_cargo_toml(module: &str) -> String {
+    format!(
+        "[package]\nname = \"{module}-domain\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         # The domain depends on nothing but the standard library (and, as the\n\
+         # module grows, `shared/kernel`). No framework, no DORM.\n\
+         [dependencies]\n"
+    )
+}
+
+fn application_cargo_toml(module: &str) -> String {
+    format!(
+        "[package]\nname = \"{module}-application\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n\
+         {module}-domain = {{ path = \"../domain\" }}\n\
+         {module}-facade = {{ path = \"../facade\" }}\n\
+         # The trait-only cross-cutting ports. The application codes against these,\n\
+         # NEVER against `delonix-seiva`, `seiva-http` or DORM — that is what keeps\n\
+         # it transport- and data-layer-independent.\n\
+         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\n\
+         [dev-dependencies]\n\
+         tokio = {{ version = \"1\", features = [\"rt\", \"macros\"] }}\n"
+    )
+}
+
+fn infrastructure_cargo_toml(module: &str) -> String {
+    format!(
+        "[package]\nname = \"{module}-infrastructure\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n\
+         {module}-application = {{ path = \"../application\" }}\n\
+         {module}-domain = {{ path = \"../domain\" }}\n\
+         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\
+         # A DORM-backed repository arrives through the `seiva-data-dorm` gateway\n\
+         # behind a `dorm` feature; the default in-memory adapter pulls in no ORM.\n"
+    )
+}
+
+fn interface_cargo_toml(module: &str) -> String {
+    format!(
+        "[package]\nname = \"{module}-interface\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n\
+         {module}-facade = {{ path = \"../facade\" }}\n\
+         # The transport wires a default concrete service (application over the\n\
+         # in-memory infrastructure adapters) so the module ships a runnable router.\n\
+         # A production composition root in `apps/` can wrap a different service.\n\
+         {module}-application = {{ path = \"../application\" }}\n\
+         {module}-infrastructure = {{ path = \"../infrastructure\" }}\n\
+         # The controller macro + contract, the HTTP primitives it emits, and the\n\
+         # OpenAPI/proto generators — all driven by the facade descriptor.\n\
+         delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
+         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
+         seiva-grpc = {{ path = \"{FRAMEWORK_CRATES}/seiva-grpc\" }}\n\
+         seiva-openapi = {{ path = \"{FRAMEWORK_CRATES}/seiva-openapi\" }}\n\
+         axum = \"0.8\"\n\
+         serde_json = \"1\"\n"
     )
 }
 
@@ -384,9 +631,33 @@ mod tests {
         assert!(paths.contains(&"shared/kernel/src/lib.rs"));
     }
 
+    /// Looks up a generated file's contents by its exact path.
+    fn contents<'a>(files: &'a [GeneratedFile], path: &str) -> &'a str {
+        files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("missing generated file `{path}`"))
+            .contents
+            .as_str()
+    }
+
+    /// A cheap, context-free well-formedness check: the three bracket kinds each
+    /// balance in count. `delonix-seiva` cannot depend on `syn` (that lives in
+    /// the proc-macro crate, not a normal dependency of this crate), so the
+    /// generated code is NOT parsed; this catches a truncated or unbalanced
+    /// template without a parser. Angle brackets are intentionally not counted
+    /// (they appear in generics and comparisons, not as delimiters here).
+    fn brackets_balance(src: &str) -> bool {
+        src.matches('{').count() == src.matches('}').count()
+            && src.matches('(').count() == src.matches(')').count()
+            && src.matches('[').count() == src.matches(']').count()
+    }
+
     #[test]
-    fn module_files_have_five_layers_plus_manifest() {
+    fn module_files_emit_manifest_and_five_layer_crates() {
         let files = module_files("notes").unwrap();
+        // One module.toml plus a Cargo.toml and a src/lib.rs per layer = 11.
+        assert_eq!(files.len(), 11, "expected 1 manifest + 5 crates * 2 files");
         for layer in [
             "facade",
             "domain",
@@ -398,10 +669,179 @@ mod tests {
                 files
                     .iter()
                     .any(|f| f.path == format!("modules/notes/{layer}/src/lib.rs")),
-                "missing {layer}"
+                "missing {layer}/src/lib.rs"
+            );
+            assert!(
+                files
+                    .iter()
+                    .any(|f| f.path == format!("modules/notes/{layer}/Cargo.toml")),
+                "missing {layer}/Cargo.toml"
             );
         }
         assert!(files.iter().any(|f| f.path == "modules/notes/module.toml"));
+    }
+
+    #[test]
+    fn every_generated_lib_has_balanced_brackets() {
+        let files = module_files("order_items").unwrap();
+        for layer in [
+            "facade",
+            "domain",
+            "application",
+            "infrastructure",
+            "interface",
+        ] {
+            let path = format!("modules/order_items/{layer}/src/lib.rs");
+            assert!(
+                brackets_balance(contents(&files, &path)),
+                "unbalanced brackets in {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_facade_is_framework_wired() {
+        let files = module_files("notes").unwrap();
+        let facade = contents(&files, "modules/notes/facade/src/lib.rs");
+        // The macro is imported and applied with an explicit version.
+        assert!(facade.contains("use delonix_seiva::facade;"));
+        assert!(facade.contains("#[facade(version = \"v1\")]"));
+        // At least one method carries a `#[requires(..)]`, keyed to the module.
+        assert!(facade.contains("#[requires(\"notes.create\")]"));
+        // The trait is named after the module in PascalCase.
+        assert!(facade.contains("pub trait Notes {"));
+        assert!(facade.contains(
+            "async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError>;"
+        ));
+        // Wire DTOs: serde + Validate on the write DTO, Serialize on the response,
+        // error → Problem mapping. This is the controller-test shape.
+        assert!(facade.contains("#[derive(Debug, Clone, Deserialize, Serialize)]"));
+        assert!(facade.contains("impl Validate for CreateRecord"));
+        assert!(facade.contains("impl From<RecordError> for Problem"));
+    }
+
+    #[test]
+    fn generated_application_implements_the_facade_over_ports() {
+        let files = module_files("notes").unwrap();
+        let app = contents(&files, "modules/notes/application/src/lib.rs");
+        assert!(app.contains("use seiva_ports::{BoxError, IdGenerator, PortResult};"));
+        assert!(app.contains("pub trait RecordRepository {"));
+        assert!(app.contains("impl<R, G> Notes for RecordService<R, G>"));
+        // The application layer is transport-free: no HTTP, axum or framework
+        // runtime item leaks into it (ADR 0003).
+        assert!(
+            !app.contains("seiva_http"),
+            "application must be transport-free"
+        );
+        assert!(!app.contains("axum"), "application must be transport-free");
+        assert!(
+            !app.contains("delonix_seiva"),
+            "application must not name a framework-runtime item"
+        );
+    }
+
+    #[test]
+    fn generated_infrastructure_is_in_memory_and_dorm_free() {
+        let files = module_files("notes").unwrap();
+        let infra = contents(&files, "modules/notes/infrastructure/src/lib.rs");
+        assert!(infra.contains("pub struct InMemoryRecordRepository"));
+        assert!(infra.contains("impl RecordRepository for InMemoryRecordRepository"));
+        assert!(infra.contains("PortResult"));
+        // DORM is mentioned only as the future feature-gated option, in a comment.
+        assert!(
+            infra.contains("`dorm`") && infra.contains("feature"),
+            "the DORM-via-feature note must be present"
+        );
+    }
+
+    #[test]
+    fn generated_interface_holds_controller_and_transport_generation() {
+        let files = module_files("notes").unwrap();
+        let interface = contents(&files, "modules/notes/interface/src/lib.rs");
+        // The controller macro is imported and applied to a concrete adapter impl
+        // (a concrete self type is required for the generated router to be Send).
+        assert!(interface.contains("use delonix_seiva::controller;"));
+        assert!(interface.contains("#[controller]"));
+        assert!(interface.contains("pub struct NotesController(pub DefaultService);"));
+        assert!(interface.contains("impl Notes for NotesController {"));
+        // The default service is composed from the application + infrastructure.
+        assert!(interface.contains(
+            "pub type DefaultService = RecordService<InMemoryRecordRepository, CounterIdGenerator>;"
+        ));
+        assert!(interface.contains("use notes_application::RecordService;"));
+        assert!(interface
+            .contains("use notes_infrastructure::{CounterIdGenerator, InMemoryRecordRepository};"));
+        // A runnable router builder that calls the macro-generated `notes_router`.
+        assert!(interface.contains("pub fn router() -> ::axum::Router {"));
+        assert!(interface.contains("notes_router(NotesController::new())"));
+        // Transport generation from the facade descriptor.
+        assert!(interface.contains("seiva_openapi::openapi_document("));
+        assert!(interface.contains("seiva_grpc::proto_document(&NotesFacade::DESCRIPTOR)"));
+        assert!(interface.contains("NotesFacade::DESCRIPTOR"));
+        // The large-Err lint allowance the generated handlers need.
+        assert!(interface.contains("#![allow(clippy::result_large_err)]"));
+    }
+
+    #[test]
+    fn module_manifests_depend_on_the_right_framework_crates() {
+        let files = module_files("notes").unwrap();
+
+        let facade = contents(&files, "modules/notes/facade/Cargo.toml");
+        assert!(facade.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\", default-features = false }"));
+        assert!(facade.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
+        assert!(facade.contains("serde = { version = \"1\", features = [\"derive\"] }"));
+
+        // The application depends on the ports, never on the transport/framework.
+        let app = contents(&files, "modules/notes/application/Cargo.toml");
+        assert!(app.contains("notes-domain = { path = \"../domain\" }"));
+        assert!(app.contains("notes-facade = { path = \"../facade\" }"));
+        assert!(app.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
+        // No transport/framework DEPENDENCY entries (the prose may name them).
+        assert!(
+            !app.contains("seiva-http = {"),
+            "application stays transport-free"
+        );
+        assert!(
+            !app.contains("delonix-seiva = {"),
+            "application stays framework-free"
+        );
+
+        let infra = contents(&files, "modules/notes/infrastructure/Cargo.toml");
+        assert!(infra.contains("notes-application = { path = \"../application\" }"));
+        assert!(infra.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
+
+        // The interface carries the transport crates + the layers it composes.
+        let interface = contents(&files, "modules/notes/interface/Cargo.toml");
+        assert!(interface.contains("notes-facade = { path = \"../facade\" }"));
+        assert!(interface.contains("notes-application = { path = \"../application\" }"));
+        assert!(interface.contains("notes-infrastructure = { path = \"../infrastructure\" }"));
+        assert!(interface.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\""));
+        assert!(interface.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
+        assert!(interface.contains("seiva-grpc = { path = \"../../../../crates/seiva-grpc\" }"));
+        assert!(
+            interface.contains("seiva-openapi = { path = \"../../../../crates/seiva-openapi\" }")
+        );
+        assert!(interface.contains("axum = \"0.8\""));
+        assert!(interface.contains("serde_json = \"1\""));
+    }
+
+    #[test]
+    fn no_generated_file_pulls_in_dorm() {
+        let files = module_files("notes").unwrap();
+        for file in &files {
+            assert!(
+                !file.contents.contains("seiva-data-dorm = "),
+                "`{}` must not depend on the DORM gateway",
+                file.path
+            );
+        }
+    }
+
+    #[test]
+    fn pascal_case_conversion_handles_snake_names() {
+        assert_eq!(to_pascal_case("notes"), "Notes");
+        assert_eq!(to_pascal_case("order_items"), "OrderItems");
+        assert_eq!(to_pascal_case("a"), "A");
     }
 
     #[test]

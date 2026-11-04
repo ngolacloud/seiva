@@ -1,0 +1,25 @@
+# Interface layer of the `accounts` example: the transport-facing shell.
+# Depends on the facade (the trait it exposes). Must not depend on
+# infrastructure or domain in PRODUCTION code (ADR 0003). HTTP/gRPC wiring is a
+# later phase.
+#
+# The dev-dependencies exist only for the composition test, which wires the
+# in-memory infrastructure + the seiva-testing doubles into a ready
+# `AccountsService` and drives it through `AccountsApi` end to end — the module
+# independence/integration proof. They never enter a release build.
+[package]
+name = "accounts-interface"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+accounts-facade = { path = "../facade" }
+
+[dev-dependencies]
+accounts-application = { path = "../application" }
+accounts-infrastructure = { path = "../infrastructure" }
+seiva-testing = { path = "../../../crates/seiva-testing" }
+seiva-auth = { path = "../../../crates/seiva-auth" }
+tokio = { version = "1", features = ["rt", "macros"] }

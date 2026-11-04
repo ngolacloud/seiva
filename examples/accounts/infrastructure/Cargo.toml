@@ -1,0 +1,19 @@
+# Infrastructure layer of the `accounts` example: the repository adapter.
+# Depends on application + domain + seiva-ports. Not on interface (ADR 0003).
+#
+# DORM-FREE: this crate depends on NO `dorm-*` crate and NOT on
+# `seiva-data-dorm`, so it builds as a plain workspace member without the
+# private DORM repo. A DORM-backed `CredentialRepository` is provided via
+# `seiva-data-dorm` behind the `dorm` feature later; this in-memory adapter is
+# the default and the test/composition fallback.
+[package]
+name = "accounts-infrastructure"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+accounts-application = { path = "../application" }
+accounts-domain = { path = "../domain" }
+seiva-ports = { path = "../../../crates/seiva-ports" }

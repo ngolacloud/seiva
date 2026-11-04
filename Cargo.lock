@@ -3,6 +3,50 @@
 version = 3
 
 [[package]]
+name = "accounts-application"
+version = "0.1.0"
+dependencies = [
+ "accounts-domain",
+ "accounts-facade",
+ "seiva-auth",
+ "seiva-ports",
+ "seiva-testing",
+ "tokio",
+]
+
+[[package]]
+name = "accounts-domain"
+version = "0.1.0"
+
+[[package]]
+name = "accounts-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "accounts-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "accounts-application",
+ "accounts-domain",
+ "seiva-ports",
+]
+
+[[package]]
+name = "accounts-interface"
+version = "0.1.0"
+dependencies = [
+ "accounts-application",
+ "accounts-facade",
+ "accounts-infrastructure",
+ "seiva-auth",
+ "seiva-testing",
+ "tokio",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2360,14 +2404,19 @@ dependencies = [
 name = "seiva-cli"
 version = "0.1.0"
 dependencies = [
+ "accounts-application",
+ "accounts-facade",
+ "accounts-infrastructure",
+ "accounts-interface",
+ "async-trait",
  "clap",
  "delonix-seiva",
  "notes-facade",
- "seiva-auth",
  "seiva-grpc",
  "seiva-openapi",
- "serde",
+ "seiva-ports",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

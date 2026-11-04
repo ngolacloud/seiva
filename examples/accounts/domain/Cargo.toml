@@ -1,0 +1,13 @@
+# Domain layer of the `accounts` example: entities and rules. Depends on nothing
+# but shared/kernel — the crate graph forbids any other layer, the framework or
+# DORM (ADR 0003). In particular it must NOT depend on `seiva-auth`: hashing is
+# the application layer's concern; the domain only accepts an already-hashed
+# credential.
+[package]
+name = "accounts-domain"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]

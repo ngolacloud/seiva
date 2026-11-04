@@ -1,0 +1,25 @@
+# Application layer of the `accounts` example: the service (facade impl), the
+# outbound port, and the use cases. Depends on domain, its own facade (DTOs +
+# trait), seiva-ports and seiva-auth (for Argon2id hashing). Not on
+# infrastructure, interface, or delonix-seiva directly (ADR 0003).
+#
+# NOTE (temp isolated workspace): framework crates are declared by explicit path
+# rather than `{ workspace = true }` because this nested workspace cannot read
+# the parent `[workspace.dependencies]`. The orchestrator reconciles on
+# integration.
+[package]
+name = "accounts-application"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+accounts-domain = { path = "../domain" }
+accounts-facade = { path = "../facade" }
+seiva-ports = { path = "../../../crates/seiva-ports" }
+seiva-auth = { path = "../../../crates/seiva-auth" }
+
+[dev-dependencies]
+seiva-testing = { path = "../../../crates/seiva-testing" }
+tokio = { version = "1", features = ["rt", "macros"] }

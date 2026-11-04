@@ -30,11 +30,21 @@ clap = { workspace = true }
 # alike.
 seiva-openapi = { path = "../seiva-openapi" }
 seiva-grpc = { path = "../seiva-grpc" }
-seiva-auth = { path = "../seiva-auth" }
 # The built-in demonstration facade the CLI documents at compile time.
 notes-facade = { path = "../../examples/notes/facade" }
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `seiva user create` drives the real `accounts` module use case (the CLI is the
+# application/composition layer): it builds an AccountsService over the in-memory
+# repository and in-process ports. The module hashes with seiva-auth internally,
+# so the CLI no longer depends on seiva-auth directly.
+accounts-facade = { path = "../../examples/accounts/facade" }
+accounts-application = { path = "../../examples/accounts/application" }
+accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
+accounts-interface = { path = "../../examples/accounts/interface" }
+seiva-ports = { workspace = true }
+async-trait = { workspace = true }
+# A current-thread runtime to drive the module's async use case from the sync CLI.
+tokio = { version = "1", features = ["rt"] }
 
 [features]
 # Forward the data-layer toggle to the framework crate so `--no-default-features`

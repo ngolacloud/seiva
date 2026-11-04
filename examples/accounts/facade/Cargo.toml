@@ -1,0 +1,13 @@
+# Facade layer of the `accounts` example module: the public contract + DTOs.
+# May depend only on shared/kernel and the Seiva macros (ADR 0003).
+[package]
+name = "accounts-facade"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# default-features off (the workspace declaration): the facade never pulls the
+# DORM data layer, matching examples/notes/facade.
+delonix-seiva = { workspace = true }

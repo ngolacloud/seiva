@@ -10,7 +10,6 @@ use clap::{Parser, Subcommand};
 use delonix_seiva::contract::{Facade, FacadeDescriptor};
 use delonix_seiva::scaffold::{self, GeneratedFile};
 use notes_facade::NotesFacade;
-use seiva_auth::hash_password;
 use seiva_grpc::proto_document;
 use seiva_openapi::{openapi_document, ApiInfo};
 use std::path::{Path, PathBuf};
@@ -324,30 +323,97 @@ fn builtin_proto() -> String {
         .join("\n")
 }
 
-/// A user credential record: a username and the Argon2id PHC hash of a password.
+/// In-process ports that let the CLI — the application/composition layer — drive
+/// the real `accounts` module use case without the DORM data layer.
 ///
-/// This is the JSON the `user create` command emits. It carries no plaintext
-/// password — only the self-describing PHC hash, which is safe to store.
-#[derive(serde::Serialize)]
-struct UserRecord {
-    /// The account's username.
-    username: String,
-    /// The Argon2id PHC hash string (`$argon2id$...`) of the account's password.
-    password_hash: String,
+/// Persistence is in-memory and lives only for the command's duration; a
+/// DORM-backed repository and the transactional ports arrive through the
+/// framework's `dorm` feature. The point today is that `seiva user create` runs
+/// the SAME `Accounts::create_user` use case a server would — validation, Argon2id
+/// hashing and the `accounts.user_created` event — not an ad-hoc hash.
+mod app_ports {
+    use async_trait::async_trait;
+    use seiva_ports::{EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
+    use std::future::Future;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A time-seeded [`IdGenerator`]: the 16 id bytes are the current time in
+    /// nanoseconds, big-endian. Unique enough for a single-shot CLI create; the
+    /// DORM gateway supplies a UUID generator for the persistent path.
+    pub struct SystemIds;
+
+    impl IdGenerator for SystemIds {
+        fn new_id(&self) -> Id {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            Id(nanos.to_be_bytes())
+        }
+    }
+
+    /// A pass-through [`UnitOfWork`]: it runs the use-case body directly, with no
+    /// real transaction. The DORM gateway's unit of work wraps the body in a real
+    /// database transaction and the transactional outbox.
+    pub struct DirectUnitOfWork;
+
+    impl UnitOfWork for DirectUnitOfWork {
+        async fn transaction<T, F, Fut>(&self, work: F) -> PortResult<T>
+        where
+            F: FnOnce() -> Fut + Send,
+            Fut: Future<Output = PortResult<T>> + Send,
+            T: Send,
+        {
+            work().await
+        }
+    }
+
+    /// An [`EventPublisher`] that reports the emitted event on stderr so the CLI
+    /// run shows the use case fired it. The DORM gateway writes it to the
+    /// transactional outbox instead.
+    pub struct StderrEventPublisher;
+
+    #[async_trait]
+    impl EventPublisher for StderrEventPublisher {
+        async fn publish(&self, topic: &str, _payload: &[u8]) -> PortResult<()> {
+            eprintln!("seiva: event emitted — {topic}");
+            Ok(())
+        }
+    }
 }
 
-/// Builds the JSON for a user credential record, hashing `password` with
-/// Argon2id via `seiva-auth`.
+/// Runs the `accounts` module's `create_user` use case over an in-memory
+/// repository and the in-process [`app_ports`], returning the created user as
+/// JSON (`{ "id", "username" }` — never the password or its hash, by the
+/// facade's contract).
 ///
 /// # Errors
 ///
-/// Returns the `seiva_auth::AuthError` raised if the Argon2id hashing fails.
-fn build_user_record_json(username: &str, password: &str) -> Result<String, seiva_auth::AuthError> {
-    let record = UserRecord {
-        username: username.to_string(),
-        password_hash: hash_password(password)?,
+/// Returns the module's error message (e.g. a rejected username or a duplicate)
+/// or a runtime-construction failure, as a `String`.
+fn create_user_via_module(username: &str, password: &str) -> Result<serde_json::Value, String> {
+    use accounts_application::AccountsService;
+    use accounts_infrastructure::InMemoryCredentialRepository;
+    use accounts_interface::AccountsApi;
+
+    let service = AccountsService {
+        repository: InMemoryCredentialRepository::new(),
+        ids: app_ports::SystemIds,
+        uow: app_ports::DirectUnitOfWork,
+        events: app_ports::StderrEventPublisher,
     };
-    Ok(serde_json::to_string_pretty(&record).expect("UserRecord always serialises"))
+    let api = AccountsApi::new(service);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .map_err(|err| format!("failed to start a runtime: {err}"))?;
+    let dto = runtime.block_on(api.create_user(username.to_string(), password.to_string()))?;
+
+    Ok(serde_json::json!({
+        // `id` is a u128; render it as a string so it survives any JSON consumer.
+        "id": dto.id.to_string(),
+        "username": dto.username,
+    }))
 }
 
 /// Reads a single line from STDIN, stripping the trailing newline (CR/LF).
@@ -377,7 +443,8 @@ fn proto() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `seiva user create`: hashes a stdin password and prints a credential record.
+/// `seiva user create`: reads a stdin password and creates the user through the
+/// `accounts` module's use case, printing the created user as JSON.
 fn user_create(username: &str) -> ExitCode {
     let password = match read_password_line() {
         Ok(password) => password,
@@ -386,12 +453,16 @@ fn user_create(username: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match build_user_record_json(username, &password) {
+    match create_user_via_module(username, &password) {
         Ok(json) => {
             eprintln!(
-                "seiva: note — this proves the hashing path; a later phase persists the record."
+                "seiva: note — created through the accounts module (Argon2id + domain rules); \
+                 persistence is in-memory until the `dorm` feature wires a real repository."
             );
-            println!("{json}");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).expect("the user JSON always serialises")
+            );
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -492,21 +563,25 @@ mod tests {
     }
 
     #[test]
-    fn user_record_json_carries_username_and_a_phc_hash() {
-        let json = build_user_record_json("alice", "hunter2").expect("hashing must succeed");
-        let record: serde_json::Value = serde_json::from_str(&json).expect("record must be JSON");
-        assert_eq!(record["username"], "alice");
-        let hash = record["password_hash"]
-            .as_str()
-            .expect("password_hash is a string");
+    fn user_create_goes_through_the_accounts_module_and_hides_the_secret() {
+        let user = create_user_via_module("alice", "hunter2").expect("create must succeed");
+        assert_eq!(user["username"], "alice");
+        assert!(user["id"].is_string(), "the created user carries an id");
+        // The facade's DTO carries no secret: neither the password nor its hash
+        // ever reaches the CLI output.
+        assert!(user.get("password").is_none());
+        assert!(user.get("password_hash").is_none());
+        let rendered = user.to_string();
         assert!(
-            hash.starts_with("$argon2id$"),
-            "expected an Argon2id PHC string, got: {hash}"
+            !rendered.contains("hunter2") && !rendered.contains("$argon2id$"),
+            "no secret must appear in the output: {rendered}"
         );
-        // The hash round-trips through the same crate's verifier.
-        assert!(
-            seiva_auth::verify_password("hunter2", hash).unwrap(),
-            "the emitted hash must verify against the source password"
-        );
+    }
+
+    #[test]
+    fn user_create_rejects_a_blank_username() {
+        // The domain rule runs inside the module's use case, not the CLI.
+        let err = create_user_via_module("   ", "hunter2").expect_err("blank username is rejected");
+        assert!(!err.is_empty(), "the module returns an error message");
     }
 }

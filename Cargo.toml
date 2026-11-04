@@ -72,6 +72,13 @@ members = [
     "examples/notes/application",
     "examples/notes/infrastructure",
     "examples/notes/interface",
+    # The `accounts` module (five layers) over seiva-auth: a real module the CLI
+    # `seiva user create` persists through. In-memory repository, DORM-free.
+    "examples/accounts/facade",
+    "examples/accounts/domain",
+    "examples/accounts/application",
+    "examples/accounts/infrastructure",
+    "examples/accounts/interface",
 ]
 
 [workspace.package]
