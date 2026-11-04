@@ -2,8 +2,10 @@
 
 Para um projeto gerado por `seiva project new` compilar **standalone** (fora da
 árvore do framework), os crates `seiva-*`/`delonix-seiva` têm de estar
-disponíveis por versão (crates.io) ou por git tag — hoje o scaffold emite deps
-`path` com um placeholder (`FRAMEWORK_CRATES`) que só resolve dentro do repo.
+disponíveis por versão (crates.io). O scaffold **já emite deps por versão**
+(`delonix-seiva = { version = "0.1", … }`, `seiva-http = "0.1"`, …; as camadas
+intra-projeto ficam `path`), por isso só falta **publicar** os crates para um
+projeto gerado compilar sozinho.
 
 ## Estado de publish-readiness (medido 2026-11-04)
 
@@ -29,7 +31,16 @@ A geração proto fica como ferramenta de CLI (`seiva proto`), a partir do mesmo
 descritor. `seiva-grpc` continua `publish = false` sem bloquear o projeto gerado,
 cujo grafo é agora inteiramente publicável.
 
-**BLOQUEADOR RESTANTE (decisão do dono — release pass):**
+**`seiva-cli` — marcado `publish = false` (decisão b):** depende dos exemplos
+pelos comandos-demo; instala-se via `cargo install --git …/seiva seiva-cli` até
+esses comandos serem extraídos. Projetos gerados **não** dependem do CLI, por
+isso isto não os afecta. Publicá-lo em crates.io fica para quando os comandos-
+demo saírem (decisão de produto, abaixo).
+
+**O único passo que falta para o projeto gerado compilar sozinho:** publicar os
+11 crates de biblioteca (owner-only). O scaffold já referencia a versão.
+
+**Decisão de produto diferida (não bloqueia nada do acima):**
 - `seiva-cli` depende dos exemplos (`notes-facade`, `accounts-*`) porque os
   comandos-demo `user create`/`openapi`/`proto` operam sobre eles. Decisão de
   produto: esses comandos são demo-only (extrair para exemplos/testes), feature-

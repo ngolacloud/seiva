@@ -303,10 +303,10 @@ fn bin_cargo_toml(app: &str) -> String {
          # The service runtime: the serve loop, 12-factor config, structured\n\
          # logging and the shutdown signal. The composition root reuses it instead\n\
          # of writing its own `main`.\n\
-         seiva-server = {{ path = \"{FRAMEWORK_CRATES}/seiva-server\" }}\n\
+         seiva-server = \"{FRAMEWORK_VERSION}\"\n\
          # The HTTP application builder (`router(health)` + health + /openapi.json\n\
          # + /docs); merge your modules' routers into it below.\n\
-         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
+         seiva-http = \"{FRAMEWORK_VERSION}\"\n\
          tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
          tracing = \"0.1\"\n"
     )
@@ -439,12 +439,11 @@ fn module_toml(module: &str) -> String {
     )
 }
 
-/// The relative path, from a module layer crate's directory
-/// (`modules/<module>/<layer>/`), to the framework's `crates/` directory. It
-/// assumes the project is generated next to a framework checkout; a published
-/// project uses version dependencies (`delonix-seiva = "0.1"`) instead, as the
-/// generated manifests note.
-const FRAMEWORK_CRATES: &str = "../../../../crates";
+/// The crates.io version requirement a generated project uses for the framework
+/// crates (`delonix-seiva = "0.1"`, …). Generated manifests depend on the
+/// framework by version, so a project compiles standalone once the crates are
+/// published; it is not tied to a local framework checkout.
+const FRAMEWORK_VERSION: &str = "0.1";
 
 /// Converts a validated snake_case name to PascalCase for the facade trait and
 /// its generated descriptor/router names (`order_items` → `OrderItems`).
@@ -663,10 +662,10 @@ fn facade_cargo_toml(module: &str) -> String {
          # project uses a version dependency (`delonix-seiva = \"0.1\"`); this scaffold\n\
          # uses a path so it builds against a local framework checkout. The data\n\
          # layer is off here — the facade needs none.\n\
-         delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
+         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          # The controller uses the facade's own DTOs as wire types, so the write DTO\n\
          # implements `seiva_http::Validate` and the error maps to `seiva_http::Problem`.\n\
-         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
+         seiva-http = \"{FRAMEWORK_VERSION}\"\n\
          serde = {{ version = \"1\", features = [\"derive\"] }}\n"
     )
 }
@@ -689,7 +688,7 @@ fn application_cargo_toml(module: &str) -> String {
          # The trait-only cross-cutting ports. The application codes against these,\n\
          # NEVER against `delonix-seiva`, `seiva-http` or DORM — that is what keeps\n\
          # it transport- and data-layer-independent.\n\
-         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\n\
+         seiva-ports = \"{FRAMEWORK_VERSION}\"\n\n\
          [dev-dependencies]\n\
          tokio = {{ version = \"1\", features = [\"rt\", \"macros\"] }}\n"
     )
@@ -701,7 +700,7 @@ fn infrastructure_cargo_toml(module: &str) -> String {
          [dependencies]\n\
          {module}-application = {{ path = \"../application\" }}\n\
          {module}-domain = {{ path = \"../domain\" }}\n\
-         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\
+         seiva-ports = \"{FRAMEWORK_VERSION}\"\n\
          # A DORM-backed repository arrives through the `seiva-data-dorm` gateway\n\
          # behind a `dorm` feature; the default in-memory adapter pulls in no ORM.\n"
     )
@@ -719,11 +718,11 @@ fn interface_cargo_toml(module: &str) -> String {
          # the concrete adapters.\n\
          {module}-application = {{ path = \"../application\" }}\n\
          # The controller macro + contract, the HTTP primitives it emits, and the\n\
-         # OpenAPI/proto generators — all driven by the facade descriptor.\n\
-         delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
-         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
-         seiva-openapi = {{ path = \"{FRAMEWORK_CRATES}/seiva-openapi\" }}\n\
-         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\
+         # OpenAPI generator — all driven by the facade descriptor.\n\
+         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva-http = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-ports = \"{FRAMEWORK_VERSION}\"\n\
          axum = \"0.8\"\n\
          serde_json = \"1\"\n"
     )
@@ -985,16 +984,19 @@ mod tests {
     fn module_manifests_depend_on_the_right_framework_crates() {
         let files = module_files("notes").unwrap();
 
+        // The framework crates are depended on by crates.io VERSION (so a
+        // generated project compiles standalone once they are published); the
+        // intra-project layer crates stay `path`.
         let facade = contents(&files, "modules/notes/facade/Cargo.toml");
-        assert!(facade.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\", default-features = false }"));
-        assert!(facade.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
+        assert!(facade.contains("delonix-seiva = { version = \"0.1\", default-features = false }"));
+        assert!(facade.contains("seiva-http = \"0.1\""));
         assert!(facade.contains("serde = { version = \"1\", features = [\"derive\"] }"));
 
         // The application depends on the ports, never on the transport/framework.
         let app = contents(&files, "modules/notes/application/Cargo.toml");
         assert!(app.contains("notes-domain = { path = \"../domain\" }"));
         assert!(app.contains("notes-facade = { path = \"../facade\" }"));
-        assert!(app.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
+        assert!(app.contains("seiva-ports = \"0.1\""));
         // No transport/framework DEPENDENCY entries (the prose may name them).
         assert!(
             !app.contains("seiva-http = {"),
@@ -1007,7 +1009,7 @@ mod tests {
 
         let infra = contents(&files, "modules/notes/infrastructure/Cargo.toml");
         assert!(infra.contains("notes-application = { path = \"../application\" }"));
-        assert!(infra.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
+        assert!(infra.contains("seiva-ports = \"0.1\""));
 
         // The interface carries the transport crates + `application` (allowed),
         // but NOT `infrastructure` (the layering rule forbids it).
@@ -1018,14 +1020,12 @@ mod tests {
             !interface.contains("notes-infrastructure = {"),
             "interface must not depend on infrastructure (layering rule)"
         );
-        assert!(interface.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
-        assert!(interface.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\""));
-        assert!(interface.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
+        assert!(interface.contains("seiva-ports = \"0.1\""));
+        assert!(interface.contains("delonix-seiva = { version = \"0.1\""));
+        assert!(interface.contains("seiva-http = \"0.1\""));
         // No seiva-grpc: proto generation is not per-module (it is a CLI tool).
-        assert!(!interface.contains("seiva-grpc = {"));
-        assert!(
-            interface.contains("seiva-openapi = { path = \"../../../../crates/seiva-openapi\" }")
-        );
+        assert!(!interface.contains("seiva-grpc"));
+        assert!(interface.contains("seiva-openapi = \"0.1\""));
         assert!(interface.contains("axum = \"0.8\""));
         assert!(interface.contains("serde_json = \"1\""));
     }

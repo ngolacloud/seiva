@@ -16,6 +16,13 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "The Delonix Seiva CLI (binary `seiva`): scaffold projects and modules, run the dev loop, lint the architecture."
+# Not published yet: the demo commands (`user create`, built-in `openapi`/`proto`)
+# depend on the example crates (`notes-*`, `accounts-*`, all publish = false).
+# Install meanwhile with `cargo install --git https://github.com/ngolacloud/seiva
+# seiva-cli`. Generated projects do NOT depend on the CLI, so this does not block
+# them. Publishing it to crates.io is gated on extracting those demo commands
+# (see docs/publishing.md).
+publish = false
 
 [[bin]]
 name = "seiva"
