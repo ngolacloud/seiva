@@ -32,6 +32,7 @@
 // box away, so the large-Err lint is allowed crate-wide.
 #![allow(clippy::result_large_err)]
 
+pub mod docs;
 pub mod guard;
 pub mod health;
 pub mod problem;
@@ -51,6 +52,7 @@ use serde::{Deserialize, Serialize};
 use delonix_seiva::contract::Facade;
 use notes_facade::NotesFacade;
 
+pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, Principal, RequiredPermission};
 pub use health::{health_router, Health, HealthState};
 pub use problem::{Problem, PROBLEM_JSON};
@@ -182,6 +184,7 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
         .merge(notes_router())
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
+        .route("/docs", get(docs::docs_handler))
         .layer(from_fn(security_headers))
         .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
 
