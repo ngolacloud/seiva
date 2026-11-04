@@ -957,9 +957,18 @@ dependencies = [
  "async-trait",
  "dorm-core",
  "dorm-outbox",
+ "seiva-messaging",
  "seiva-ports",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "seiva-messaging"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

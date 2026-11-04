@@ -165,4 +165,6 @@ jobs:
           set -euo pipefail
           cargo fmt --manifest-path apps/dorm-e2e/Cargo.toml --all --check
           cargo clippy --manifest-path apps/dorm-e2e/Cargo.toml --all-targets --all-features -- -D warnings
-          cargo test --manifest-path apps/dorm-e2e/Cargo.toml --all-features
+          # Serialize: the live tests each create tables, and concurrent
+          # CREATE TABLE IF NOT EXISTS on one Postgres races.
+          cargo test --manifest-path apps/dorm-e2e/Cargo.toml --all-features -- --test-threads=1

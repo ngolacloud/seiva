@@ -47,12 +47,12 @@ use std::time::{Duration, SystemTime};
 
 use accounts_application::CredentialRepository;
 use accounts_domain::User;
-use accounts_facade::UserDto;
+use accounts_facade::{Accounts, CreateUser, UserDto};
 use dorm_core::db::{self, with_session};
 use dorm_core::value::Value;
 use dorm_e2e::{
-    run_relay, users_table_ddl, DormCredentialRepository, LoggingPublisher, RelaySettings,
-    USERS_TABLE,
+    accounts_service, run_relay, users_table_ddl, DormCredentialRepository, LoggingPublisher,
+    RelaySettings, USERS_TABLE,
 };
 use seiva_auth::{hash_password, verify_password};
 use seiva_data_dorm::{connect, DormConfig, UuidIdGenerator};
@@ -127,15 +127,12 @@ impl Publisher for SharedPublisher {
     }
 }
 
-/// The required deliverable: a real round-trip through [`DormCredentialRepository`]
-/// against a live PostgreSQL server.
+/// A real round-trip through [`DormCredentialRepository`] against a live
+/// PostgreSQL server, driving the repository directly.
 ///
-/// The use case's own `create_user` is deliberately **not** used to drive this:
-/// its DORM event publisher serializes the use case's placeholder payload (raw
-/// id bytes) as JSON, which is not valid JSON, so the real path would fail at
-/// the outbox publish. Driving the repository directly is the honest way to
-/// exercise `save` + `find_by_username` end to end; the outbox path gets its own
-/// test below.
+/// This isolates the persistence adapter (`save` + `find_by_username`); the
+/// `accounts.user_created` outbox path and the full use case are covered by the
+/// two tests below.
 ///
 /// Steps: create `accounts_users`; hash a known password with the same
 /// `seiva-auth` the application layer uses; `save` the `User` inside a
@@ -319,6 +316,127 @@ async fn outbox_relay_forwards_a_published_event_against_real_postgres() {
         db::run(
             &format!("DELETE FROM {} WHERE topic = $1", dorm_outbox::CURSOR),
             &[Value::Text(topic.clone())],
+        )
+        .await?;
+        Ok::<(), dorm_core::Error>(())
+    })
+    .await;
+}
+
+/// The headline end-to-end proof: drive the REAL `Accounts::create_user` against
+/// live Postgres. The use case hashes the password, persists the user AND writes
+/// the `accounts.user_created` event to the transactional outbox in ONE
+/// transaction (its `DormUnitOfWork` opens its own session); a single relay pass
+/// then forwards that event. This exercises the whole module use case — not the
+/// repository by hand — and only works now that the use case publishes a JSON
+/// event payload (the DORM outbox publisher parses the bytes as JSON).
+///
+/// The topic is the use case's own fixed `accounts.user_created`, so the test
+/// first clears that topic's outbox/cursor rows and uses a per-run-unique relay
+/// consumer, making the "exactly one forwarded" assertion deterministic.
+#[tokio::test]
+async fn create_user_use_case_persists_and_outboxes_against_real_postgres() {
+    let Some(dsn) = test_dsn() else {
+        return;
+    };
+
+    let cfg = test_config(&dsn);
+    let db = Arc::new(connect(&cfg).expect("the DORM handle builds from the test DSN"));
+    let topic = "accounts.user_created";
+
+    // 1. Create the tables the use case touches (users + the outbox set), then
+    //    clear this fixed topic so the relay later forwards exactly this run's
+    //    event regardless of leftovers from a previous run.
+    with_session(db.clone(), async {
+        db::run(&users_table_ddl(), &[]).await?;
+        for ddl in dorm_outbox::migrations() {
+            db::run(&ddl, &[]).await?;
+        }
+        db::run(
+            &format!("DELETE FROM {} WHERE topic = $1", dorm_outbox::OUTBOX),
+            &[Value::Text(topic.to_string())],
+        )
+        .await?;
+        db::run(
+            &format!("DELETE FROM {} WHERE topic = $1", dorm_outbox::CURSOR),
+            &[Value::Text(topic.to_string())],
+        )
+        .await?;
+        Ok::<(), dorm_core::Error>(())
+    })
+    .await
+    .expect("the tables are created and the topic is cleared");
+
+    let suffix = unique_suffix();
+    let username = format!("uc-user-{suffix}");
+    let password = "correct horse battery staple";
+
+    // 2. Drive the REAL use case. Its `DormUnitOfWork` opens its own session and
+    //    transaction, so this runs outside any session we hold.
+    let service = accounts_service(connect(&cfg).expect("the service handle builds"));
+    let dto = service
+        .create_user(CreateUser {
+            username: username.clone(),
+            password: password.to_string(),
+        })
+        .await
+        .expect("create_user succeeds end to end against live DORM");
+    assert_eq!(dto.username, username);
+
+    // 3. The user was persisted by the use case and its credential verifies.
+    let found = with_session(db.clone(), async {
+        DormCredentialRepository.find_by_username(&username).await
+    })
+    .await
+    .expect("the read-back query runs")
+    .expect("the use case persisted the user");
+    assert!(
+        verify_password(password, &found.password_hash).expect("the PHC string parses"),
+        "the hash the use case stored verifies the password"
+    );
+
+    // 4. One relay pass forwards the event the use case wrote to the outbox.
+    let publisher = Arc::new(LoggingPublisher::new());
+    let settings = RelaySettings {
+        consumer: format!("dorm-e2e-uc-{suffix}"),
+        topic: topic.to_string(),
+        interval: Duration::ZERO,
+        drain_threshold: 0,
+        ..RelaySettings::default()
+    };
+    let report = with_session(
+        db.clone(),
+        run_relay(settings, async {}, SharedPublisher(publisher.clone())),
+    )
+    .await;
+    assert_eq!(report.errors, 0, "the live relay pass does not error");
+    assert_eq!(
+        report.processed, 1,
+        "exactly this run's user_created event is forwarded"
+    );
+    let sent = publisher.sent();
+    assert_eq!(sent.len(), 1, "the publisher recorded exactly one event");
+    assert_eq!(sent[0].ty, topic);
+    assert!(
+        sent[0].to_json().to_string().contains(&username),
+        "the forwarded event carries the created user's public identity"
+    );
+
+    // 5. Clean up: the user row and the outbox/cursor rows for the fixed topic.
+    let _ = with_session(db.clone(), async {
+        db::run(
+            &format!("DELETE FROM {USERS_TABLE} WHERE username = $1"),
+            &[Value::Text(username.clone())],
+        )
+        .await?;
+        db::run(
+            &format!("DELETE FROM {} WHERE topic = $1", dorm_outbox::OUTBOX),
+            &[Value::Text(topic.to_string())],
+        )
+        .await?;
+        db::run(
+            &format!("DELETE FROM {} WHERE topic = $1", dorm_outbox::CURSOR),
+            &[Value::Text(topic.to_string())],
         )
         .await?;
         Ok::<(), dorm_core::Error>(())

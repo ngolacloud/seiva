@@ -11,6 +11,7 @@ dependencies = [
  "seiva-auth",
  "seiva-ports",
  "seiva-testing",
+ "serde_json",
  "tokio",
 ]
 
@@ -1658,6 +1659,7 @@ dependencies = [
  "notes-facade",
  "seiva-ports",
  "seiva-testing",
+ "serde_json",
  "tokio",
 ]
 

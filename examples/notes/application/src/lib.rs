@@ -42,18 +42,24 @@ where
         let id = u128::from_be_bytes(self.ids.new_id().0);
         let note = Note::new(id, cmd.title).map_err(BoxError::from)?;
 
+        // The event payload is a JSON envelope — the DORM gateway's outbox
+        // publisher parses the bytes as JSON before persisting them, so a
+        // non-JSON payload would fail against the real data layer.
+        let event = serde_json::to_vec(&serde_json::json!({
+            "id": note.id.to_string(),
+            "title": note.title.clone(),
+        }))
+        .map_err(BoxError::from)?;
+
         // One transaction per use case (scope-based UnitOfWork, ADR 0004): the
         // save AND the event publish run inside it, so with the DORM gateway the
         // event lands in the transactional outbox in the SAME transaction as the
         // business change — they commit together or not at all. The relay worker
-        // forwards the event to the broker afterwards. The id bytes stand in for
-        // a serialized event envelope.
+        // forwards the event to the broker afterwards.
         self.uow
             .transaction(|| async {
                 self.repository.save(&note).await?;
-                self.events
-                    .publish("notes.created", &note.id.to_be_bytes())
-                    .await
+                self.events.publish("notes.created", &event).await
             })
             .await?;
 

@@ -18,6 +18,9 @@ publish = false
 
 [dependencies]
 seiva-ports = { path = "../seiva-ports" }
+# The outbox stores CloudEvents (the shape the relay reconstructs), so the
+# gateway wraps the application's event data in a CloudEvent envelope here.
+seiva-messaging = { path = "../seiva-messaging" }
 # DORM by pinned git revision (main @ the merged DORM-C + B1 + B2 campaign).
 dorm-core = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
 # The transactional outbox: EventPublisher writes the event here in the same

@@ -87,13 +87,22 @@ where
         let id = u128::from_be_bytes(self.ids.new_id().0);
         let user = User::new(id, cmd.username, password_hash).map_err(BoxError::from)?;
 
+        // The event payload is a JSON envelope — the DORM gateway's outbox
+        // publisher parses the bytes as JSON before persisting them, so a
+        // non-JSON payload would fail against the real data layer. It carries the
+        // public identity only (id + username), never the credential.
+        let event = serde_json::to_vec(&serde_json::json!({
+            "id": user.id.to_string(),
+            "username": user.username.clone(),
+        }))
+        .map_err(BoxError::from)?;
+
         // One transaction per use case (scope-based UnitOfWork, ADR 0004): the
         // duplicate check, the save AND the event publish run inside it, so with
         // the DORM gateway the event lands in the transactional outbox in the
         // SAME transaction as the business change — they commit together or not
         // at all. On a duplicate the body returns `Err`, so nothing is saved and
-        // the transaction rolls back. The id bytes stand in for a serialized
-        // event envelope.
+        // the transaction rolls back.
         self.uow
             .transaction(|| async {
                 if self
@@ -105,9 +114,7 @@ where
                     return Err(BoxError::from(AccountsError::UsernameTaken));
                 }
                 self.repository.save(&user).await?;
-                self.events
-                    .publish("accounts.user_created", &user.id.to_be_bytes())
-                    .await
+                self.events.publish("accounts.user_created", &event).await
             })
             .await?;
 

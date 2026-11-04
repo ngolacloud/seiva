@@ -10,6 +10,7 @@ dependencies = [
  "accounts-facade",
  "seiva-auth",
  "seiva-ports",
+ "serde_json",
 ]
 
 [[package]]
@@ -21,6 +22,32 @@ name = "accounts-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
+ "serde",
+]
+
+[[package]]
+name = "accounts-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "accounts-application",
+ "accounts-domain",
+ "seiva-ports",
+]
+
+[[package]]
+name = "accounts-interface"
+version = "0.1.0"
+dependencies = [
+ "accounts-application",
+ "accounts-facade",
+ "accounts-infrastructure",
+ "async-trait",
+ "axum",
+ "delonix-seiva",
+ "seiva-http",
+ "seiva-ports",
+ "tokio",
 ]
 
 [[package]]
@@ -1308,6 +1335,7 @@ dependencies = [
  "async-trait",
  "dorm-core",
  "dorm-outbox",
+ "seiva-messaging",
  "seiva-ports",
  "serde_json",
  "uuid",
@@ -1375,6 +1403,7 @@ dependencies = [
 name = "seiva-server"
 version = "0.1.0"
 dependencies = [
+ "accounts-interface",
  "axum",
  "delonix-seiva",
  "seiva-config",

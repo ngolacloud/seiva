@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
+use seiva_messaging::CloudEvent;
 use seiva_ports::{BoxError, Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
 use std::future::Future;
 use std::sync::Arc;
@@ -139,9 +140,20 @@ pub struct DormOutboxPublisher;
 #[async_trait]
 impl EventPublisher for DormOutboxPublisher {
     async fn publish(&self, topic: &str, payload: &[u8]) -> PortResult<()> {
-        let value: serde_json::Value =
+        // The application emits the event's DATA as JSON (it knows nothing of
+        // CloudEvents). The gateway wraps it in a CloudEvent envelope — the shape
+        // the relay reconstructs with `CloudEvent::from_json` before forwarding —
+        // and stores that in the outbox. The id is a fresh UUID; the source marks
+        // the framework data layer; the CloudEvents `type` is the topic.
+        let data: serde_json::Value =
             serde_json::from_slice(payload).map_err(|e| Box::new(e) as BoxError)?;
-        dorm_outbox::publish(topic, &value)
+        let event = CloudEvent::new(
+            uuid::Uuid::new_v4().to_string(),
+            "urn:delonix-seiva:data-layer",
+            topic,
+            data,
+        );
+        dorm_outbox::publish(topic, &event.to_json())
             .await
             .map(|_| ())
             .map_err(|e| Box::new(e) as BoxError)

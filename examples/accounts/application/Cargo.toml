@@ -19,6 +19,9 @@ accounts-domain = { path = "../domain" }
 accounts-facade = { path = "../facade" }
 seiva-ports = { path = "../../../crates/seiva-ports" }
 seiva-auth = { path = "../../../crates/seiva-auth" }
+# The domain event is published as a JSON envelope (the DORM outbox publisher
+# parses the payload as JSON).
+serde_json = "1"
 
 [dev-dependencies]
 seiva-testing = { path = "../../../crates/seiva-testing" }
