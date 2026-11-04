@@ -13,7 +13,13 @@ resolver = "2"
 # private DORM repo (a pinned git dependency), which the public CI does not have
 # without a token. It is built on its own to prove the boundary crossing until
 # the `dorm` feature wires it in (owner decision: CI token + build coupling).
-exclude = ["crates/seiva-data-dorm", "crates/seiva-outbox-relay"]
+exclude = [
+    "crates/seiva-data-dorm",
+    "crates/seiva-outbox-relay",
+    # RAG worker and the MCP-over-HTTP endpoint are DORM-git-coupled too.
+    "crates/seiva-rag-worker",
+    "crates/seiva-mcp",
+]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,
     # EventPublisher, Clock, IdGenerator. No runtime, no macros, no deps. Kept
@@ -30,6 +36,9 @@ members = [
     "crates/seiva-messaging",
     # The framework crate: the public entrypoint downstream apps depend on.
     "crates/delonix-seiva",
+    # The HTTP transport: axum/tower, RFC 9457 errors, facade-driven permission
+    # guard, health endpoints. Data-layer-free, so a workspace member.
+    "crates/seiva-http",
     # The installable CLI (`cargo install seiva-cli`, binary `seiva`): scaffolds
     # projects and modules, runs the dev loop, lints the architecture.
     "crates/seiva-cli",

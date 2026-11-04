@@ -1,0 +1,26 @@
+# seiva-rag-worker — the RAG indexing worker (DORM ADR 0019).
+#
+# DORM owns the one-pass index drain (`dorm_rag::worker::run_once`); this crate is
+# the loop the framework assigns to itself — interval, graceful shutdown and
+# metrics via the Seiva worker runtime. Like seiva-outbox-relay this crate is
+# standalone, excluded from the parent Seiva workspace until the `dorm` feature +
+# a CI token are wired (the owner's call). Build with
+# `CARGO_NET_GIT_FETCH_WITH_CLI=true`.
+[package]
+name = "seiva-rag-worker"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# The framework's worker runtime (the loop/shutdown/metrics) and the boundary
+# error type. `delonix-seiva` is data-layer-free, so no DORM feature is pulled.
+delonix-seiva = { path = "../delonix-seiva", default-features = false }
+seiva-ports = { path = "../seiva-ports" }
+# DORM's RAG indexing library — the one-pass `run_once` and the `Embedder` trait.
+# Pinned to the same git revision as seiva-outbox-relay.
+dorm-rag = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

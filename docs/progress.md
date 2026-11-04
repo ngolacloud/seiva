@@ -6,6 +6,26 @@
 
 ## Estado (2026-11-03)
 
+**+ Fan-out de 3 agentes especialistas: HTTP, RAG worker, MCP-HTTP (itens 1-3).**
+
+### Três crates por agentes especialistas em paralelo (integrados)
+- **`seiva-http`** (membro, DORM-free) — transporte HTTP axum/tower: erros RFC 9457
+  `problem+json`+request_id, extractor `Valid<T>`, guarda de permissão **conduzida pelo
+  `MethodDescriptor.requires`** da fachada, health live/ready (Starting/Ready/Draining),
+  demonstração a montar `Notes` (versão+permissão vêm do `NotesFacade::DESCRIPTOR`). 7 testes.
+- **`seiva-rag-worker`** (excluído, git-coupled) — `run_rag_worker` = `run_worker` sobre
+  `dorm_rag::worker::run_once` (genérico sobre `Embedder`). Espelha o relay.
+- **`seiva-mcp`** (excluído, git-coupled) — `POST /mcp` com **auth/zero-trust do Seiva** à
+  frente, despacho para `dorm_mcp::handle_message`; tenant/writable por pedido vêm do principal.
+  8 testes. Só usa a API pública do `dorm-mcp` (sem mudar o DORM).
+- **Orquestração:** cada agente num crate disjunto, `[workspace]` próprio p/ build isolado,
+  sem tocar no Cargo.toml raiz nem no git; eu integrei (removi `[workspace]`, registei
+  membro/exclude, gate do workspace completo). 25 grupos de testes; clippy `--all-features` +
+  doc `-D warnings` limpos; build do workspace **continua DORM-free**.
+- **Item 4 (ligar `dorm` feature ao gateway) RETIDO:** acopla o build ao DORM privado + exige
+  token de CI (decisão/segredo do dono).
+
+
 **Fundação + núcleo + facade + lint(×2) + scaffolding + módulo ligado + CI + gateway DORM.**
 
 ### Runtime de workers (`delonix-seiva::worker`)

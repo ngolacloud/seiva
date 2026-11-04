@@ -1,0 +1,40 @@
+# seiva-mcp — serving DORM's MCP server over HTTP with Seiva's own auth.
+#
+# The boundary (first cut): DORM owns the MCP *protocol* and the `stdio`
+# transport — the JSON-RPC request handler is `dorm_mcp::handle_message`, which
+# this crate calls and never reimplements. Seiva owns the HTTP *transport* and
+# the authentication / zero-trust in front of it, because "HTTP needs the
+# authentication and zero trust of the framework". So this crate is a fresh axum
+# endpoint plus a Seiva auth layer that dispatches into DORM's protocol core; it
+# deliberately does NOT use `dorm-mcp`'s own `serve_http`/`serve_on` or its
+# OAuth — that is DORM's HTTP, which Seiva replaces here.
+#
+# Like `seiva-outbox-relay` and `seiva-data-dorm`, DORM is a pinned git
+# dependency and this crate is excluded from the Seiva workspace until the
+# `dorm` feature + a CI token are wired (owner's call). It carries its own empty
+
+[package]
+name = "seiva-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Serve DORM's MCP server over HTTP behind Seiva's authentication and zero-trust (first cut)."
+
+[dependencies]
+# DORM owns the MCP protocol core. We use ONLY the public request handler plus
+# its config/token value types — never dorm-mcp's own HTTP transport or OAuth.
+dorm-mcp = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
+# The HTTP transport Seiva owns.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+serde_json = "1"
+# The framework's trait-only boundary: reused for the opaque boundary error type
+# so the auth layer surfaces failures in Seiva's vocabulary, not axum's.
+seiva-ports = { path = "../seiva-ports" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Drive the router in-process (`ServiceExt::oneshot`) so the auth + dispatch
+# path is tested without binding a socket or a live database.
+tower = { version = "0.5", features = ["util"] }
