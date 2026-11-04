@@ -111,7 +111,8 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
     }
 
     if let Some(limit) = security.rate_limit {
-        app = app.layer(from_fn_with_state(RateLimiter::new(limit), rate_limit));
+        let limiter = RateLimiter::new(limit).trusting_forwarded_for(security.trust_forwarded_for);
+        app = app.layer(from_fn_with_state(limiter, rate_limit));
     }
 
     app.layer(from_fn(request_id))

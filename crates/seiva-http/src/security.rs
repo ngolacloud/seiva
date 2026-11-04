@@ -52,6 +52,12 @@ pub struct HttpSecurity {
     /// `Some(RateLimit::default())` by default — disabling it is an explicit
     /// choice, never the default.
     pub rate_limit: Option<RateLimit>,
+    /// Whether the rate limiter keys on the trusted `X-Forwarded-For` client IP
+    /// instead of the raw TCP peer. Leave `false` (the default) for a directly
+    /// exposed service; set it **only** behind a single trusted reverse proxy, or
+    /// every client collapses into the proxy's single bucket. See
+    /// [`RateLimiter::trusting_forwarded_for`](crate::RateLimiter::trusting_forwarded_for).
+    pub trust_forwarded_for: bool,
 }
 
 impl Default for HttpSecurity {
@@ -59,6 +65,7 @@ impl Default for HttpSecurity {
         Self {
             cors_allowed_origins: Vec::new(),
             rate_limit: Some(RateLimit::default()),
+            trust_forwarded_for: false,
         }
     }
 }

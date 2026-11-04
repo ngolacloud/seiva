@@ -17,6 +17,20 @@
 //! runtime installs (see `seiva-server`). A request without that extension (a
 //! non-networked test harness driving the router directly) shares a single
 //! fallback bucket, so the limiter is still exercised but never panics.
+//!
+//! **Behind a reverse proxy**, the peer IP is the proxy's, so every client would
+//! collapse into one bucket. A deployment that terminates TLS at a *single*
+//! trusted edge sets [`RateLimiter::trusting_forwarded_for`] (wired from
+//! [`HttpSecurity`](crate::HttpSecurity)); the limiter then keys on the rightmost
+//! `X-Forwarded-For` entry — the address that trusted proxy observed, which a
+//! client cannot spoof (it can only prepend entries to its left). Deeper proxy
+//! chains need a dedicated edge, per the token-bucket note above.
+//!
+//! The per-client table is **bounded**: a flood of distinct source IPs (the very
+//! thing API4 guards against) must not let the limiter itself exhaust memory. At
+//! [`MAX_TRACKED_CLIENTS`] entries the table first drops every window that has
+//! fully elapsed; if it is still full of live counters it fails *open* for the
+//! new key rather than evict a live budget or reject a fresh client.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -24,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::HeaderValue;
+use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use seiva_ports::Clock;
@@ -77,6 +91,12 @@ struct Window {
     count: u32,
 }
 
+/// The ceiling on distinct client keys the limiter tracks at once. Reaching it
+/// triggers a sweep of elapsed windows; it bounds the table so the limiter cannot
+/// be turned into a memory-exhaustion vector by a flood of distinct source IPs.
+/// ~100k small entries is a few MiB.
+pub const MAX_TRACKED_CLIENTS: usize = 100_000;
+
 /// A shareable fixed-window rate limiter. Cloning shares the same underlying
 /// counters and clock, so the middleware layer and its state stay one limiter.
 #[derive(Clone)]
@@ -84,6 +104,7 @@ pub struct RateLimiter {
     limit: RateLimit,
     clock: Arc<dyn Clock>,
     windows: Arc<Mutex<HashMap<IpAddr, Window>>>,
+    trust_forwarded_for: bool,
 }
 
 impl RateLimiter {
@@ -100,7 +121,21 @@ impl RateLimiter {
             limit,
             clock,
             windows: Arc::new(Mutex::new(HashMap::new())),
+            trust_forwarded_for: false,
         }
+    }
+
+    /// Keys on the rightmost `X-Forwarded-For` entry instead of the raw peer IP.
+    ///
+    /// Enable this **only** when the service sits behind a single trusted reverse
+    /// proxy that sets `X-Forwarded-For`: the rightmost entry is the address that
+    /// proxy observed and a client cannot forge it. Left off (the default), the
+    /// limiter keys on the TCP peer — correct for a directly exposed service, but
+    /// collapsing every client into one bucket behind a proxy.
+    #[must_use]
+    pub fn trusting_forwarded_for(mut self, trust: bool) -> Self {
+        self.trust_forwarded_for = trust;
+        self
     }
 
     /// Records a request from `key` and reports whether it is permitted.
@@ -112,6 +147,23 @@ impl RateLimiter {
     fn check(&self, key: IpAddr) -> Result<(), Duration> {
         let now = self.clock.now();
         let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Bound the table: a flood of distinct keys must not grow it without end.
+        if windows.len() >= MAX_TRACKED_CLIENTS && !windows.contains_key(&key) {
+            // Drop every window that has fully elapsed — it carries no live
+            // budget, so forgetting it only resets an otherwise-idle key.
+            windows.retain(|_, w| {
+                now.duration_since(w.start).unwrap_or(Duration::ZERO) < self.limit.window
+            });
+            // Still full of *live* counters: fail OPEN for this new key rather
+            // than evict a live budget (which would hand back free quota) or
+            // reject a fresh client (a flood of spoofed IPs would 429 everyone).
+            // Memory stays capped either way.
+            if windows.len() >= MAX_TRACKED_CLIENTS && !windows.contains_key(&key) {
+                return Ok(());
+            }
+        }
+
         let window = windows.entry(key).or_insert(Window {
             start: now,
             count: 0,
@@ -140,7 +192,37 @@ impl RateLimiter {
 /// test harness). All such requests share this bucket.
 const UNKNOWN_PEER: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
-/// Middleware enforcing a [`RateLimiter`] keyed by peer IP.
+/// The rightmost parseable `X-Forwarded-For` entry — the address the single
+/// trusted reverse proxy in front observed. A client can prepend forged entries
+/// to the left of the header, but not past the value the trusted proxy appends,
+/// so taking the rightmost resists spoofing. `None` if the header is absent,
+/// unreadable, or holds no parseable address.
+fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    headers
+        .get("x-forwarded-for")?
+        .to_str()
+        .ok()?
+        .rsplit(',')
+        .find_map(|entry| entry.trim().parse::<IpAddr>().ok())
+}
+
+/// The key a request is rate-limited under: the trusted forwarded client IP when
+/// `trust_forwarded_for` is set and present, else the TCP peer IP, else the
+/// shared [`UNKNOWN_PEER`] fallback.
+fn client_key(request: &Request, trust_forwarded_for: bool) -> IpAddr {
+    if trust_forwarded_for {
+        if let Some(ip) = forwarded_client_ip(request.headers()) {
+            return ip;
+        }
+    }
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip())
+        .unwrap_or(UNKNOWN_PEER)
+}
+
+/// Middleware enforcing a [`RateLimiter`] keyed by client IP.
 ///
 /// On an exhausted budget it returns a `429` [`Problem`] carrying a `Retry-After`
 /// header (whole seconds, rounded up). Mount it with
@@ -150,11 +232,7 @@ pub async fn rate_limit(
     request: Request,
     next: Next,
 ) -> Response {
-    let key = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip())
-        .unwrap_or(UNKNOWN_PEER);
+    let key = client_key(&request, limiter.trust_forwarded_for);
 
     match limiter.check(key) {
         Ok(()) => next.run(request).await,
@@ -262,5 +340,64 @@ mod tests {
             .parse()
             .unwrap();
         assert!(retry_after > 0 && retry_after <= 30);
+    }
+
+    #[test]
+    fn forwarded_client_ip_takes_the_rightmost_parseable_entry() {
+        let mut headers = HeaderMap::new();
+        // A client prepends a forged entry; the trusted proxy appends the real
+        // one on the right — that is the one we must key on.
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("9.9.9.9, 203.0.113.7"),
+        );
+        assert_eq!(
+            forwarded_client_ip(&headers),
+            Some("203.0.113.7".parse().unwrap())
+        );
+
+        assert_eq!(forwarded_client_ip(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn trusted_forwarded_for_keys_each_client_independently() {
+        let clock = Arc::new(FixedClock::at_unix_secs(0));
+        let limiter = RateLimiter::with_clock(
+            RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(60),
+            },
+            clock.clone(),
+        )
+        .trusting_forwarded_for(true);
+
+        let a: IpAddr = "203.0.113.1".parse().unwrap();
+        let b: IpAddr = "203.0.113.2".parse().unwrap();
+
+        // One client exhausting its budget does not touch another's — the bug a
+        // single shared (proxy-IP) bucket would cause.
+        assert!(limiter.check(a).is_ok());
+        assert!(limiter.check(a).is_err());
+        assert!(limiter.check(b).is_ok());
+    }
+
+    #[test]
+    fn the_client_table_is_bounded_under_a_flood_of_distinct_keys() {
+        let clock = Arc::new(FixedClock::at_unix_secs(0));
+        let limiter = RateLimiter::with_clock(RateLimit::default(), clock.clone());
+
+        // Far more distinct keys than the cap, all within one window, must not
+        // grow the table past the ceiling: the limiter cannot be the API4 vector
+        // it defends against.
+        for i in 0..(MAX_TRACKED_CLIENTS as u64 + 5_000) {
+            let octets = (i >> 24) as u8;
+            let ip = IpAddr::from([octets, (i >> 16) as u8, (i >> 8) as u8, i as u8]);
+            let _ = limiter.check(ip);
+        }
+        let tracked = limiter.windows.lock().unwrap().len();
+        assert!(
+            tracked <= MAX_TRACKED_CLIENTS,
+            "table must stay bounded, got {tracked}"
+        );
     }
 }
