@@ -377,6 +377,29 @@ pub async fn serve_router(
     Ok(())
 }
 
+/// Resolves once the process is asked to shut down: Ctrl-C (SIGINT) on every
+/// platform, or `SIGTERM` on unix (the signal an orchestrator sends to stop a
+/// container). A generated `apps/<name>-api` feeds this to
+/// [`serve_router`] so its service drains gracefully on `delonix`/Kubernetes
+/// termination without reimplementing signal handling.
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut term = signal(SignalKind::terminate()).expect("install a SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 /// The default interval between background worker passes. A pass that drains a
 /// backlog could poll faster; the demonstration pass has no backlog, so it idles
 /// at this cadence until shutdown.

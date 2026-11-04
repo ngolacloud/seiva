@@ -10,29 +10,7 @@
 
 use std::process::ExitCode;
 
-use seiva_server::{observability, run_workers, serve, ServerConfig};
-
-/// Resolves once the process is asked to shut down: Ctrl-C (SIGINT) on every
-/// platform, or `SIGTERM` on unix (the signal an orchestrator sends to stop a
-/// container). Each caller builds its own future, so the server and the worker
-/// host can each await shutdown independently without sharing a channel.
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let mut term = signal(SignalKind::terminate()).expect("install a SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = term.recv() => {}
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
+use seiva_server::{observability, run_workers, serve, shutdown_signal, ServerConfig};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {

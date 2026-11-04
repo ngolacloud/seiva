@@ -114,17 +114,17 @@ pub fn project_files(name: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
         file("seiva.toml", seiva_toml(name)),
         file("Cargo.toml", workspace_cargo_toml(&app)),
         file(".gitignore", "/target\n**/*.rs.bk\n.env\n".to_owned()),
-        file("README.md", format!("# {name}\n\nA Delonix Seiva project. Add modules with `seiva module new <name>`.\n")),
+        file("README.md", format!("# {name}\n\nA Delonix Seiva project. Add modules with `seiva module new <name>`.\n\nRun locally with `seiva start`; build a distroless image with `delonix stack up` (see the `Delonixfile` and `compose.yaml`).\n")),
         file(&format!("schema/{name}.schema"), project_schema()),
         file("modules/.keep", String::new()),
         // apps/<name>-api: the composition root — wires modules, holds no logic.
         file(&format!("apps/{app}/Cargo.toml"), bin_cargo_toml(&app)),
-        file(
-            &format!("apps/{app}/src/main.rs"),
-            format!(
-                "//! Composition root for `{name}`: wire modules here, no business logic.\n\nfn main() {{\n    println!(\"{name} api — composition root (modules are wired here).\");\n}}\n"
-            ),
-        ),
+        file(&format!("apps/{app}/src/main.rs"), app_main_rs(name)),
+        // Cloud-native packaging: a distroless multi-stage image and a compose
+        // file that `delonix stack up` (or `docker compose`) runs.
+        file("Delonixfile", delonixfile(&app)),
+        file("compose.yaml", compose_yaml(name)),
+        file(".dockerignore", dockerignore()),
         // shared/kernel: shared value types, no business rules.
         file("shared/kernel/Cargo.toml", lib_cargo_toml("kernel", &[])),
         file(
@@ -284,8 +284,118 @@ fn workspace_cargo_toml(app: &str) -> String {
 
 fn bin_cargo_toml(app: &str) -> String {
     format!(
-        "[package]\nname = \"{app}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n"
+        "[package]\nname = \"{app}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n\
+         # The service runtime: the serve loop, 12-factor config, structured\n\
+         # logging and the shutdown signal. The composition root reuses it instead\n\
+         # of writing its own `main`.\n\
+         seiva-server = {{ path = \"{FRAMEWORK_CRATES}/seiva-server\" }}\n\
+         # The HTTP application builder (`router(health)` + health + /openapi.json\n\
+         # + /docs); merge your modules' routers into it below.\n\
+         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
+         tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
+         tracing = \"0.1\"\n"
     )
+}
+
+/// The composition root `main.rs`: a real Seiva server over the runtime's serve
+/// loop. It reads 12-factor config, installs JSON logging, builds the HTTP
+/// application (health, `/openapi.json`, `/docs`) and drains gracefully on
+/// SIGTERM. A new module's router is merged into `app` at the marked line.
+fn app_main_rs(name: &str) -> String {
+    let app = format!("{name}-api");
+    format!(
+        "//! Composition root for `{name}`: the service's `main`. Wire your\n\
+         //! modules' routers into `app` below; keep business logic out.\n\n\
+         use seiva_http::{{router, Health}};\n\
+         use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
+         use std::process::ExitCode;\n\n\
+         #[tokio::main(flavor = \"multi_thread\")]\n\
+         async fn main() -> ExitCode {{\n\
+         \x20   // Structured JSON logs to stdout before anything else.\n\
+         \x20   observability::init();\n\n\
+         \x20   let config = match ServerConfig::from_process_env() {{\n\
+         \x20       Ok(config) => config,\n\
+         \x20       Err(error) => {{\n\
+         \x20           tracing::error!(%error, \"invalid configuration\");\n\
+         \x20           return ExitCode::FAILURE;\n\
+         \x20       }}\n\
+         \x20   }};\n\n\
+         \x20   let health = Health::starting();\n\
+         \x20   // The framework application: /health, /openapi.json and /docs.\n\
+         \x20   // Merge each module's router here as you add it, for example:\n\
+         \x20   //   let app = router(health.clone()).merge(notes_interface::router());\n\
+         \x20   let app = router(health.clone());\n\n\
+         \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
+         \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
+         \x20       Ok(()) => ExitCode::SUCCESS,\n\
+         \x20       Err(error) => {{\n\
+         \x20           tracing::error!(%error, \"serve failed\");\n\
+         \x20           ExitCode::FAILURE\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n"
+    )
+}
+
+/// A distroless, multi-stage build recipe for the app binary. The final image
+/// carries only the binary and its runtime libraries — no shell, no package
+/// manager — and runs as a non-root user. Dockerfile-compatible, so `delonix`,
+/// `docker` or `podman` all build it.
+fn delonixfile(app: &str) -> String {
+    format!(
+        "# syntax=docker/dockerfile:1\n\
+         # Multi-stage build producing a distroless, non-root image for `{app}`.\n\n\
+         FROM rust:1-slim AS builder\n\
+         WORKDIR /build\n\
+         COPY . .\n\
+         RUN cargo build --release --bin {app}\n\n\
+         # Distroless: only the binary and its runtime libs; no shell, no apt.\n\
+         FROM gcr.io/distroless/cc-debian12:nonroot AS runtime\n\
+         WORKDIR /app\n\
+         COPY --from=builder /build/target/release/{app} /app/{app}\n\
+         # Bind on all interfaces inside the container; the platform maps the port.\n\
+         ENV SEIVA_HTTP_ADDR=0.0.0.0:8080\n\
+         ENV APP_ENV=production\n\
+         EXPOSE 8080\n\
+         # `:nonroot` already runs as uid 65532. Distroless has no shell for a CMD\n\
+         # healthcheck; Kubernetes uses an httpGet readiness probe on /health/ready.\n\
+         USER nonroot\n\
+         ENTRYPOINT [\"/app/{app}\"]\n"
+    )
+}
+
+/// A `compose.yaml` that builds and runs the service with `delonix stack up`
+/// (or `docker compose up`). Optional backing services (brokers, identity) live
+/// in `compose/*.yaml` and are opted in explicitly, never on by default.
+fn compose_yaml(name: &str) -> String {
+    format!(
+        "# Run with `delonix stack up` (or `docker compose up`).\n\
+         # Optional backing services live in `compose/*.yaml`; opt in explicitly,\n\
+         # e.g. `delonix stack up -f compose.yaml -f compose/postgres.yaml`.\n\
+         services:\n\
+         \x20 {name}:\n\
+         \x20   build:\n\
+         \x20     context: .\n\
+         \x20     dockerfile: Delonixfile\n\
+         \x20   image: {name}:dev\n\
+         \x20   ports:\n\
+         \x20     - \"8080:8080\"\n\
+         \x20   environment:\n\
+         \x20     APP_ENV: production\n\
+         \x20     SEIVA_HTTP_ADDR: 0.0.0.0:8080\n\
+         \x20   # Distroless carries no shell for a CMD healthcheck; readiness is an\n\
+         \x20   # httpGet on /health/ready (Kubernetes) — see docs/first-day.md.\n\
+         \x20   restart: unless-stopped\n\
+         # Placeholder for opt-in backing services; nothing is enabled by default.\n\
+         # To add one: create compose/<service>.yaml and pass it with -f.\n"
+    )
+}
+
+/// The build-context excludes: never ship build output, VCS or secrets into the
+/// image layer.
+fn dockerignore() -> String {
+    "/target\n**/*.rs.bk\n.git\n.env\n".to_owned()
 }
 
 /// A library crate manifest with path dependencies `(package_name, rel_path)`.
@@ -629,6 +739,51 @@ mod tests {
         assert!(paths.contains(&"schema/shop.schema"));
         assert!(paths.contains(&"apps/shop-api/Cargo.toml"));
         assert!(paths.contains(&"shared/kernel/src/lib.rs"));
+        // Cloud-native packaging is part of the skeleton.
+        assert!(paths.contains(&"Delonixfile"));
+        assert!(paths.contains(&"compose.yaml"));
+        assert!(paths.contains(&".dockerignore"));
+    }
+
+    /// The generated project is cloud-native-ready: the composition root is a
+    /// real server (not a stub), and the image recipe is a distroless,
+    /// multi-stage, non-root build. This is the fitness function for Part D.
+    #[test]
+    fn project_is_cloud_native_ready() {
+        let files = project_files("shop").unwrap();
+        let get = |path: &str| {
+            files
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap_or_else(|| panic!("missing {path}"))
+                .contents
+                .as_str()
+        };
+
+        // The app is a real Seiva server, not the old println! stub.
+        let main = get("apps/shop-api/src/main.rs");
+        assert!(main.contains("serve_router"), "app must run the serve loop");
+        assert!(
+            main.contains("observability::init"),
+            "app must log structured"
+        );
+        assert!(main.contains("Health::starting"), "app must expose health");
+        assert!(!main.contains("println!"), "the stub must be gone");
+
+        // The Delonixfile is distroless, multi-stage and non-root.
+        let dockerfile = get("Delonixfile");
+        assert!(dockerfile.contains("AS builder"), "multi-stage");
+        assert!(
+            dockerfile.contains("distroless"),
+            "final image must be distroless"
+        );
+        assert!(dockerfile.contains("USER nonroot"), "must not run as root");
+        assert!(dockerfile.contains("cargo build --release --bin shop-api"));
+
+        // Compose builds from the Delonixfile and maps the port.
+        let compose = get("compose.yaml");
+        assert!(compose.contains("dockerfile: Delonixfile"));
+        assert!(compose.contains("8080:8080"));
     }
 
     /// Looks up a generated file's contents by its exact path.
