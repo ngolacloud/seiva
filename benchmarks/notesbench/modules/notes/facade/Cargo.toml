@@ -5,9 +5,8 @@ edition = "2021"
 
 [dependencies]
 # The framework macros (`#[facade]`) and contract descriptor. The project
-# depends on the framework by version (`delonix-seiva = "0.1"`); until those
-# crates are published, the workspace root's `[patch.crates-io]` redirects
-# them to a local checkout. The data layer is off here — the facade needs none.
+# depends on the framework by version (`delonix-seiva = "0.1"`), resolved from
+# crates.io. The data layer is off here — the facade needs none.
 delonix-seiva = { version = "0.1", default-features = false }
 # The controller uses the facade's own DTOs as wire types, so the write DTO
 # implements `seiva_http::Validate` and the error maps to `seiva_http::Problem`.

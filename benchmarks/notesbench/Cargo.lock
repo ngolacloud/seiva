@@ -129,6 +129,8 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 [[package]]
 name = "delonix-seiva"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "706d58f8e5b60a1efd3bd6bdb16e5e46fc96952fee603877e5379694b4362676"
 dependencies = [
  "inventory",
  "seiva-macros",
@@ -465,7 +467,6 @@ dependencies = [
  "delonix-seiva",
  "notes-infrastructure",
  "notes-interface",
- "seiva-grpc",
  "seiva-http",
  "seiva-openapi",
  "seiva-server",
@@ -615,17 +616,14 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "seiva-config"
 version = "0.1.0"
-
-[[package]]
-name = "seiva-grpc"
-version = "0.1.0"
-dependencies = [
- "delonix-seiva",
-]
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e9f8a659cb2af0728fc22de9f89ad4d774d5281ef5f44c9c2fa406d358e935"
 
 [[package]]
 name = "seiva-http"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9c3b1e0b4a9807400f7df0552399d60759774a1cc074523c3639383e60cc1b"
 dependencies = [
  "axum",
  "delonix-seiva",
@@ -640,6 +638,8 @@ dependencies = [
 [[package]]
 name = "seiva-identity"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa3c9b4deefe43007d5694489c81e7bdcbfe2e3af469bd2f161f6eaff21efe80"
 dependencies = [
  "jsonwebtoken",
  "serde",
@@ -649,6 +649,8 @@ dependencies = [
 [[package]]
 name = "seiva-macros"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b77838f941f3eb7fea4ab7b65c66983c4b2bcb2fd399be2e09393d9c05ce259"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -658,6 +660,8 @@ dependencies = [
 [[package]]
 name = "seiva-openapi"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88b4169cb768cb75e7ac87964c2e351b6ef1f7fbbaca5bd0bfb55756065ebcb3"
 dependencies = [
  "delonix-seiva",
  "serde",
@@ -667,6 +671,8 @@ dependencies = [
 [[package]]
 name = "seiva-ports"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5046778017d5b1ff7577b60106a6168806f1860d8c48d6cbcd2356f25d5105ae"
 dependencies = [
  "async-trait",
 ]
@@ -674,6 +680,8 @@ dependencies = [
 [[package]]
 name = "seiva-server"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67203b78c6a25458e031cda3d9e8b5060f523f2664d933d572ef553642f68f96"
 dependencies = [
  "axum",
  "delonix-seiva",
