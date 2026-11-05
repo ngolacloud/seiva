@@ -1,10 +1,13 @@
 # Seiva documentation
 
+<div class="seiva-hero" markdown>
+# Delonix Seiva
 Delonix **Seiva** is a Rust backend framework for robust, high-criticality
 systems — the ergonomics of FastAPI and the batteries of Django, delivered as a
 single, compiled, no-GC binary. A module owns its data and exposes **one
 machine-readable contract**; the HTTP routes, the OpenAPI document, the
 permission checks and the gRPC service are all *derived* from that contract.
+</div>
 
 > **New here?** Read [Seiva at a glance](getting-started/seiva-at-a-glance.md),
 > then the [Quick install guide](getting-started/quick-install.md). Coming from
@@ -17,16 +20,64 @@ This documentation follows the same four-mode structure as the Django docs — t
 *looking up*. (See [the structure map](STRUCTURE.md) for how each Django section
 maps to Seiva.)
 
-- **[Tutorials](getting-started/index.md)** — learning-oriented, hand-held
-  lessons that take you from an empty checkout to a running, authenticated,
-  packaged service.
-- **[Topic guides](topics/index.md)** — understanding-oriented discussions of
-  each layer: the data layer, the transport, validation, identity, security,
-  observability, events.
-- **[Reference](reference/index.md)** — information-oriented, exhaustive
-  descriptions of the CLI, the settings, the contract descriptor and the crates.
-- **[How-to guides](howto/index.md)** — task-oriented recipes for specific
-  problems (add a module, switch to DORM, deploy distroless).
+<div class="grid cards" markdown>
+
+-   :material-school: **[Tutorials](getting-started/index.md)**
+
+    ---
+
+    Learning-oriented, hand-held lessons that take you from an empty checkout to
+    a running, authenticated, packaged service.
+
+    [:octicons-arrow-right-24: Start the tutorial](getting-started/tutorial/part-1-your-first-module.md)
+
+-   :material-book-open-variant: **[Topic guides](topics/index.md)**
+
+    ---
+
+    Understanding-oriented discussions of each layer: the data layer, the
+    transport, validation, identity, security, observability, events.
+
+    [:octicons-arrow-right-24: Using Seiva](topics/index.md)
+
+-   :material-file-document-multiple: **[Reference](reference/index.md)**
+
+    ---
+
+    Information-oriented, exhaustive descriptions of the CLI, the settings, the
+    contract descriptor and the crates.
+
+    [:octicons-arrow-right-24: Look it up](reference/index.md)
+
+-   :material-wrench: **[How-to guides](howto/index.md)**
+
+    ---
+
+    Task-oriented recipes for specific problems: add a module, switch to DORM,
+    deploy distroless.
+
+    [:octicons-arrow-right-24: Recipes](howto/index.md)
+
+</div>
+
+### Highlights
+
+<div class="grid cards" markdown>
+
+-   :material-sitemap: **[Architecture](architecture.md)**
+
+    ---
+
+    The layers, the facade contract, and the transports generated from it.
+
+-   :material-speedometer: **[Benchmarks](benchmarks.md)**
+
+    ---
+
+    Seiva vs FastAPI vs Django — measured throughput and latency on the
+    production path.
+
+</div>
 
 ## Getting started
 
@@ -68,7 +119,7 @@ maps to Seiva.)
 ## The Seiva project
 
 - [Architecture](architecture.md) and the [design internals](internals/index.md)
-- [Architecture Decision Records](internals/adrs.md) (the [`adr/`](adr/) directory)
+- [Architecture Decision Records](internals/adrs.md) (the [`adr/`](adr/0001-seiva-foundations.md) directory)
 - [FAQ](faq/index.md) · [Glossary](glossary.md)
 - [Competitive landscape](competitive-landscape.md) and the [roadmap](roadmap.md)
 - [Release notes](releases/index.md) and the [engineering log](progress.md)

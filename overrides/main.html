@@ -1,0 +1,15 @@
+{#-
+  overrides/main.html — Material custom_dir entrypoint for the Seiva docs.
+
+  The Django look is driven almost entirely by docs/stylesheets/django.css;
+  this template only needs to exist so `custom_dir: overrides` resolves. The
+  hero on the landing page is authored as an `.seiva-hero` block in
+  docs/index.md, and prev/next footer links come from `navigation.footer`.
+
+  Hook points are left here for future partials (announcement bar, custom
+  footer) without having to introduce the directory later.
+-#}
+{% extends "base.html" %}
+
+{% block announce %}
+{% endblock %}
