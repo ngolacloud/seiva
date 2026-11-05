@@ -25,7 +25,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod admin;
 pub mod authn;
 pub mod docs;
 pub mod guard;
@@ -43,7 +42,6 @@ use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::get;
 use axum::{Json, Router};
 
-pub use admin::{admin_handler, ADMIN_HTML};
 pub use authn::authn;
 pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
@@ -157,14 +155,17 @@ pub fn router_with_modules(
     )
 }
 
-/// The framework's own routes, unlayered: health, `/openapi.json`, `/docs`, and
-/// the generated `/admin` console.
+/// The framework's own routes, unlayered: health, `/openapi.json` and `/docs`.
+///
+/// There is deliberately **no** `/admin` here: the admin console is an optional
+/// extension (`seiva-console-admin`, ADR 0008), not part of the base. A backend
+/// built without that crate answers `404` for `/admin`; a composition root that
+/// wants it calls `seiva_console_admin::mount(router)` before serving.
 fn framework_routes(health: Health) -> Router {
     Router::new()
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
         .route("/docs", get(docs::docs_handler))
-        .route("/admin", get(admin::admin_handler))
 }
 
 /// Wraps `app` (framework routes, and any merged module routes) in the transport

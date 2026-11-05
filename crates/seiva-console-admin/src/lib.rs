@@ -1,47 +1,72 @@
-//! A generated admin console, the Django-admin parity piece (roadmap P1-5).
+//! The optional Delonix Seiva admin console — an **extension** of the Seiva base
+//! (ADR 0008), not part of it.
 //!
 //! Django's signature feature is an auto-generated admin over your models. Seiva
 //! has no reflection, but it *does* have the project's full contract at runtime:
 //! `GET /openapi.json` already lists every mounted module's operations and — via
-//! `WireSchema` (ADR 0007) — the real request/response shapes. [`admin_handler`]
-//! turns that into a **self-contained** console: it groups the operations by
-//! resource, renders a form for each write operation from the request DTO's
-//! schema, and lets you exercise the real (auth-guarded) routes with a bearer
-//! token. No per-module code: add a module (`seiva module new`), and it appears.
+//! `WireSchema` (ADR 0007) — the real request/response shapes. This crate turns
+//! that into a **self-contained** console: it groups the operations by resource,
+//! renders a form for each write operation from the request DTO's schema, and
+//! lets you exercise the real (auth-guarded) routes with a bearer token. No
+//! per-module code: add a module (`seiva module new`), and it appears.
 //!
-//! Scope of this first cut: the console drives the module **operations** the
-//! contract declares (create/get/list/…). Generic *data* management — listing
-//! and editing rows of a model — arrives with the data-layer admin (it needs the
-//! DORM model registry) and is a separate increment.
+//! # This is an extension, not the base
 //!
-//! Unlike [`docs`](crate::docs) (the Scalar API reference, which loads from a
-//! CDN), this page is fully self-contained — inline HTML/CSS/JS, no external
-//! fetch beyond the same-origin `/openapi.json` and the API calls it makes — so
-//! its CSP forbids every remote origin.
+//! The framework base (`seiva-http`) carries **no** admin code and answers `404`
+//! for `/admin`. A composition root opts the console in explicitly and must
+//! recompile for it to appear:
+//!
+//! ```no_run
+//! use axum::Router;
+//! # fn modules() -> Router { Router::new() }
+//! let app: Router = modules();
+//! let app = seiva_console_admin::mount(app); // now GET /admin serves the console
+//! ```
+//!
+//! The dependency is one-way: this crate depends on `axum::Router` (Seiva's
+//! public transport type); nothing in the base depends on it, so a backend built
+//! without this crate has no admin assets and no `/admin` route — provable with
+//! `cargo tree`.
+//!
+//! # Scope of this first cut
+//!
+//! The console drives the module **operations** the contract declares
+//! (create/get/list/…). Generic *data* management — listing and editing rows of
+//! a model — and per-module registration with server-side authorization,
+//! typed forms and tenant masking are later increments (ADR 0008, Phase 3). This
+//! is an OpenAPI-driven operations console, **not** full Django-admin parity.
+//!
+//! # Security
+//!
+//! Unlike an API reference that loads a renderer from a CDN, this page is fully
+//! self-contained — inline HTML/CSS/JS, no external fetch beyond the same-origin
+//! `/openapi.json` and the API calls it makes. Its [`admin_csp`] forbids every
+//! remote origin and, crucially, does **not** use `unsafe-inline`: the inline
+//! `<style>` and `<script>` are pinned by their SHA-256 hash, computed from the
+//! exact bytes served (so the policy and the payload can never drift apart).
+//! The console does no authorization of its own — every operation it invokes is
+//! guarded server-side by the module's `#[seiva::controller]`; the bearer token
+//! is sent only in the `Authorization` header, never in a URL.
+
+#![forbid(unsafe_code)]
+
+use std::sync::OnceLock;
 
 use axum::http::header::CONTENT_SECURITY_POLICY;
 use axum::response::{Html, IntoResponse, Response};
+use axum::routing::get;
+use axum::Router;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use sha2::{Digest, Sha256};
 
-/// The Content-Security-Policy for `/admin`: everything same-origin, inline
-/// script/style allowed for the self-contained console, no remote origin at all
-/// (narrower than [`DOCS_CSP`](crate::docs::DOCS_CSP), which must allow a CDN).
-pub const ADMIN_CSP: &str = "default-src 'none'; \
-    script-src 'unsafe-inline'; \
-    style-src 'unsafe-inline'; \
-    connect-src 'self'; \
-    img-src 'self' data:; \
-    frame-ancestors 'none'";
+/// The path the console is served at when [`mount`]ed. The base framework does
+/// not serve this route; this crate does, only once a composition root opts in.
+pub const ADMIN_PATH: &str = "/admin";
 
-/// The self-contained admin console. Pure HTML/CSS/JS: it fetches the service's
-/// own `/openapi.json`, groups operations by resource, and renders a try-form per
-/// write operation built from the request schema, with a shared bearer token.
-pub const ADMIN_HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Delonix Seiva — Admin</title>
-<style>
+/// The console's stylesheet — the exact bytes that go between `<style>` and
+/// `</style>`, so the CSP's `style-src` hash is computed over this verbatim.
+const ADMIN_CSS: &str = r#"
   :root { color-scheme: light dark; --b: #8883; --fg: #222; --mut: #666; }
   @media (prefers-color-scheme: dark) { :root { --fg: #e8e8e8; --mut: #9aa; } }
   * { box-sizing: border-box; }
@@ -63,19 +88,14 @@ pub const ADMIN_HTML: &str = r#"<!doctype html>
   .fields label { font-size: 13px; color: var(--mut); display: block; }
   .out { font-family: ui-monospace, monospace; white-space: pre-wrap; font-size: 13px; margin-top: 8px; padding: 8px; border: 1px dashed var(--b); border-radius: 6px; display: none; }
   .muted { color: var(--mut); }
-</style>
-</head>
-<body>
-<header>
-  <h1>Seiva Admin</h1>
-  <div class="tok"><input id="token" placeholder="Bearer token (for guarded operations)" autocomplete="off" /></div>
-</header>
-<main>
-  <p class="muted" id="intro">Loading the service contract…</p>
-  <div id="resources"></div>
-</main>
-<script>
-const PLURAL = {};
+"#;
+
+/// The console's script — the exact bytes that go between `<script>` and
+/// `</script>`, so the CSP's `script-src` hash is computed over this verbatim.
+/// It attaches handlers via `addEventListener` (no inline `on*` attributes) and
+/// escapes every value it renders, so no `unsafe-inline`/`unsafe-hashes` is
+/// needed.
+const ADMIN_JS: &str = r#"
 function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function inputFor(name, schema){
   const t = (schema && schema.type) || 'string';
@@ -159,68 +179,93 @@ function render(spec){
 fetch('/openapi.json').then(r => r.json()).then(render).catch(e => {
   document.getElementById('intro').textContent = 'could not load /openapi.json: ' + e;
 });
-</script>
+"#;
+
+/// The page body between the hashed `<style>`/`<script>` blocks. `{css}`/`{js}`
+/// are substituted verbatim so the served inline content equals the hashed
+/// bytes.
+const ADMIN_SHELL: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Delonix Seiva — Admin</title>
+<style>{css}</style>
+</head>
+<body>
+<header>
+  <h1>Seiva Admin</h1>
+  <div class="tok"><input id="token" placeholder="Bearer token (for guarded operations)" autocomplete="off" /></div>
+</header>
+<main>
+  <p class="muted" id="intro">Loading the service contract…</p>
+  <div id="resources"></div>
+</main>
+<script>{js}</script>
 </body>
 </html>
 "#;
 
-/// `GET /admin` — serves the self-contained [`ADMIN_HTML`] console under the
-/// scoped [`ADMIN_CSP`] (so the strict default CSP does not blank it out).
-pub async fn admin_handler() -> Response {
-    ([(CONTENT_SECURITY_POLICY, ADMIN_CSP)], Html(ADMIN_HTML)).into_response()
+/// The rendered page, assembled once: the shell with the stylesheet and script
+/// inlined verbatim (the exact bytes [`admin_csp`] hashes).
+fn admin_html() -> &'static str {
+    static HTML: OnceLock<String> = OnceLock::new();
+    HTML.get_or_init(|| {
+        ADMIN_SHELL
+            .replacen("{css}", ADMIN_CSS, 1)
+            .replacen("{js}", ADMIN_JS, 1)
+    })
+    .as_str()
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{router, Health};
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use tower::ServiceExt;
+/// Base64 of the SHA-256 digest of `content` — the value a CSP `'sha256-…'`
+/// source expression carries.
+fn sha256_b64(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    BASE64.encode(digest)
+}
 
-    #[tokio::test]
-    async fn admin_page_is_served_self_contained_from_the_contract() {
-        let app = router(Health::starting());
-        let res = app
-            .oneshot(
-                Request::builder()
-                    .uri("/admin")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert!(res.headers()["content-type"]
-            .to_str()
-            .unwrap()
-            .starts_with("text/html"));
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body = String::from_utf8(bytes.to_vec()).unwrap();
-        // It builds itself from the service's OWN live contract…
-        assert!(body.contains("/openapi.json"));
-        assert!(body.contains("Seiva Admin"));
-        // …and is self-contained: no external origin (unlike the Scalar /docs).
-        assert!(!body.contains("http://") && !body.contains("https://"));
-    }
+/// The `Content-Security-Policy` for the console: everything same-origin, the
+/// inline `<style>`/`<script>` pinned by SHA-256 hash (no `unsafe-inline`), no
+/// remote origin at all, and navigation/embedding locked down (`base-uri`,
+/// `form-action`, `frame-ancestors` all `'none'`). Computed once from the exact
+/// bytes the console serves, so the policy can never drift from the payload.
+pub fn admin_csp() -> &'static str {
+    static CSP: OnceLock<String> = OnceLock::new();
+    CSP.get_or_init(|| {
+        format!(
+            "default-src 'none'; \
+             script-src 'sha256-{js}'; \
+             style-src 'sha256-{css}'; \
+             connect-src 'self'; \
+             img-src 'self' data:; \
+             base-uri 'none'; \
+             form-action 'none'; \
+             frame-ancestors 'none'",
+            js = sha256_b64(ADMIN_JS),
+            css = sha256_b64(ADMIN_CSS),
+        )
+    })
+    .as_str()
+}
 
-    #[tokio::test]
-    async fn admin_csp_is_self_contained_and_served() {
-        let app = router(Health::starting());
-        let res = app
-            .oneshot(
-                Request::builder()
-                    .uri("/admin")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let csp = res.headers()["content-security-policy"].to_str().unwrap();
-        // Same-origin only: no remote host is permitted anywhere in the policy.
-        assert!(csp.contains("default-src 'none'"));
-        assert!(csp.contains("connect-src 'self'"));
-        assert!(!csp.contains("https://"), "admin must not allow any CDN");
-    }
+/// `GET /admin` — serves the self-contained console under the strict, hash-based
+/// [`admin_csp`] (so no `unsafe-inline` is needed and the default `default-src
+/// 'none'` does not blank it out).
+pub async fn admin_handler() -> Response {
+    ([(CONTENT_SECURITY_POLICY, admin_csp())], Html(admin_html())).into_response()
+}
+
+/// A `Router` serving only the console at [`ADMIN_PATH`]. Merge it into an
+/// application router, or use [`mount`].
+pub fn admin_router() -> Router {
+    Router::new().route(ADMIN_PATH, get(admin_handler))
+}
+
+/// Mounts the console onto `router` (adds `GET /admin`) and returns it. This is
+/// the explicit opt-in a composition root calls; without it the backend has no
+/// admin route. Mounting twice is rejected by axum (a duplicate route panics at
+/// build time), surfacing a double-mount as a startup error rather than silently.
+pub fn mount(router: Router) -> Router {
+    router.merge(admin_router())
 }

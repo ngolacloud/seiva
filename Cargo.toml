@@ -42,6 +42,10 @@ members = [
     # The HTTP transport: axum/tower, RFC 9457 errors, facade-driven permission
     # guard, health endpoints. Data-layer-free, so a workspace member.
     "crates/seiva-http",
+    # The OPTIONAL admin console — an extension of the base (ADR 0008), NOT a
+    # dependency of it. A workspace member so CI builds/tests it, but nothing in
+    # the base depends on it: a backend built without it has no `/admin` route.
+    "crates/seiva-console-admin",
     # Password/credential primitives (Argon2id PHC) — accounts out of DORM's CLI.
     "crates/seiva-auth",
     # Identity: one verified Principal + Authenticator (OIDC/JWT via JWKS). Transport-free.

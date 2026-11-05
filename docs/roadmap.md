@@ -108,9 +108,14 @@ waits on P0-1. P2 runs continuously.
      that drives that API — list views, detail/edit forms generated from the
      `WireSchema` of each DTO.
   3. Register-and-forget: `seiva module new` makes a module admin-visible by default.
-- **Done:** a scaffolded project exposes `/admin` listing its modules' records, with
-  working create/edit, behind auth; a fitness/E2E (Playwright) creates a record
-  through the admin UI. Scorecard: *Admin GUI* ✖→🟡 then ✅.
+- **Status (2026-11-05):** an **operations** console (a form per contract
+  operation, bearer token) exists and is now extracted to the optional
+  `seiva-console-admin` extension (ADR 0008) — the base returns `404` for
+  `/admin`, the console mounts explicitly, and its CSP is hash-based (no
+  `unsafe-inline`). Still **pending** (the register-and-forget model-CRUD vision
+  above): per-module `--admin` registration, read/write admin API over DORM
+  models, server-side field/tenant authorization in the console, and the
+  Playwright E2E. Scorecard: *Admin GUI* 🟡 (operations console), not yet ✅.
 - **Depends on:** P0-1 (data), P0-3 (discovery).
 
 ### P1-6 · Database introspection (brownfield adoption) — **M/L**

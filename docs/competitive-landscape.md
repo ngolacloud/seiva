@@ -32,7 +32,7 @@ Legend for the Seiva column: a ⬆︎ marks a cell that moved in the P0–P1 cam
 | Built-in auth (verified JWT/OIDC) | 🟡 primitives | ✅ sessions | ✅ deny-by-default, verified | — |
 | Object-level authz (BOLA) | ✖ | 🟡 | ✅ `Scoped<T>` compile-time | — |
 | Security-by-default | 🟡 | ✅ | ✅ headers/authn/rate-limit/OWASP | — |
-| Admin GUI | ✖ | ✅ **signature** | ✅ `/admin` + `seiva db studio` ⬆︎ | 🟡 Studio (data GUI) |
+| Admin GUI | ✖ | ✅ **signature** | 🟡 `/admin` operations console (opt-in `seiva-console-admin`) + `seiva db studio` | 🟡 Studio (data GUI) |
 | Schema DSL + studio | — | — | ✅ schema sync + `db studio` ⬆︎ | ✅ Prisma |
 | DB introspection (brownfield) | ✖ | 🟡 inspectdb | ✅ `seiva db pull` ⬆︎ | ✅ `db pull` |
 | Multi-database | via SQLAlchemy | ✅ | ✅ PostgreSQL + CockroachDB + MySQL live (`--backend`) ⬆︎ | ✅ incl. Mongo |
@@ -57,7 +57,7 @@ stacked and unpushed; the owner integrates.
 | Data layer | DORM gateway on published-crate deps; module round-trip | live `Accounts::create_user` → persist+outbox+relay vs PG | `dbdd93a`, `06dd60b` |
 | Brownfield introspection | `seiva db pull` (delegates `dorm db pull`) | live → faithful `model CatalogItem` from a PG table | `f203cba` |
 | Migrations | `seiva db init/dev/migrate`; module schema → migration | live → `public.records` from the `notes` model | `006b9a8`, `82a7418` |
-| Admin GUI | `/admin` console (from the contract) + `seiva db studio` (data) | live `/admin` 200; `db studio` served rows | `2da7c64`, `c5fe05f` (+ DORM `552eaaf`) |
+| Admin GUI | `/admin` operations console (from the contract), opt-in `seiva-console-admin` (ADR 0008; base 404s) + `seiva db studio` (data) | console mounted → `/admin` 200 (hash-CSP); base → `/admin` 404; `db studio` served rows | `2da7c64`, `c5fe05f` (+ DORM `552eaaf`), ADR 0008 |
 | Project-aware proto | `seiva proto` documents the project (SEIVA_EMIT=proto) | fitness: generated bin emits `service Widgets` | `09c3772` |
 | Multi-database | `seiva db init --backend mysql\|sqlite\|postgres` (DORM's `Driver` seam) | live: `records` created in **MySQL 8** and **CockroachDB** v26.3, same model | `ef32082` |
 

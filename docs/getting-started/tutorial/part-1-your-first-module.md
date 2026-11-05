@@ -43,8 +43,10 @@ The compiler enforces the dependency direction, so the architecture cannot rot
 $ seiva start            # add --watch for hot-reload (needs cargo-watch)
 ```
 
-The service serves `/health`, `/openapi.json`, `/docs` and `/admin`, plus the
-module's route `POST /v1/notes`. Confirm the contract documents your module:
+The service serves `/health`, `/openapi.json`, `/docs`, plus the module's route
+`POST /v1/notes`. (`/admin` is an optional extension, not part of the base — see
+[API documents](../../topics/api-documents.md).) Confirm the contract documents
+your module:
 
 ```console
 $ seiva openapi | grep -o '"/v1/notes"'

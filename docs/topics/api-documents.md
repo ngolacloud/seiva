@@ -26,12 +26,24 @@ composition root); outside a project it shows the built-in demo facade.
 `GET /docs` serves an interactive API reference (Scalar) over the service's own
 `/openapi.json` — the FastAPI `/docs` parity piece.
 
-## The admin console (`/admin`)
+## The admin console (`/admin`) — an optional extension
 
-`GET /admin` is a self-contained console (no CDN) that renders each module as a
-resource with its operations and a try-form per write operation built from the
-DTO's schema, with a bearer-token field. Add a module and it appears — see
-[the admin](authentication.md) story and `seiva db studio` for data browsing.
+The admin console is **not** part of the base framework (ADR 0008). A plain
+Seiva backend answers `404` for `/admin` and carries none of its assets. The
+console ships as a separate crate, `seiva-console-admin`, that a composition root
+opts into explicitly:
+
+```rust
+// in your apps/<name>-api composition root, after building the module router:
+let app = seiva_console_admin::mount(app); // now GET /admin serves the console
+```
+
+Once mounted, `GET /admin` is a self-contained console (no CDN, strict
+hash-based CSP) that renders each module as a resource with its operations and a
+try-form per write operation built from the DTO's schema, with a bearer-token
+field. Add a module and it appears. It drives the contract's *operations*; for
+browsing/editing data rows use `seiva db studio`. See
+[the admin](authentication.md) story for the auth model.
 
 ## proto3 (`seiva proto`)
 

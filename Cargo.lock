@@ -2608,6 +2608,18 @@ name = "seiva-config"
 version = "0.1.0"
 
 [[package]]
+name = "seiva-console-admin"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "http-body-util",
+ "sha2",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "seiva-controller-test"
 version = "0.1.0"
 dependencies = [

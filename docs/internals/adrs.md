@@ -13,6 +13,7 @@ The index of ADRs.
 - ADR 0005 — Object-level authorization (BOLA)
 - ADR 0006 — Identity and authentication
 - ADR 0007 — Wire-schema contract fidelity
+- ADR 0008 — The admin console is an extension, not part of the base
 
 ## Related
 
