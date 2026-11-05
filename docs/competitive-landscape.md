@@ -35,7 +35,7 @@ Legend for the Seiva column: a ⬆︎ marks a cell that moved in the P0–P1 cam
 | Admin GUI | ✖ | ✅ **signature** | ✅ `/admin` + `seiva db studio` ⬆︎ | 🟡 Studio (data GUI) |
 | Schema DSL + studio | — | — | ✅ schema sync + `db studio` ⬆︎ | ✅ Prisma |
 | DB introspection (brownfield) | ✖ | 🟡 inspectdb | ✅ `seiva db pull` ⬆︎ | ✅ `db pull` |
-| Multi-database | via SQLAlchemy | ✅ | 🟡 PG live; Seiva DSN-agnostic, gated on DORM backend | ✅ incl. Mongo |
+| Multi-database | via SQLAlchemy | ✅ | ✅ PG + CockroachDB live; MySQL+ gated on DORM backend ⬆︎ | ✅ incl. Mongo |
 | Single-binary / distroless deploy | ✖ | ✖ | ✅ **built-in** | ✅ (vs Prisma npm+codegen) |
 | Hot reload / editor DX maturity | ✅ | ✅ | 🟡 hot-reload done; editor ext + compile times WIP | — |
 | Docs (Diátaxis) | ✅ excellent | ✅ **gold standard** | 🟡 structure mirrors Django; content WIP | ✅ |
@@ -58,13 +58,15 @@ stacked and unpushed; the owner integrates.
 | Brownfield introspection | `seiva db pull` (delegates `dorm db pull`) | live → faithful `model CatalogItem` from a PG table | `f203cba` |
 | Migrations | `seiva db init/dev/migrate`; module schema → migration | live → `public.records` from the `notes` model | `006b9a8`, `82a7418` |
 | Admin GUI | `/admin` console (from the contract) + `seiva db studio` (data) | live `/admin` 200; `db studio` served rows | `2da7c64`, `c5fe05f` (+ DORM `552eaaf`) |
+| Project-aware proto | `seiva proto` documents the project (SEIVA_EMIT=proto) | fitness: generated bin emits `service Widgets` | `09c3772` |
+| Multi-database (PG-wire) | **zero code** — DSN-agnostic data path runs on a 2nd engine | live `seiva db init/dev` created `records` in **CockroachDB** v26.3 | (no code change) |
 
 **Remaining** (the honest frontier): **P0-4** publish the crates (owner-only) —
-drops the interim patches; **P1-8** multi-database — Seiva's data commands are
-DSN-agnostic, but a *live* second backend is gated on DORM's runtime backend
-(MySQL is a compiler dialect profile in the current checkout; the live backend is
-DORM roadmap, ADR 0011); **P2** — docs content, a VS Code extension, a published
-benchmark, and project-aware `seiva proto`.
+drops the interim patches; **P1-8** multi-database beyond PG-wire — a *live* MySQL
+/ MSSQL / Mongo backend is gated on DORM finishing "one `db` over a backend trait"
+(the explicit open step of ADR 0011; `dorm-core`'s async runtime is PG-wired
+today, which is why PostgreSQL **and** CockroachDB already work and MySQL does
+not); **P2** — docs content, a VS Code extension, and a published benchmark.
 
 ## Where we are genuinely better
 
