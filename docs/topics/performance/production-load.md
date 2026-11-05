@@ -95,7 +95,63 @@ PROD_BENCH_DURATION=10s PROD_BENCH_CONNECTIONS=50 bash benchmarks/production/run
 # raw oha JSON lands in benchmarks/production/results/
 ```
 
-A fully containerised, orchestrated multi-replica deployment behind a load
-balancer (via `delonix`), with the distributed rate-limit and idempotency on the
-hot path, is the production form and a separate, larger exercise — tracked as an
-open gap, not claimed here.
+## Containerised, load-balanced multi-replica (via `delonix`)
+
+The two-processes-on-a-host model above shares a database but has no load balancer
+and no *shared* rate budget — the in-process limiter counts per process, so two
+replicas behind a round-robin balancer would each admit a full budget (≈2× the
+intended ceiling). The containerised deployment closes exactly that gap.
+
+[`benchmarks/production/delonix/`](../../../benchmarks/production/delonix/) brings
+up, with **`delonix compose up`** (no Docker daemon), a five-service stack:
+PostgreSQL 16 + Redis 7 + **two** `admin-data-e2e` replicas + an **HAProxy** load
+balancer (`option forwardfor`, round-robin, `/health/ready` checks). Each replica
+runs the **distributed** Redis rate limiter (ADR 0015) keyed on the forwarded
+client IP, so the per-client budget is counted in one shared store.
+
+### Proof A — ONE rate budget across replicas
+
+With the per-client limit set to **120 req/min** and a 4000-request burst driven
+through the load balancer (both replicas serving it round-robin):
+
+| Admitted (2xx) | Rejected (429) | Expected if NOT shared |
+|---:|---:|---:|
+| **119** | 3881 | ~240 (2× budget) |
+
+The two replicas admitted **119** — one budget, not two. A per-process limiter
+behind the same balancer would have admitted ≈240. This is the property the
+single-host run could not demonstrate, and it is enforced by the shared Redis
+counter (`INCR`/`PEXPIRE`, one atomic round trip per request).
+
+### Proof B — throughput through the containerised load balancer
+
+Limit raised out of the way; traffic driven at the HAProxy frontend (which fans
+out to both replicas):
+
+| Case | req/s | p50 | p95 | p99 | 2xx |
+|---|---:|---:|---:|---:|---:|
+| `GET /v1/catalogs` | 7 687 | 1.96 ms | 50.28 ms | 70.36 ms | 76 845 |
+| `GET /v1/catalogs` (2nd run) | 8 426 | 1.56 ms | 65.00 ms | 72.40 ms | 84 225 |
+| `POST /v1/catalogs` | 5 830 | 2.44 ms | 57.52 ms | 100.88 ms | 58 258 |
+
+These are **lower throughput and higher tail latency than the host figures above**,
+and that is expected and honest: every request now crosses the container bridge,
+funnels through a single HAProxy connection point, **and** pays a Redis round trip
+for the distributed limiter. That is the cost of a *correct shared budget across
+replicas* — the deployment trades latency for the guarantee Proof A demonstrates.
+The host numbers isolate the DB path's cost; these isolate the orchestrated path's.
+
+### Reproduce
+
+```sh
+bash benchmarks/production/delonix/run.sh   # builds the binary, delonix compose up, proves A+B, tears down
+```
+
+### Still open
+
+**Idempotency is not yet on this deployment's write hot path.** The durable,
+cross-replica idempotency store (ADR 0012) is proved by `seiva-data-dorm`'s
+multi-process live test, but the `Catalog` HTTP write here does not yet attach an
+`Idempotency-Key`, so a retried POST is a second insert. Wiring the HTTP
+idempotency extractor + store into the generated write path (so the same key
+de-duplicates across these replicas) is the next increment.

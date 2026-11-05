@@ -144,7 +144,7 @@ pub fn router_with_auth(
     security: &HttpSecurity,
     authenticator: Option<Arc<dyn Authenticator>>,
 ) -> Router {
-    apply_framework_layers(framework_routes(health), security, authenticator)
+    apply_framework_layers(framework_routes(health), security, authenticator, None)
 }
 
 /// Builds the full application router: the framework routes **plus the caller's
@@ -167,6 +167,30 @@ pub fn router_with_modules(
         framework_routes(health).merge(modules),
         security,
         authenticator,
+        None,
+    )
+}
+
+/// Like [`router_with_modules`], but enforces the per-client rate limit with a
+/// **distributed** store ([`DistributedRateLimit`], ADR 0015) instead of the
+/// per-process limiter — the form that holds ONE budget across replicas behind a
+/// load balancer. The distributed limiter takes the in-process one's exact layer
+/// position (inside the security headers, so a `429` still carries them), so a
+/// `429` keeps its correlation id and headers; `security.rate_limit` is ignored
+/// when a distributed limiter is supplied. Set `security.trust_forwarded_for`
+/// (and pass it through on the limiter) only behind a single trusted proxy.
+pub fn router_with_modules_distributed(
+    health: Health,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+    modules: Router,
+    distributed: DistributedRateLimit,
+) -> Router {
+    apply_framework_layers(
+        framework_routes(health).merge(modules),
+        security,
+        authenticator,
+        Some(distributed),
     )
 }
 
@@ -192,6 +216,7 @@ fn apply_framework_layers(
     app: Router,
     security: &HttpSecurity,
     authenticator: Option<Arc<dyn Authenticator>>,
+    distributed: Option<DistributedRateLimit>,
 ) -> Router {
     let mut app = app.layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
 
@@ -199,7 +224,12 @@ fn apply_framework_layers(
         app = app.layer(cors);
     }
 
-    if let Some(limit) = security.rate_limit {
+    // The distributed limiter, when supplied, takes the in-process one's place at
+    // this exact layer position; otherwise the per-process limiter runs if the
+    // security config enables it.
+    if let Some(dist) = distributed {
+        app = app.layer(from_fn_with_state(dist, rate_limit_with_store));
+    } else if let Some(limit) = security.rate_limit {
         let limiter = RateLimiter::new(limit).trusting_forwarded_for(security.trust_forwarded_for);
         app = app.layer(from_fn_with_state(limiter, rate_limit));
     }

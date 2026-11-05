@@ -30,6 +30,7 @@ seiva-http = { path = "../../crates/seiva-http" }
 seiva-server = { path = "../../crates/seiva-server" }
 seiva-console-admin = { path = "../../crates/seiva-console-admin" }
 seiva-data-dorm = { path = "../../crates/seiva-data-dorm" }
+seiva-ratelimit-redis = { path = "../../crates/seiva-ratelimit-redis" }
 seiva-openapi = { path = "../../crates/seiva-openapi" }
 dorm-core = "0.6"
 # The `#[controller]` macro expands to an axum router.
