@@ -119,3 +119,16 @@ toml = { version = "0.9" }
 syn = { version = "3" }
 quote = "1"
 proc-macro2 = "1"
+
+# Release profile (Seiva §9 — LLVM via Cargo/rustc). ThinLTO + a single codegen
+# unit let LLVM optimise across crate boundaries (smaller, faster binary) at the
+# cost of build time; `strip` drops symbols for a leaner artefact. Deliberately
+# NO `target-cpu=native`: the default release binary must stay portable across
+# the hosts a PaaS schedules it on (set `RUSTFLAGS=-C target-cpu=native` per-host
+# only when you control the target). `panic` stays `unwind` so tests and any
+# `catch_unwind` boundary keep working. PGO is opt-in and workload-specific, not
+# baked into the default profile. Measurements: docs/topics/performance/llvm-profile.md.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
