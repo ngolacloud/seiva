@@ -43,9 +43,12 @@ accounts-domain = { path = "../../examples/accounts/domain" }
 # The trait-only boundary (BoxError, PortResult, the ports).
 seiva-ports = { path = "../../crates/seiva-ports" }
 # DORM used DIRECTLY: raw SQL (db::run/db::fetch/Value/Row) for the real
-# repository, and RelayConfig for the relay worker. Same url + rev as the gateway.
-dorm-core = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
-dorm-outbox = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
+# repository, and RelayConfig for the relay worker. Depended on by published
+# version (owner decision, roadmap P0-1), same as the gateway; the
+# `[patch.crates-io]` at the bottom redirects to the local DORM checkout until
+# DORM publishes.
+dorm-core = "0.6"
+dorm-outbox = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros", "net", "sync"] }
 tracing = "0.1"
 
@@ -57,3 +60,11 @@ seiva-auth = { path = "../../crates/seiva-auth" }
 # The accounts module's public DTO, used to prove the value crossing the boundary
 # carries no plaintext credential (it structurally has only id + username).
 accounts-facade = { path = "../../examples/accounts/facade" }
+
+# INTERIM — remove once dorm-core/dorm-outbox are published to crates.io. This is
+# the workspace root for the (excluded) e2e app, so its `[patch]` governs both this
+# crate and the `seiva-data-dorm` gateway it pulls in by path. Redirect the DORM
+# crates to the local checkout beside Seiva (projects/DORM).
+[patch.crates-io]
+dorm-core = { path = "../../../DORM/crates/dorm-core" }
+dorm-outbox = { path = "../../../DORM/crates/dorm-outbox" }
