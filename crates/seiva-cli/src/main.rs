@@ -93,11 +93,11 @@ enum Command {
         #[arg(long)]
         compact: bool,
     },
-    /// Print the proto3 service document for the built-in demonstration facade(s).
+    /// Print the proto3 service document.
     ///
-    /// LIMITATION: like `openapi`, this first cut documents only the framework's
-    /// built-in demonstration facade (`NotesFacade`); a later phase will
-    /// discover a project's own facades. A short note is also printed to stderr.
+    /// Inside a project (a `seiva.toml` is present) this documents THAT project's
+    /// facades via `SEIVA_EMIT=proto` on the composition root; outside a project it
+    /// falls back to the framework's built-in demonstration facade.
     Proto,
     /// Manage user credential records.
     User {
@@ -1044,13 +1044,54 @@ fn db_migrate() -> ExitCode {
     }
 }
 
-/// `seiva proto`: prints the proto3 service document for the built-in facades.
+/// `seiva proto`: prints the proto3 service document. Inside a project it
+/// documents THAT project's facades by building and running the composition root
+/// with `SEIVA_EMIT=proto` (from the modules linked into the binary); outside a
+/// project it falls back to the built-in demonstration facade(s). Mirrors
+/// [`openapi`].
 fn proto() -> ExitCode {
-    eprintln!(
-        "seiva: note — this documents the built-in demonstration facade(s) only; \
-         runtime introspection of a project's own facades is a later phase."
-    );
-    println!("{}", builtin_proto());
+    match std::fs::read_to_string("seiva.toml") {
+        Ok(manifest) => match scaffold::project_name(&manifest) {
+            Some(name) => emit_project_proto(&name),
+            None => {
+                eprintln!("seiva: seiva.toml has no `[project] name`.");
+                ExitCode::FAILURE
+            }
+        },
+        Err(_) => {
+            eprintln!(
+                "seiva: no project here — documenting the built-in demonstration facade(s). \
+                 Run inside a project (see `seiva project new`) to document your own."
+            );
+            println!("{}", builtin_proto());
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// Builds and runs `apps/<name>-api` with `SEIVA_EMIT=proto` to print the
+/// project's own proto3 document (from its linked modules). Build output goes to
+/// stderr (inherited); only the document reaches stdout.
+fn emit_project_proto(name: &str) -> ExitCode {
+    let app = format!("{name}-api");
+    eprintln!("seiva: building `{app}` to document this project's facades ...");
+    let output = match std::process::Command::new("cargo")
+        .args(["run", "--quiet", "--bin", &app])
+        .env("SEIVA_EMIT", "proto")
+        .stderr(std::process::Stdio::inherit())
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("seiva: failed to run `{app}`: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !output.status.success() {
+        eprintln!("seiva: `{app}` exited with {}", output.status);
+        return ExitCode::from(1);
+    }
+    print!("{}", String::from_utf8_lossy(&output.stdout));
     ExitCode::SUCCESS
 }
 

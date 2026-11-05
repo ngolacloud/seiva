@@ -405,10 +405,12 @@ fn bin_cargo_toml(app: &str) -> String {
          seiva-http = \"{FRAMEWORK_VERSION}\"\n\
          # The composition root holds the merged module routes as an `axum::Router`.\n\
          axum = \"0.8\"\n\
-         # Emitting THIS project's contract (`seiva openapi`, via SEIVA_EMIT): the\n\
-         # facade registry and the OpenAPI generator, driven by the linked modules.\n\
+         # Emitting THIS project's contract (`seiva openapi`/`proto`, via SEIVA_EMIT):\n\
+         # the facade registry and the OpenAPI/proto generators, driven by the\n\
+         # linked modules.\n\
          delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-grpc = \"{FRAMEWORK_VERSION}\"\n\
          serde_json = \"1\"\n\
          tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
          tracing = \"0.1\"\n\
@@ -497,8 +499,14 @@ fn app_main_rs(name: &str) -> String {
          \x20               }}\n\
          \x20           }}\n\
          \x20       }}\n\
+         \x20       \"proto\" => {{\n\
+         \x20           for facade in &facades {{\n\
+         \x20               println!(\"{{}}\", seiva_grpc::proto_document(facade));\n\
+         \x20           }}\n\
+         \x20           ExitCode::SUCCESS\n\
+         \x20       }}\n\
          \x20       other => {{\n\
-         \x20           eprintln!(\"seiva: unknown SEIVA_EMIT value `{{other}}` (expected `openapi`)\");\n\
+         \x20           eprintln!(\"seiva: unknown SEIVA_EMIT value `{{other}}` (expected `openapi` or `proto`)\");\n\
          \x20           ExitCode::FAILURE\n\
          \x20       }}\n\
          \x20   }}\n\
@@ -598,11 +606,12 @@ const FRAMEWORK_VERSION: &str = "0.1";
 /// reached transitively, through these crates' own `path`/`workspace`
 /// dependencies, so redirecting just these to a local checkout resolves the
 /// whole graph (see [`workspace_patch_section`]).
-pub const FRAMEWORK_CRATES: [&str; 5] = [
+pub const FRAMEWORK_CRATES: [&str; 6] = [
     "delonix-seiva",
     "seiva-http",
     "seiva-ports",
     "seiva-openapi",
+    "seiva-grpc",
     "seiva-server",
 ];
 
@@ -1440,7 +1449,6 @@ mod tests {
             .output()
             .expect("run the generated binary with SEIVA_EMIT=openapi");
 
-        let _ = std::fs::remove_dir_all(&work);
         assert!(
             output.status.success(),
             "the generated binary must emit its OpenAPI (rc {:?}); stderr:\n{}",
@@ -1455,6 +1463,31 @@ mod tests {
             doc["paths"]
                 .as_object()
                 .map(|m| m.keys().collect::<Vec<_>>())
+        );
+
+        // The same binary also emits the project's proto3 (SEIVA_EMIT=proto),
+        // from the same linked facade — the generated-contracts symmetry (P2-12).
+        let proto = std::process::Command::new(
+            std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned()),
+        )
+        .args(["run", "--quiet", "--bin", "shop-api"])
+        .current_dir(&work)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("SEIVA_EMIT", "proto")
+        .output()
+        .expect("run the generated binary with SEIVA_EMIT=proto");
+
+        let _ = std::fs::remove_dir_all(&work);
+        assert!(
+            proto.status.success(),
+            "the generated binary must emit its proto (rc {:?}); stderr:\n{}",
+            proto.status.code(),
+            String::from_utf8_lossy(&proto.stderr)
+        );
+        let proto = String::from_utf8_lossy(&proto.stdout);
+        assert!(
+            proto.contains("service Widgets {") && proto.contains("syntax = \"proto3\";"),
+            "the project's own module must be a proto service; got:\n{proto}"
         );
     }
 
