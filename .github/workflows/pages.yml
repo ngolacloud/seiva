@@ -58,15 +58,42 @@ jobs:
           </head>
           <body>
             <h1>Delonix Seiva</h1>
-            <p class="sub">A Rust backend framework for robust, high-criticality systems.</p>
+            <p class="sub">A Rust backend framework for robust, high-criticality systems —
+              the ergonomics of FastAPI and the batteries of Django, as one compiled binary.</p>
+            <p>
+              <a href="https://crates.io/crates/delonix-seiva"><code>delonix-seiva</code> on crates.io (0.1.0)</a>
+              · <a href="https://github.com/ngolacloud/seiva">Source</a>
+              · <a href="https://github.com/ngolacloud/seiva/releases/tag/v0.1.0">Release 0.1.0</a>
+            </p>
 
-            <h2>Guides</h2>
+            <h2>Start here</h2>
             <ul>
               <li><a href="https://github.com/ngolacloud/seiva#readme">Overview (README)</a></li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/getting-started/seiva-at-a-glance.md">Seiva at a glance</a>
+                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/getting-started/quick-install.md">Quick install</a>
+                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/quickstart.md">Quickstart</a></li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/first-day.md">Coming from FastAPI</a></li>
+            </ul>
+
+            <h2>Documentation</h2>
+            <p class="sub">Organised like the Django docs (the <a href="https://diataxis.fr">Diátaxis</a> model).</p>
+            <ul>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/getting-started/index.md">Tutorials</a>
+                  — hand-held lessons from empty checkout to a packaged, authenticated service</li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/topics/index.md">Topic guides</a>
+                  — the data layer, transport, validation, identity, security, events</li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/reference/index.md">Reference</a>
+                  — the CLI, settings, the contract descriptor and the crates</li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/howto/index.md">How-to guides</a>
+                  — add a module, switch to DORM, deploy distroless</li>
+            </ul>
+            <ul>
               <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/architecture.md">Architecture</a>
                   — the layers, the facade contract, the generated transports</li>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/quickstart.md">Quickstart</a>
-                  — scaffold, run and call a service end to end</li>
+              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/benchmarks.md">Benchmarks</a>
+                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/competitive-landscape.md">Competitive landscape</a>
+                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/releases/index.md">Release notes</a></li>
+              <li><a href="https://github.com/ngolacloud/seiva/tree/main/docs/adr">Architecture decision records (ADRs)</a></li>
             </ul>
 
             <h2>API reference</h2>
