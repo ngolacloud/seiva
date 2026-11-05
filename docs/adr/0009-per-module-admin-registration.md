@@ -124,7 +124,15 @@ access, so domain invariants stay in the module):
   proves create → get → list (ordered) → update → delete each persist through
   DORM against real PostgreSQL.
 
-Still pending (next slice): the console's row-CRUD **UI** — a list table from
-`list`, a detail/edit form from `get`/`update`, a delete action — and a browser
-E2E over it, plus tenant-scoped row filtering and field masking (a `Ctx`/Principal
-seam into the module).
+The console's row-CRUD **UI** is built too: a resource exposing a `list`
+operation renders an admin **table** (columns from `list_fields`) with a create
+form, per-row **edit** (an inline form from the `update` schema, prefilled) and
+**delete** (confirm → `delete`), all through the module's contract operations.
+A browser E2E (`e2e/admin/catalog.mjs`) drives the full loop against the live
+`Catalog` module on PostgreSQL in a real headless Chrome — create → it appears in
+the list → edit → delete → it is gone — and caught a real singular/plural
+resource-matching bug.
+
+Still pending: tenant-scoped row filtering and field masking (a `Ctx`/Principal
+seam into the module), and pagination/search/ordering controls wired from the
+registered allow-lists.

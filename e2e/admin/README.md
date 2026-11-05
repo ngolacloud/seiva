@@ -33,9 +33,20 @@ This is **on-demand**, not part of `cargo test` or the default CI (which has no
 browser). The `admin-e2e` server crate *is* built by CI (so it cannot rot); the
 browser step runs where a Chrome is available.
 
+## Row CRUD (`catalog-run.sh`)
+
+`catalog.mjs` (run by `catalog-run.sh`) proves the console's **row CRUD** against
+a real DORM-backed module (`apps/admin-data-e2e`'s `Catalog`) on PostgreSQL:
+the resource renders as a table, then **create → it appears in the list → edit →
+delete → it is gone**, all through the module's contract operations. Needs Node,
+Chrome and a reachable PostgreSQL (DSN via `ADMIN_DATA_E2E_DSN`).
+
+```console
+$ ADMIN_DATA_E2E_DSN='host=/var/run/postgresql dbname=seiva_catalog_e2e' ./catalog-run.sh
+```
+
 ## Not yet covered
 
-The §10 list also names edit, filter, repeated-action idempotency, version/ETag
-conflict, cross-tenant denial and extension removal. This first cut proves
-authenticate → list → create; the rest are follow-ups as the console grows those
-affordances (edit/filter need the model-row CRUD still pending in ADR 0009).
+The §10 list also names filter, version/ETag conflict, cross-tenant denial and
+extension removal. These are follow-ups as the console grows pagination/search,
+optimistic-concurrency and tenant-scoped reads (ADR 0009).

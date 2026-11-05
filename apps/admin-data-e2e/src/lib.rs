@@ -129,7 +129,10 @@ pub trait Catalog {
 // framework contract, not the admin UI. Permissions mirror the facade guards.
 register_admin!(AdminResource {
     namespace: "catalog",
-    resource: "catalog",
+    // Must equal the OpenAPI resource segment, which is the facade name lowercased
+    // AND pluralised (`Catalog` -> `catalogs`), so the console pairs the resource
+    // with its `/v1/catalogs/...` operations.
+    resource: "catalogs",
     label: "Catalogue",
     facade: "Catalog",
     version: "v1",

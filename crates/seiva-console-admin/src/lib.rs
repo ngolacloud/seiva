@@ -102,6 +102,13 @@ const ADMIN_CSS: &str = r#"
   .fields label { font-size: 13px; color: var(--mut); display: block; }
   .out { font-family: ui-monospace, monospace; white-space: pre-wrap; font-size: 13px; margin-top: 8px; padding: 8px; border: 1px dashed var(--b); border-radius: 6px; display: none; }
   .muted { color: var(--mut); }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.tbl th, table.tbl td { text-align: left; padding: 6px 10px; border-top: 1px solid var(--b); vertical-align: top; }
+  table.tbl th { color: var(--mut); font-weight: 600; }
+  .acts { display: flex; gap: 6px; }
+  .acts button { font-size: 12px; padding: 3px 8px; }
+  .danger { color: #c0392b; }
+  .rowmsg { font-size: 12px; color: var(--mut); padding: 4px 10px; }
 "#;
 
 /// The console's script — the exact bytes that go between `<script>` and
@@ -183,18 +190,123 @@ function formFor(method, path, op){
   form.addEventListener('submit', run);
   return form;
 }
-function renderResource(r, spec){
+// Headers for an API call: JSON + the bearer from the token field.
+function apiHeaders(){
+  const h = { 'content-type': 'application/json' };
+  const t = document.getElementById('token').value.trim();
+  if (t) h['authorization'] = 'Bearer ' + t;
+  return h;
+}
+// Classify a resource's operations by CRUD role from the contract's path shape:
+// list = GET /{ver}/{res}; get = GET with a {param}; create = POST /{ver}/{res};
+// update/delete = POST .../update|delete.
+function classifyOps(spec, resource){
+  const k = {};
+  for (const o of opsForResource(spec, resource)){
+    const param = o.path.includes('{');
+    if (o.method === 'get' && !param) k.list = o;
+    else if (o.method === 'get' && param) k.get = o;
+    else if (o.method === 'post' && /\/update$/.test(o.path)) k.update = o;
+    else if (o.method === 'post' && /\/delete$/.test(o.path)) k.delete = o;
+    else if (o.method === 'post') k.create = o;
+  }
+  return k;
+}
+// The request-body field names for an operation (from its JSON schema).
+function bodyFields(op){
+  const schema = (((op.requestBody||{}).content||{})['application/json']||{}).schema || {};
+  return Object.keys(schema.properties || {});
+}
+async function apiCall(method, path, body){
+  const opts = { method, headers: apiHeaders() };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  let json = null; try { json = JSON.parse(text); } catch (_) {}
+  return { ok: res.ok, status: res.status, json, text };
+}
+// A resource with a `list` operation gets a real admin table: list + create +
+// per-row edit/delete, all through the module's contract operations.
+function renderDataResource(r, spec, k){
   const el = document.createElement('div'); el.className = 'res';
   el.innerHTML = `<h2>${esc(r.label)} <span class="muted">${esc(r.namespace)}/${esc(r.resource)}</span></h2>`;
-  if (Array.isArray(r.list_fields) && r.list_fields.length) {
-    el.innerHTML += `<div class="op muted">fields: ${r.list_fields.map(esc).join(', ')}</div>`;
+  const fields = (r.list_fields && r.list_fields.length) ? r.list_fields : ['id'];
+  const msg = document.createElement('div'); msg.className = 'rowmsg';
+  const say = (t) => { msg.textContent = t || ''; };
+
+  // Create form (if the caller may create).
+  if (k.create && r.can && r.can.create){
+    const cf = formFor('post', k.create.path, k.create.op);
+    cf.addEventListener('submit', () => setTimeout(() => refresh(), 150));
+    el.appendChild(cf);
   }
-  const ops = opsForResource(spec, r.resource);
+
+  const table = document.createElement('table'); table.className = 'tbl';
+  table.innerHTML = `<thead><tr>${fields.map(f=>`<th>${esc(f)}</th>`).join('')}<th></th></tr></thead><tbody></tbody>`;
+  el.appendChild(table);
+  el.appendChild(msg);
+  const tbody = table.querySelector('tbody');
+
+  function renderRow(item){
+    const tr = document.createElement('tr');
+    tr.innerHTML = fields.map(f => `<td>${esc(item[f] === undefined ? '' : item[f])}</td>`).join('');
+    const td = document.createElement('td'); td.className = 'acts';
+    if (k.update && r.can && r.can.change){
+      const b = document.createElement('button'); b.textContent = 'Edit';
+      b.addEventListener('click', () => editRow(tr, item)); td.appendChild(b);
+    }
+    if (k.delete && r.can && r.can.delete){
+      const b = document.createElement('button'); b.className = 'danger'; b.textContent = 'Delete';
+      b.addEventListener('click', async () => {
+        if (!confirm('Delete this record?')) return;
+        const res = await apiCall('POST', k.delete.path, { id: item.id });
+        if (res.ok) { say('deleted'); refresh(); } else { say('delete failed: ' + res.status); }
+      });
+      td.appendChild(b);
+    }
+    tr.appendChild(td);
+    return tr;
+  }
+  function editRow(tr, item){
+    const cols = bodyFields(k.update.op);
+    const form = document.createElement('tr');
+    const cell = document.createElement('td'); cell.colSpan = fields.length + 1;
+    const inputs = cols.map(c =>
+      `<label>${esc(c)} <input data-k="${esc(c)}" value="${esc(item[c] === undefined ? '' : item[c])}" /></label>`).join(' ');
+    cell.innerHTML = `<div class="fields">${inputs}</div><div class="acts"><button data-save>Save</button><button data-cancel>Cancel</button></div>`;
+    form.appendChild(cell); tr.replaceWith(form);
+    cell.querySelector('[data-cancel]').addEventListener('click', () => refresh());
+    cell.querySelector('[data-save]').addEventListener('click', async () => {
+      const body = {};
+      cell.querySelectorAll('[data-k]').forEach(i => {
+        const n = Number(i.value);
+        body[i.dataset.k] = (i.value !== '' && !Number.isNaN(n) && /^-?\d+$/.test(i.value.trim())) ? n : i.value;
+      });
+      const res = await apiCall('POST', k.update.path, body);
+      if (res.ok) { say('saved'); refresh(); } else { say('save failed: ' + res.status + ' ' + res.text); }
+    });
+  }
+  async function refresh(){
+    tbody.innerHTML = '';
+    const res = await apiCall('GET', k.list.path);
+    if (!res.ok) { say('could not list: ' + res.status); return; }
+    const rows = Array.isArray(res.json) ? res.json : [];
+    say(rows.length ? '' : 'no records yet');
+    for (const item of rows) tbody.appendChild(renderRow(item));
+  }
+  refresh();
+  return el;
+}
+function renderResource(r, spec){
+  const k = classifyOps(spec, r.resource);
+  // A resource exposing a `list` operation renders the full admin table UI.
+  if (k.list) return renderDataResource(r, spec, k);
+  // Otherwise fall back to the operation forms (an operations-only resource).
+  const el = document.createElement('div'); el.className = 'res';
+  el.innerHTML = `<h2>${esc(r.label)} <span class="muted">${esc(r.namespace)}/${esc(r.resource)}</span></h2>`;
   let shown = 0;
-  for (const {method, path, op} of ops) {
+  for (const {method, path, op} of opsForResource(spec, r.resource)) {
     const isWrite = method !== 'get';
-    // The caller sees a write form only if the registry says they may create or
-    // change; the server still enforces the per-operation guard regardless.
     if (isWrite && !(r.can && (r.can.create || r.can.change))) continue;
     el.appendChild(formFor(method, path, op));
     shown++;
