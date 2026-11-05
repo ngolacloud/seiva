@@ -6,15 +6,12 @@
 #
 # Dependency on DORM is by **published crate version** (owner decision, roadmap
 # P0-1): the manifest expresses the published contract (`dorm-core = "0.6"`,
-# `dorm-outbox = "0.1"`). Until those crates are on crates.io, the
-# `[patch.crates-io]` section below redirects them to a local DORM checkout
-# (sibling `../../../DORM`), so the gateway builds and its tests run offline —
-# the same interim pattern the generated projects use. Delete the patch once DORM
-# publishes.
+# `dorm-outbox = "0.1"`), both now on crates.io, so the gateway resolves them from
+# the registry with no local redirect.
 #
 # Deliberately NOT a member of the Seiva workspace: the public CI builds the
-# framework without DORM. The gateway is built on its own (it carries its own
-# `[patch]`), and the framework's `dorm` feature wires it in.
+# framework without DORM. The gateway is built on its own, and the framework's
+# `dorm` feature wires it in.
 [package]
 name = "seiva-data-dorm"
 version = "0.1.0"
@@ -27,7 +24,7 @@ seiva-ports = { path = "../seiva-ports" }
 # The outbox stores CloudEvents (the shape the relay reconstructs), so the
 # gateway wraps the application's event data in a CloudEvent envelope here.
 seiva-messaging = { path = "../seiva-messaging" }
-# DORM as published crates (depend by version; see the header and the patch below).
+# DORM as published crates (depend by version; see the header).
 dorm-core = "0.6"
 # The transactional outbox: EventPublisher writes the event here in the same
 # transaction as the business change (dorm-outbox stays in DORM — the data layer).
@@ -40,10 +37,3 @@ async-trait = "0.1"
 # The live round-trip test drives a real transaction on a running PostgreSQL; it
 # is gated on `SEIVA_DORM_TEST_DSN` and skips cleanly when it is unset.
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-
-# INTERIM — remove once dorm-core/dorm-outbox are published to crates.io. Redirect
-# the `= "0.6"` / `= "0.1"` dependencies above to the local DORM checkout so the
-# gateway builds and tests offline. DORM lives beside Seiva under `projects/`.
-[patch.crates-io]
-dorm-core = { path = "../../../DORM/crates/dorm-core" }
-dorm-outbox = { path = "../../../DORM/crates/dorm-outbox" }
