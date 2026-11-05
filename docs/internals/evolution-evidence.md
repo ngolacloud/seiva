@@ -43,7 +43,7 @@ New ADRs: **0008–0014** (+ the 0007 addendum). Indexed in
 | Core coherent after extraction | docs/tests | ✅ | base tests + docs aligned |
 | Security: audit of all lockfile variants + negative tests | ADR 0014, deny gates | 🟡 | advisories gate extended to excluded lockfiles; license/bans on excluded crates deferred |
 | Quality: fmt, clippy, unit/integration, doctests | CI | ✅ | all green each commit |
-| E2E + load with thresholds | — | ⏳ | **pending** (needs browser + multi-replica infra) |
+| E2E + load with thresholds | `e2e/admin` (browser) | 🟡 | admin browser E2E passes on headless Chrome (authenticate → list authorized → create, no secret leak); edit/filter/version-conflict + production load benchmark still pending |
 
 ## Compatibility matrix
 

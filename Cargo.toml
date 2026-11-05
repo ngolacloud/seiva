@@ -88,6 +88,10 @@ members = [
     "examples/accounts/application",
     "examples/accounts/infrastructure",
     "examples/accounts/interface",
+    # Composition root for the admin browser E2E (§10): accounts module + the
+    # console + a token authenticator. Built in CI (catches rot); the browser
+    # E2E itself is run on demand (needs a headless Chrome), not in `cargo test`.
+    "apps/admin-e2e",
 ]
 
 [workspace.package]

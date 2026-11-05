@@ -203,10 +203,17 @@ function renderResource(r, spec){
   return el;
 }
 async function load(){
+  // The registry is filtered server-side by the caller's Principal, so the
+  // bearer token must ride on THIS fetch (not only on the API calls) — otherwise
+  // the server sees an anonymous caller and returns nothing. Re-run on token
+  // change (wired below) so entering a token reveals the authorized resources.
+  const regHeaders = {};
+  const tok = document.getElementById('token').value.trim();
+  if (tok) regHeaders['authorization'] = 'Bearer ' + tok;
   let reg, spec;
   try {
     [reg, spec] = await Promise.all([
-      fetch('/admin/registry.json').then(r => { if (!r.ok) throw new Error('registry ' + r.status); return r.json(); }),
+      fetch('/admin/registry.json', { headers: regHeaders }).then(r => { if (!r.ok) throw new Error('registry ' + r.status); return r.json(); }),
       fetch('/openapi.json').then(r => r.json()),
     ]);
   } catch (e) {

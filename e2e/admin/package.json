@@ -1,0 +1,12 @@
+{
+  "name": "seiva-admin-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser E2E for the Seiva admin console (§10): authenticate, list the authorized resource, create. Uses the system Chrome via Playwright (no chromium download).",
+  "scripts": {
+    "test": "node admin.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}
