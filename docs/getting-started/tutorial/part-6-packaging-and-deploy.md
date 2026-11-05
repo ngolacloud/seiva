@@ -57,9 +57,16 @@ platform injects secrets; nothing is baked into the image. See
 
 From `seiva project new` to a distroless, authenticated, database-backed,
 self-documenting polls service — the same app as the Django tutorial, as one
-compiled binary. Next: the [topic guides](../../topics/index.md) for depth, or the
-[competitive landscape](../../competitive-landscape.md) for where Seiva stands
-against Django and FastAPI.
+compiled binary. It is a **modular monolith**: one deploy, with the `polls`
+module cleanly bounded inside it.
+
+## Next
+
+[Part 7: From monolith to a microservice](part-7-monolith-to-microservice.md) —
+promote `polls` to its own service with one command, the same module code
+running standalone. Or go deeper with the [topic guides](../../topics/index.md),
+or see the [competitive landscape](../../competitive-landscape.md) for where Seiva
+stands against Django and FastAPI.
 
 ---
 

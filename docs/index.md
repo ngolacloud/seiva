@@ -2,16 +2,46 @@
 
 <div class="seiva-hero" markdown>
 # Delonix Seiva
-Delonix **Seiva** is a Rust backend framework for robust, high-criticality
-systems — the ergonomics of FastAPI and the batteries of Django, delivered as a
-single, compiled, no-GC binary. A module owns its data and exposes **one
-machine-readable contract**; the HTTP routes, the OpenAPI document, the
-permission checks and the gRPC service are all *derived* from that contract.
+A Rust backend framework for robust, high-criticality systems — the **ergonomics
+of FastAPI** and the **batteries of Django**, delivered as a single, compiled,
+no-GC binary. Your handlers are plain `async fn`; a module owns its data and
+exposes **one machine-readable contract**, and from it Seiva *derives* the HTTP
+routes, the interactive API docs, the permission checks and the gRPC service —
+so you write behaviour, not boilerplate.
 </div>
 
 > **New here?** Read [Seiva at a glance](getting-started/seiva-at-a-glance.md),
 > then the [Quick install guide](getting-started/quick-install.md). Coming from
-> FastAPI? Start with [your first day](first-day.md).
+> FastAPI? Start with [your first day](first-day.md). Want to build something end
+> to end? The [tutorial](getting-started/tutorial/part-1-your-first-module.md)
+> builds a polls app as a monolith and then splits a module into a microservice.
+
+## Why Seiva
+
+<div class="grid cards" markdown>
+
+-   :material-flash: **Async by default**
+
+    Handlers are native `async fn` on a multi-threaded Tokio runtime — the
+    FastAPI mental model, with no GC and no event-loop surprises.
+
+-   :material-file-document-check: **Docs you never write**
+
+    Every service serves `/openapi.json` and interactive **Swagger UI** (`/docs`),
+    **ReDoc** (`/redoc`) and **Scalar** (`/scalar`) out of the box, generated from
+    the contract. No annotations, no spec to maintain.
+
+-   :material-shield-lock: **Secure and typed end to end**
+
+    Deny-by-default permissions per method, RFC 9457 problems, and DTOs whose real
+    fields are published to OpenAPI — the compiler keeps the wire honest.
+
+-   :material-arrange-send-backward: **Monolith *or* microservices**
+
+    Start as one modular binary; promote any module to its own service with
+    `seiva module split` when you need to — the same code, a deployment knob.
+
+</div>
 
 ## How the documentation is organized
 
@@ -90,6 +120,7 @@ maps to Seiva.)
   → [4 · Authentication](getting-started/tutorial/part-4-authentication.md)
   → [5 · Testing](getting-started/tutorial/part-5-testing.md)
   → [6 · Packaging & deploy](getting-started/tutorial/part-6-packaging-and-deploy.md)
+  → [7 · Monolith to microservice](getting-started/tutorial/part-7-monolith-to-microservice.md)
 - [Coming from FastAPI](first-day.md)
 
 ## The layers (topic guides)

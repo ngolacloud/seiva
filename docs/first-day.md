@@ -14,7 +14,7 @@ que já existe hoje, e é honesta sobre o que ainda falta.
 | `@app.post("/notes")` numa função | Um método numa *facade* (`#[seiva::facade]`); a rota é gerada do descritor | O contrato é a fonte da verdade; o transporte é derivado, não escrito à mão |
 | `pydantic.BaseModel` para o corpo | `Valid<T>` + `impl Validate` | Validação na entrada, erro `422` RFC 9457 (mais rigoroso que o default do FastAPI) |
 | `Depends(get_db)` por rota | Portas (`UnitOfWork`, `IdGenerator`, `EventPublisher`, `Clock`) injetadas no construtor do serviço da camada `application` | Injeção estática, verificada em compilação, trocável por *test doubles* (`seiva-testing`) |
-| `/docs` (Swagger UI) automático | `GET /docs` (Scalar) sobre o `/openapi.json` do serviço | ✅ hoje |
+| `/docs` (Swagger UI) e `/redoc` automáticos | `GET /docs` (Swagger UI), `/redoc` (ReDoc) e `/scalar` (Scalar) sobre o `/openapi.json` do serviço | ✅ hoje |
 | `/openapi.json` automático | `GET /openapi.json`, gerado de **todas** as fachadas montadas (descoberta em tempo de link) | ✅ hoje |
 | `HTTPException` | `Problem` (RFC 9457 `application/problem+json`) | Formato padronizado, com `request_id` de correlação |
 
