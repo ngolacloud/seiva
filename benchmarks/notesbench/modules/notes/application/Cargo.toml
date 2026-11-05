@@ -1,0 +1,15 @@
+[package]
+name = "notes-application"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+notes-domain = { path = "../domain" }
+notes-facade = { path = "../facade" }
+# The trait-only cross-cutting ports. The application codes against these,
+# NEVER against `delonix-seiva`, `seiva-http` or DORM — that is what keeps
+# it transport- and data-layer-independent.
+seiva-ports = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

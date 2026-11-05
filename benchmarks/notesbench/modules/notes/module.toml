@@ -1,0 +1,15 @@
+[module]
+name = "notes"
+facade = "v1"
+owners = []
+
+# Facades this module calls. Each needs a matching [[allow]] on the provider.
+# [[uses]]
+# module = "identity"
+# facade = "v1"
+# methods = ["user_exists"]
+
+# Callers this module permits. Anything not listed is denied.
+# [[allow]]
+# caller = "notes"
+# methods = ["..."]

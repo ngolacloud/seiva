@@ -1,0 +1,12 @@
+# Delonix Seiva project manifest. Managed partly by the seiva CLI.
+[project]
+name = "notesbench"
+
+[data]
+# DORM is the default data layer; set to "external" to own it yourself.
+layer = "dorm"
+
+# Modules are registered below by `seiva module new`.
+
+[modules.notes]
+data = "dorm"

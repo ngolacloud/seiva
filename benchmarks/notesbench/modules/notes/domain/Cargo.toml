@@ -1,0 +1,8 @@
+[package]
+name = "notes-domain"
+version = "0.1.0"
+edition = "2021"
+
+# The domain depends on nothing but the standard library (and, as the
+# module grows, `shared/kernel`). No framework, no DORM.
+[dependencies]
