@@ -14,6 +14,7 @@ theme:
   language: en
   features:
     - navigation.sections
+    - navigation.path
     - navigation.top
     - navigation.footer
     - navigation.indexes
@@ -39,8 +40,9 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
   font:
-    text: Source Sans Pro
-    code: Source Code Pro
+    # Django's signature typefaces: Fira Sans for text, Fira Mono for code.
+    text: Fira Sans
+    code: Fira Mono
   icon:
     repo: fontawesome/brands/github
 
