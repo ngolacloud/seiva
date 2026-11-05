@@ -1,0 +1,90 @@
+{
+  "DORM model block": {
+    "prefix": "model",
+    "scope": "dorm-schema",
+    "description": "A DORM model block with an id field",
+    "body": [
+      "model ${1:Name} {",
+      "  id        Uuid     @id @default(uuid())",
+      "  ${2:field}     ${3:String}",
+      "  createdAt DateTime @default(now())",
+      "  updatedAt DateTime @updatedAt",
+      "  version   Int      @version",
+      "$0",
+      "  @@map(\"${4:table_name}\")",
+      "}"
+    ]
+  },
+  "DORM namespace block": {
+    "prefix": "namespace",
+    "scope": "dorm-schema",
+    "description": "A DORM namespace block for a module",
+    "body": [
+      "namespace ${1:name} {",
+      "  model ${2:Name} {",
+      "    id Uuid @id @default(uuid())",
+      "    $0",
+      "  }",
+      "}"
+    ]
+  },
+  "DORM datasource block": {
+    "prefix": "datasource",
+    "scope": "dorm-schema",
+    "description": "A DORM datasource block",
+    "body": [
+      "datasource db {",
+      "  provider = \"${1|postgresql,mysql,sqlite|}\"",
+      "  url      = env(\"${2:DELONIX_ORM_DSN}\")",
+      "}"
+    ]
+  },
+  "Seiva facade trait": {
+    "prefix": "seiva-facade",
+    "scope": "rust",
+    "description": "A Seiva facade trait with a versioned endpoint",
+    "body": [
+      "#[seiva::facade(version = \"${1:v1}\")]",
+      "pub trait ${2:MyService} {",
+      "    #[requires(\"${3:resource.read}\")]",
+      "    async fn ${4:get_item}(&self, id: ${5:Uuid}) -> Result<${6:ItemDto}, ${7:Error}>;",
+      "$0",
+      "}"
+    ]
+  },
+  "Seiva requires method": {
+    "prefix": "requires",
+    "scope": "rust",
+    "description": "A facade method guarded by a permission",
+    "body": [
+      "#[requires(\"${1:resource.action}\")]",
+      "async fn ${2:method_name}(&self, ${3:args}) -> Result<${4:Output}, ${5:Error}>;$0"
+    ]
+  },
+  "Seiva controller impl": {
+    "prefix": "seiva-controller",
+    "scope": "rust",
+    "description": "A Seiva controller impl for a facade trait",
+    "body": [
+      "#[seiva::controller]",
+      "impl ${1:MyService} for ${2:MyServiceImpl} {",
+      "    async fn ${3:get_item}(&self, id: ${4:Uuid}) -> Result<${5:ItemDto}, ${6:Error}> {",
+      "        $0",
+      "    }",
+      "}"
+    ]
+  },
+  "Seiva WireSchema DTO": {
+    "prefix": "wire-schema",
+    "scope": "rust",
+    "description": "A DTO deriving WireSchema",
+    "body": [
+      "#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, WireSchema)]",
+      "pub struct ${1:ItemDto} {",
+      "    pub id: ${2:Uuid},",
+      "    pub ${3:name}: ${4:String},",
+      "$0",
+      "}"
+    ]
+  }
+}

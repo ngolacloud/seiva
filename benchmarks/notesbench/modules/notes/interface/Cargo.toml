@@ -1,0 +1,21 @@
+[package]
+name = "notes-interface"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+notes-facade = { path = "../facade" }
+# The controller is generic over the repository and id-generator ports, so
+# the interface depends on `application` (the service + the repository
+# port) but NEVER on `infrastructure` — the layering rule forbids
+# `interface -> infrastructure`. The composition root in `apps/` injects
+# the concrete adapters.
+notes-application = { path = "../application" }
+# The controller macro + contract, the HTTP primitives it emits, and the
+# OpenAPI generator — all driven by the facade descriptor.
+delonix-seiva = { version = "0.1", default-features = false }
+seiva-http = "0.1"
+seiva-openapi = "0.1"
+seiva-ports = "0.1"
+axum = "0.8"
+serde_json = "1"

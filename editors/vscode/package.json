@@ -1,0 +1,53 @@
+{
+  "name": "seiva",
+  "displayName": "Delonix Seiva",
+  "description": "Syntax highlighting and snippets for the Delonix Seiva framework: DORM schema DSL (.schema) and Seiva facade/controller Rust helpers.",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "seiva",
+    "dorm",
+    "schema",
+    "rust",
+    "delonix"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "dorm-schema",
+        "aliases": [
+          "DORM Schema",
+          "dorm-schema"
+        ],
+        "extensions": [
+          ".schema"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dorm-schema",
+        "scopeName": "source.dorm-schema",
+        "path": "./syntaxes/dorm-schema.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "dorm-schema",
+        "path": "./snippets/seiva.code-snippets"
+      },
+      {
+        "language": "rust",
+        "path": "./snippets/seiva.code-snippets"
+      }
+    ]
+  }
+}

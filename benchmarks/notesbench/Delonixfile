@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+# Multi-stage build producing a distroless, non-root image for `notesbench-api`.
+
+FROM rust:1-slim AS builder
+WORKDIR /build
+COPY . .
+RUN cargo build --release --bin notesbench-api
+
+# Distroless: only the binary and its runtime libs; no shell, no apt.
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+WORKDIR /app
+COPY --from=builder /build/target/release/notesbench-api /app/notesbench-api
+# Bind on all interfaces inside the container; the platform maps the port.
+ENV SEIVA_HTTP_ADDR=0.0.0.0:8080
+ENV APP_ENV=production
+EXPOSE 8080
+# `:nonroot` already runs as uid 65532. Distroless has no shell for a CMD
+# healthcheck; Kubernetes uses an httpGet readiness probe on /health/ready.
+USER nonroot
+ENTRYPOINT ["/app/notesbench-api"]
