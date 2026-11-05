@@ -164,7 +164,7 @@ pub fn project_files(name: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
 /// adapter that yields `<trait>_router` plus the OpenAPI/proto generation, and
 /// the `application` implements the facade over `seiva-ports`. See the module
 /// docs for the full shape and the layering decision.
-pub fn module_files(module: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
+pub fn module_files(module: &str, admin: bool) -> Result<Vec<GeneratedFile>, ScaffoldError> {
     validate_name(module)?;
     // A validated name is already lowercase snake_case, so `snake == module`;
     // we keep the name explicit for the crate-import spellings (`<snake>_facade`).
@@ -220,7 +220,7 @@ pub fn module_files(module: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
         ),
         file(
             format!("{base}/interface/src/lib.rs"),
-            interface_lib(&snake, &pascal),
+            interface_lib(&snake, &pascal, admin),
         ),
     ])
 }
@@ -809,7 +809,45 @@ fn infrastructure_lib(snake: &str) -> String {
     )
 }
 
-fn interface_lib(snake: &str, pascal: &str) -> String {
+fn interface_lib(snake: &str, pascal: &str, admin: bool) -> String {
+    // When `seiva module new --admin` is used, the interface registers an admin
+    // resource (ADR 0009) so the optional console surfaces it. This couples the
+    // module only to the framework contract (`delonix-seiva`), NOT to the admin UI
+    // crate; with the console unmounted it is inert link-time data. A module
+    // scaffolded without `--admin` emits nothing here and stays private to the
+    // console.
+    let admin_block = if admin {
+        format!(
+            "use delonix_seiva::admin::{{AdminPermissions, AdminResource}};\n\
+             use delonix_seiva::register_admin;\n\n\
+             // Make this module visible to the optional admin console (ADR 0009).\n\
+             // The resource id matches the module's route segment (`/v1/{snake}/...`)\n\
+             // so the console pairs it with the operations in `/openapi.json`, and\n\
+             // each permission matches the facade's `#[requires(..)]`. Grant\n\
+             // `{snake}.read` to view the resource and `{snake}.create` to use the\n\
+             // create form; add `change`/`delete` permissions as you add operations.\n\
+             register_admin!(AdminResource {{\n    \
+                 namespace: \"{snake}\",\n    \
+                 resource: \"{snake}\",\n    \
+                 label: \"{pascal}\",\n    \
+                 facade: \"{pascal}\",\n    \
+                 version: \"v1\",\n    \
+                 list_fields: &[\"id\", \"title\"],\n    \
+                 search_fields: &[\"title\"],\n    \
+                 filters: &[],\n    \
+                 ordering: &[\"id\"],\n    \
+                 page_size: 25,\n    \
+                 permissions: AdminPermissions {{\n        \
+                     view: \"{snake}.read\",\n        \
+                     create: \"{snake}.create\",\n        \
+                     change: \"\",\n        \
+                     delete: \"\",\n    \
+                 }},\n\
+             }});\n\n"
+        )
+    } else {
+        String::new()
+    };
     format!(
         "//! Interface layer: the HTTP/gRPC transport. It wires this module's facade\n\
          //! to the real framework transports.\n\
@@ -836,6 +874,7 @@ fn interface_lib(snake: &str, pascal: &str) -> String {
          use seiva_ports::IdGenerator;\n\
          use {snake}_application::{{RecordRepository, RecordService}};\n\
          use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\n\
+         {admin_block}\
          /// Transport adapter: a concrete `{pascal}` service exposed over HTTP,\n\
          /// generic over the repository port `R` and the id-generator port `G`.\n\
          /// Held behind an [`Arc`] so it is `Clone + Send + Sync + 'static` — the\n\
@@ -1078,7 +1117,7 @@ mod tests {
         // Project skeleton, then a module, then the workspace registration edit
         // the CLI performs so the module crates are built too.
         let mut project = project_files("demo").expect("project files");
-        let modules = module_files("notes").expect("module files");
+        let modules = module_files("notes", false).expect("module files");
         let cargo = project
             .iter()
             .find(|f| f.path == "Cargo.toml")
@@ -1142,7 +1181,7 @@ mod tests {
 
     #[test]
     fn module_files_emit_manifest_and_five_layer_crates() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         // One module.toml plus a Cargo.toml and a src/lib.rs per layer = 11.
         assert_eq!(files.len(), 11, "expected 1 manifest + 5 crates * 2 files");
         for layer in [
@@ -1175,7 +1214,7 @@ mod tests {
     /// `application`; the composition root injects the concrete adapters.
     #[test]
     fn generated_interface_does_not_depend_on_infrastructure() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let cargo = contents(&files, "modules/notes/interface/Cargo.toml");
         let deps = cargo
             .split("[dev-dependencies]")
@@ -1193,7 +1232,7 @@ mod tests {
 
     #[test]
     fn every_generated_lib_has_balanced_brackets() {
-        let files = module_files("order_items").unwrap();
+        let files = module_files("order_items", false).unwrap();
         for layer in [
             "facade",
             "domain",
@@ -1211,7 +1250,7 @@ mod tests {
 
     #[test]
     fn generated_facade_is_framework_wired() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let facade = contents(&files, "modules/notes/facade/src/lib.rs");
         // The macro is imported and applied with an explicit version.
         assert!(facade.contains("use delonix_seiva::{facade, WireSchema};"));
@@ -1233,7 +1272,7 @@ mod tests {
 
     #[test]
     fn generated_application_implements_the_facade_over_ports() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let app = contents(&files, "modules/notes/application/src/lib.rs");
         assert!(app.contains("use seiva_ports::{BoxError, IdGenerator, PortResult};"));
         assert!(app.contains("pub trait RecordRepository {"));
@@ -1253,7 +1292,7 @@ mod tests {
 
     #[test]
     fn generated_infrastructure_is_in_memory_and_dorm_free() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let infra = contents(&files, "modules/notes/infrastructure/src/lib.rs");
         assert!(infra.contains("pub struct InMemoryRecordRepository"));
         assert!(infra.contains("impl RecordRepository for InMemoryRecordRepository"));
@@ -1267,7 +1306,7 @@ mod tests {
 
     #[test]
     fn generated_interface_holds_controller_and_transport_generation() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let interface = contents(&files, "modules/notes/interface/src/lib.rs");
         // The controller macro is imported and applied to a GENERIC adapter impl:
         // generic over the repository/id-generator ports, so the interface never
@@ -1293,11 +1332,35 @@ mod tests {
         // is small enough (see seiva-http) that handlers returning it by value
         // never trip the lint, so scaffolded projects keep the gate intact.
         assert!(!interface.contains("result_large_err"));
+        // Without `--admin` the module registers NOTHING: it is private to the
+        // console (ADR 0009).
+        assert!(!interface.contains("register_admin!"));
+        assert!(!interface.contains("AdminResource"));
+    }
+
+    #[test]
+    fn module_new_admin_scaffolds_a_registration() {
+        let files = module_files("notes", true).unwrap();
+        let interface = contents(&files, "modules/notes/interface/src/lib.rs");
+        // The `--admin` flag emits a registration coupling only to the framework
+        // contract — not to the admin UI crate.
+        assert!(interface.contains("use delonix_seiva::register_admin;"));
+        assert!(interface.contains("register_admin!(AdminResource {"));
+        assert!(!interface.contains("seiva_console_admin"));
+        // The resource id matches the module's route segment, the permissions the
+        // facade's `#[requires(..)]`.
+        assert!(interface.contains("namespace: \"notes\""));
+        assert!(interface.contains("resource: \"notes\""));
+        assert!(interface.contains("view: \"notes.read\""));
+        assert!(interface.contains("create: \"notes.create\""));
+        // It still compiles as valid-looking Rust: the controller follows the
+        // registration (the block was inserted, not appended past EOF).
+        assert!(interface.contains("pub struct NotesController"));
     }
 
     #[test]
     fn module_manifests_depend_on_the_right_framework_crates() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
 
         // The framework crates are depended on by crates.io VERSION (so a
         // generated project compiles standalone once they are published); the
@@ -1347,7 +1410,7 @@ mod tests {
 
     #[test]
     fn no_generated_file_pulls_in_dorm() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         for file in &files {
             assert!(
                 !file.contents.contains("seiva-data-dorm = "),
@@ -1418,7 +1481,7 @@ mod tests {
         // A distinctly named module so its route could only come from the project.
         let module = "widgets";
         let mut project = project_files("shop").expect("project files");
-        let modules = module_files(module).expect("module files");
+        let modules = module_files(module, false).expect("module files");
 
         // Apply every edit `seiva module new` performs: workspace members + the
         // interim patch, the app crate's module deps, and the main.rs merge.

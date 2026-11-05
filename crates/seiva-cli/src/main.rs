@@ -131,12 +131,18 @@ enum ProjectAction {
 
 #[derive(Subcommand)]
 enum ModuleAction {
-    /// Scaffold a new module: `seiva module new <name> [--data external]`.
+    /// Scaffold a new module: `seiva module new <name> [--data external] [--admin]`.
     New {
         name: String,
         /// Use an external data layer instead of DORM for this module.
         #[arg(long)]
         data: Option<String>,
+        /// Register the module with the admin console (ADR 0009): the generated
+        /// interface declares an `AdminResource`, so the optional
+        /// `seiva-console-admin` extension surfaces it (gated by the module's
+        /// permissions). Without this flag the module stays private to the console.
+        #[arg(long)]
+        admin: bool,
     },
     /// Move a module to `mode = "service"` with its own schema and history.
     Split { name: String },
@@ -279,7 +285,7 @@ fn append_patch_section(manifest: &Path, framework_root: &str) -> std::io::Resul
     std::fs::write(manifest, cargo)
 }
 
-fn module_new(name: &str, external: bool) -> ExitCode {
+fn module_new(name: &str, external: bool, admin: bool) -> ExitCode {
     if let Err(err) = scaffold::validate_name(name) {
         eprintln!("seiva: {err}");
         return ExitCode::FAILURE;
@@ -298,7 +304,7 @@ fn module_new(name: &str, external: bool) -> ExitCode {
         return ExitCode::from(64);
     }
 
-    let files = match scaffold::module_files(name) {
+    let files = match scaffold::module_files(name, admin) {
         Ok(files) => files,
         Err(err) => {
             eprintln!("seiva: {err}");
@@ -316,7 +322,12 @@ fn module_new(name: &str, external: bool) -> ExitCode {
         eprintln!("seiva: module files written, but registration failed: {err}");
         return ExitCode::FAILURE;
     }
-    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema, and wired into the composition root.");
+    let admin_note = if admin {
+        " Registered an admin resource (mount `seiva-console-admin` to surface it)."
+    } else {
+        ""
+    };
+    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema, and wired into the composition root.{admin_note}");
     ExitCode::SUCCESS
 }
 
@@ -1210,8 +1221,8 @@ fn main() -> ExitCode {
             ProjectAction::New { name } => project_new(&name),
         },
         Command::Module { action } => match action {
-            ModuleAction::New { name, data } => {
-                module_new(&name, data.as_deref() == Some("external"))
+            ModuleAction::New { name, data, admin } => {
+                module_new(&name, data.as_deref() == Some("external"), admin)
             }
             ModuleAction::Split { .. } => not_yet("module split", "the module-mode phase"),
             ModuleAction::Merge { .. } => not_yet("module merge", "the module-mode phase"),
