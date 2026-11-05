@@ -7,6 +7,9 @@
 #      both replicas is ~ONE budget (not 2x), because the distributed Redis
 #      limiter (ADR 0015) counts in a shared store. A per-process limiter behind a
 #      round-robin LB would admit ~2x (each replica its own counter).
+#   C. IDEMPOTENCY — many concurrent identical POSTs with the SAME
+#      Idempotency-Key, landing on both replicas, insert exactly ONCE because the
+#      durable store (ADR 0011) claims the key inside the write transaction.
 #   B. THROUGHPUT — with the limit raised, the authed + tenant-scoped DB path
 #      sustained through the containerised LB (p50/p95/p99, 2xx).
 #
@@ -69,8 +72,32 @@ print(f"  PASS: the two replicas enforced ONE budget (~{budget}), not ~{2*budget
 PY
 
 echo
+echo "### Proof C — durable idempotency across replicas (same key => one insert)"
+# Fresh stack (no pg volume, so init.sql re-runs → empty tables). Fire many
+# concurrent, identical POSTs carrying the SAME Idempotency-Key through the LB;
+# they land on both replicas round-robin, but the durable store (ADR 0011) admits
+# exactly one insert. Count rows with the unique name via the list endpoint.
+down; up 100000000
+UNIQ="idem-marker-unique"
+for _ in $(seq 1 40); do
+  curl -s -o /dev/null "${auth[@]}" -H 'content-type: application/json' \
+    -H "idempotency-key: order-123" \
+    -d "{\"name\":\"$UNIQ\",\"price\":7,\"cost\":1}" "$LB/v1/catalogs" &
+done
+wait
+curl -s "${auth[@]}" "$LB/v1/catalogs" > "$HERE/idem_list.json"
+python3 - "$HERE/idem_list.json" "$UNIQ" <<'PY'
+import json,sys
+items=json.load(open(sys.argv[1])); uniq=sys.argv[2]
+n=sum(1 for it in items if it.get("name")==uniq)
+print(f"  40 concurrent identical POSTs (same Idempotency-Key) via the LB => {n} row(s) named '{uniq}'")
+assert n == 1, f"expected exactly ONE insert, found {n}: idempotency did not hold across replicas!"
+print("  PASS: the durable store admitted exactly ONE insert across both replicas")
+PY
+
+echo
 echo "### Proof B — throughput through the containerised LB (limit raised)"
-down; up 100000000; seed
+seed
 for name in lb_read lb_read2; do
   "$OHA" -z 10s -c 50 --no-tui --output-format json "${auth[@]}" "$LB/v1/catalogs" > "$HERE/$name.json"
 done

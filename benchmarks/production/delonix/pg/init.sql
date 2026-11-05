@@ -9,3 +9,14 @@ CREATE TABLE IF NOT EXISTS catalog_items (
     price BIGINT NOT NULL,
     cost BIGINT NOT NULL DEFAULT 0
 );
+
+-- The durable idempotency store (ADR 0011). Pre-created here so the two replicas
+-- never race on its creation at startup. Mirrors dorm_core::idempotency::migrations().
+CREATE TABLE IF NOT EXISTS dorm_idempotency (
+    key TEXT PRIMARY KEY,
+    request_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    response JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);

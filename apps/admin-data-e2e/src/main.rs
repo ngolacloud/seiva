@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use admin_data_e2e::{catalog_router, catalog_table_ddl, CatalogController};
-use seiva_data_dorm::{connect, DormConfig, DormUnitOfWork};
+use seiva_data_dorm::{connect, idempotency_migrations, DormConfig, DormIdempotencyStore, DormUnitOfWork};
 use seiva_http::{
     router_with_modules, router_with_modules_distributed, Authenticator, DistributedRateLimit,
     Health, HttpSecurity, Principal, RateLimit, TokenAuthenticator,
@@ -33,16 +33,22 @@ async fn main() -> Result<(), BoxError> {
         cursor_key: b"admin-data-e2e-secret".to_vec(),
     })?));
 
-    // Create the demo table (idempotent) before serving.
-    uow.transaction(|| async {
-        dorm_core::db::execute(catalog_table_ddl(), &[])
-            .await
-            .map(|_| ())
-            .map_err(|e| Box::new(e) as BoxError)
+    // Create the demo table + the idempotency table (both idempotent DDL) before
+    // serving. In the containerised multi-replica deployment these are pre-created
+    // by the PostgreSQL init script, so this is a no-op there.
+    let mut ddl = vec![catalog_table_ddl().to_owned()];
+    ddl.extend(idempotency_migrations());
+    uow.transaction(move || async move {
+        for stmt in &ddl {
+            dorm_core::db::execute(stmt, &[])
+                .await
+                .map_err(|e| Box::new(e) as BoxError)?;
+        }
+        Ok(())
     })
     .await?;
 
-    let modules = catalog_router(CatalogController::new(uow));
+    let modules = catalog_router(CatalogController::new(uow, Arc::new(DormIdempotencyStore)));
     let modules = seiva_console_admin::mount(modules);
 
     let health = Health::starting();

@@ -123,6 +123,22 @@ behind the same balancer would have admitted ≈240. This is the property the
 single-host run could not demonstrate, and it is enforced by the shared Redis
 counter (`INCR`/`PEXPIRE`, one atomic round trip per request).
 
+### Proof C — durable idempotency across replicas
+
+With a fresh stack, **40 concurrent identical POSTs** carrying the **same
+`Idempotency-Key`** are fired through the load balancer (landing on both replicas
+round-robin). The durable store (ADR 0011, an `INSERT … ON CONFLICT DO NOTHING`
+CAS claimed inside the write transaction) admits exactly one:
+
+| Concurrent identical POSTs (same key) | Rows created |
+|---:|---:|
+| 40 | **1** |
+
+A retry replays the stored response; a key reused with *different* content is a
+`409` (proved by the `live_catalog_create_is_idempotent` test). The claim commits
+in the same transaction as the insert, so a rollback un-claims the key — a
+committed key always has its effect, across replicas.
+
 ### Proof B — throughput through the containerised load balancer
 
 Limit raised out of the way; traffic driven at the HAProxy frontend (which fans
@@ -130,9 +146,9 @@ out to both replicas):
 
 | Case | req/s | p50 | p95 | p99 | 2xx |
 |---|---:|---:|---:|---:|---:|
-| `GET /v1/catalogs` | 7 687 | 1.96 ms | 50.28 ms | 70.36 ms | 76 845 |
-| `GET /v1/catalogs` (2nd run) | 8 426 | 1.56 ms | 65.00 ms | 72.40 ms | 84 225 |
-| `POST /v1/catalogs` | 5 830 | 2.44 ms | 57.52 ms | 100.88 ms | 58 258 |
+| `GET /v1/catalogs` | 9 415 | 1.36 ms | 4.43 ms | 72.50 ms | 94 125 |
+| `GET /v1/catalogs` (2nd run) | 9 525 | 1.46 ms | 5.95 ms | 72.35 ms | 95 211 |
+| `POST /v1/catalogs` | 6 527 | 2.26 ms | 68.11 ms | 72.00 ms | 65 236 |
 
 These are **lower throughput and higher tail latency than the host figures above**,
 and that is expected and honest: every request now crosses the container bridge,
@@ -147,11 +163,18 @@ The host numbers isolate the DB path's cost; these isolate the orchestrated path
 bash benchmarks/production/delonix/run.sh   # builds the binary, delonix compose up, proves A+B, tears down
 ```
 
+### Idempotency on the write hot path — done
+
+The `Catalog` write now honours an `Idempotency-Key` end to end (ADR 0011): the
+`&Ctx` seam carries the validated key + the request's method/path, the handler
+folds a scoped key + a canonical body fingerprint, and claims it through the
+durable store **inside the write transaction**. On a fresh claim it inserts and
+stores the response; a retry replays it; a key reused with different content is a
+`409`. Proof C above shows this holds across replicas; the
+`live_catalog_create_is_idempotent` test proves the replay + the `409` against a
+real PostgreSQL.
+
 ### Still open
 
-**Idempotency is not yet on this deployment's write hot path.** The durable,
-cross-replica idempotency store (ADR 0012) is proved by `seiva-data-dorm`'s
-multi-process live test, but the `Catalog` HTTP write here does not yet attach an
-`Idempotency-Key`, so a retried POST is a second insert. Wiring the HTTP
-idempotency extractor + store into the generated write path (so the same key
-de-duplicates across these replicas) is the next increment.
+Pagination/search/ordering console controls and optimistic-concurrency
+(version/ETag) on edit remain — tracked in the evolution evidence, not here.

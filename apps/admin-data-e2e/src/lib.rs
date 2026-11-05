@@ -11,14 +11,20 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use axum::http::StatusCode;
 use delonix_seiva::admin::{AdminPermissions, AdminResource};
 use delonix_seiva::{controller, facade, register_admin};
 use dorm_core::value::Value;
 use seiva_data_dorm::DormUnitOfWork;
-use seiva_http::{Ctx, Problem, Validate, ValidationError};
-use seiva_ports::{BoxError, PortResult, UnitOfWork};
+use seiva_http::{fingerprint, scoped_key, Ctx, Problem, Validate, ValidationError};
+use seiva_ports::{BoxError, IdempotencyOutcome, IdempotencyStore, PortResult, UnitOfWork};
 use serde::{Deserialize, Serialize};
+
+/// The durable idempotency window: a key is honoured for replay for this long
+/// after its first use (ADR 0011). A day is a generous client-retry horizon.
+const IDEMPOTENCY_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// DDL for the demo table. `IF NOT EXISTS`, so a second run is a no-op. Every row
 /// carries a `tenant`; the operations scope by the caller's tenant (`&Ctx`), so a
@@ -91,8 +97,9 @@ impl Validate for DeleteItem {
     }
 }
 
-/// Response DTO.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, delonix_seiva::WireSchema)]
+/// Response DTO. Also `Deserialize` so a stored idempotent response can be read
+/// back for a replay (ADR 0011).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, delonix_seiva::WireSchema)]
 pub struct ItemDto {
     /// The item's id.
     pub id: u64,
@@ -107,13 +114,39 @@ pub struct ItemDto {
     pub cost: Option<i64>,
 }
 
-/// The facade's error type. Mapped to an RFC 9457 problem by the controller.
+/// The facade's error type: a message plus the HTTP status it maps to. Mapped to
+/// an RFC 9457 problem by the controller. Most boundary failures are `422`
+/// (unprocessable); an idempotency conflict is `409` (ADR 0011).
 #[derive(Debug, Clone)]
-pub struct CatalogError(pub String);
+pub struct CatalogError {
+    /// The HTTP status this error maps to.
+    pub status: StatusCode,
+    /// The human-readable detail.
+    pub message: String,
+}
+
+impl CatalogError {
+    /// A `422 Unprocessable Entity` boundary error.
+    fn unprocessable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+        }
+    }
+
+    /// A `409 Conflict` — an idempotency key reused with different content, or a
+    /// first request with this key still in flight.
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
+}
 
 impl From<CatalogError> for Problem {
     fn from(error: CatalogError) -> Self {
-        Problem::unprocessable_entity(error.0)
+        Problem::new(error.status, "Catalog error").with_detail(error.message)
     }
 }
 
@@ -171,19 +204,33 @@ register_admin!(AdminResource {
 #[derive(Clone)]
 pub struct CatalogController {
     uow: Arc<DormUnitOfWork>,
+    idem: Arc<dyn IdempotencyStore>,
 }
 
 impl CatalogController {
-    /// Builds the controller over a DORM unit of work.
+    /// Builds the controller over a DORM unit of work and an idempotency store
+    /// (both durable, cross-replica — the store makes a retried write dedupe even
+    /// across replicas, ADR 0011).
     #[must_use]
-    pub fn new(uow: Arc<DormUnitOfWork>) -> Self {
-        Self { uow }
+    pub fn new(uow: Arc<DormUnitOfWork>, idem: Arc<dyn IdempotencyStore>) -> Self {
+        Self { uow, idem }
     }
 }
 
-/// Maps a boundary error to the facade error type.
+/// Maps a boundary error to the facade error type (`422`).
 fn err(e: impl std::fmt::Display) -> CatalogError {
-    CatalogError(e.to_string())
+    CatalogError::unprocessable(e.to_string())
+}
+
+/// What a `create` attempt resolved to inside the transaction, so the `409`
+/// idempotency conflicts map to the right status *after* the transaction commits
+/// (returning them as an `Err` from the closure would roll back and remap to 422).
+enum CreateOutcome {
+    /// A fresh insert or a replayed prior response — both an idempotent success.
+    Done(ItemDto),
+    /// A `409`: the key is reused with different content, or its first request is
+    /// still in flight.
+    Conflict(&'static str),
 }
 
 /// A boxed boundary error from a static message (e.g. "item not found"), so a
@@ -215,7 +262,7 @@ fn row_to_item(row: &dorm_core::row::Row, show_cost: bool) -> PortResult<ItemDto
 fn tenant_of(ctx: &Ctx) -> Result<String, CatalogError> {
     ctx.tenant()
         .map(ToOwned::to_owned)
-        .ok_or_else(|| CatalogError("caller has no tenant".to_owned()))
+        .ok_or_else(|| CatalogError::unprocessable("caller has no tenant"))
 }
 
 const COST_PERMISSION: &str = "catalog.cost.view";
@@ -225,8 +272,41 @@ impl Catalog for CatalogController {
     async fn create(&self, ctx: &Ctx, cmd: CreateItem) -> Result<ItemDto, CatalogError> {
         let tenant = tenant_of(ctx)?;
         let show_cost = ctx.has(COST_PERMISSION);
-        self.uow
+        // Durable idempotency is opt-in: when the caller sent an `Idempotency-Key`,
+        // fold it (scoped to this identity + operation) and a canonical fingerprint
+        // of the body into the store. The claim runs INSIDE the transaction, so the
+        // reservation commits atomically with the insert — two replicas racing one
+        // key resolve to exactly one insert (ADR 0011).
+        let idem = ctx.idempotency_key().map(|key| {
+            let scoped = scoped_key(ctx.principal(), ctx.method(), ctx.path(), key);
+            let body = serde_json::to_value(&cmd).unwrap_or(serde_json::Value::Null);
+            let print = fingerprint(ctx.method(), ctx.path(), None, &body);
+            (scoped, print)
+        });
+        let store = Arc::clone(&self.idem);
+        let outcome = self
+            .uow
             .transaction(move || async move {
+                if let Some((scoped, print)) = &idem {
+                    match store.begin(scoped, print, IDEMPOTENCY_TTL).await? {
+                        IdempotencyOutcome::Fresh => {} // fall through to the insert
+                        IdempotencyOutcome::Replay(bytes) => {
+                            let dto = serde_json::from_slice::<ItemDto>(&bytes)
+                                .map_err(|e| Box::new(e) as BoxError)?;
+                            return Ok(CreateOutcome::Done(dto));
+                        }
+                        IdempotencyOutcome::InProgress => {
+                            return Ok(CreateOutcome::Conflict(
+                                "a request with this Idempotency-Key is still being processed; retry shortly",
+                            ));
+                        }
+                        IdempotencyOutcome::Mismatch => {
+                            return Ok(CreateOutcome::Conflict(
+                                "this Idempotency-Key was already used for a request with different content",
+                            ));
+                        }
+                    }
+                }
                 let rows = dorm_core::db::sql(
                     "INSERT INTO catalog_items (tenant, name, price, cost) \
                      VALUES ($1, $2, $3, $4) RETURNING id, name, price, cost",
@@ -239,14 +319,24 @@ impl Catalog for CatalogController {
                 )
                 .await
                 .map_err(|e| Box::new(e) as BoxError)?;
-                row_to_item(
+                let dto = row_to_item(
                     rows.first()
                         .ok_or_else(|| boxed("insert returned no row"))?,
                     show_cost,
-                )
+                )?;
+                // Persist the response for replay — the exact bytes a retry returns.
+                if let Some((scoped, _)) = &idem {
+                    let bytes = serde_json::to_vec(&dto).map_err(|e| Box::new(e) as BoxError)?;
+                    store.finish(scoped, &bytes).await?;
+                }
+                Ok(CreateOutcome::Done(dto))
             })
             .await
-            .map_err(err)
+            .map_err(err)?;
+        match outcome {
+            CreateOutcome::Done(dto) => Ok(dto),
+            CreateOutcome::Conflict(msg) => Err(CatalogError::conflict(msg)),
+        }
     }
 
     async fn get(&self, ctx: &Ctx, id: u64) -> Result<ItemDto, CatalogError> {

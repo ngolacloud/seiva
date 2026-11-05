@@ -114,3 +114,29 @@ outbox. Instead the application drives `IdempotencyStore::begin` inside its
   default: it admits a committed key with no effect (a crash in between) needing
   reconciliation. One transaction makes "key committed ⇒ effect committed" hold
   by construction; `InProgress` remains available for designs that split them.
+
+## Addendum (2026-11-05) — wired on a write hot path via the `&Ctx` seam
+
+The port is now exercised end to end on a real HTTP write (the `Catalog.create`
+of `apps/admin-data-e2e`), proving the transport half joins the durable half
+without a bespoke middleware and without a new controller-macro parameter:
+
+- `seiva_http::Ctx` (the server-side seam that already carried the `Principal`
+  for tenant-scoping, ADR 0006/0009) now also carries the request's **method +
+  path** and the optional, validated **`Idempotency-Key`**, populated in its
+  `FromRequestParts`. A present-but-malformed key is treated as absent (a plain,
+  non-deduplicated create) and never stored — the validation still guards the
+  storage key. A handler wanting a hard `400` uses the `OptionalIdempotencyKey`
+  extractor directly.
+- The handler folds `scoped_key(principal, method, path, key)` and a canonical
+  `fingerprint(method, path, query, body)` (the body via `serde_json::to_value`
+  of the typed command — canonical, key-sorted) and calls `begin`/`finish`
+  **inside** the `DormUnitOfWork` transaction: on `Fresh` it inserts and stores
+  the response bytes; on `Replay` it returns the stored response; on
+  `InProgress`/`Mismatch` it returns `409` without executing. The `409` is
+  carried by a status-bearing facade error, so it is not remapped to `422`.
+
+Proved live: `live_catalog_create_is_idempotent` (retry replays the identical
+stored response; a key reused with different content is `409`; exactly one row),
+and Proof C of `benchmarks/production/delonix/` — 40 concurrent identical POSTs
+with one key, through the load balancer onto two replicas, insert exactly once.

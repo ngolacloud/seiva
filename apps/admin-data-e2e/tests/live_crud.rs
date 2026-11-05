@@ -10,8 +10,10 @@ use std::sync::Arc;
 use admin_data_e2e::{
     catalog_table_ddl, Catalog, CatalogController, CreateItem, DeleteItem, UpdateItem,
 };
-use seiva_data_dorm::{connect, DormConfig, DormUnitOfWork};
-use seiva_http::{Ctx, Principal};
+use seiva_data_dorm::{
+    connect, idempotency_migrations, DormConfig, DormIdempotencyStore, DormUnitOfWork,
+};
+use seiva_http::{Ctx, IdempotencyKey, Principal};
 use seiva_ports::{BoxError, UnitOfWork};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -44,7 +46,7 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
     .await
     .expect("table setup");
 
-    let catalog = CatalogController::new(Arc::clone(&uow));
+    let catalog = CatalogController::new(Arc::clone(&uow), Arc::new(DormIdempotencyStore));
 
     // Two tenants; acme's principal also holds the cost-view permission.
     let acme = Ctx::new(Principal::in_tenant(
@@ -155,6 +157,110 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
     // Cleanup.
     uow.transaction(|| async {
         dorm_core::db::execute("DROP TABLE catalog_items", &[])
+            .await
+            .map(|_| ())
+            .map_err(|e| Box::new(e) as BoxError)
+    })
+    .await
+    .expect("cleanup");
+}
+
+/// Live proof that a retried `create` carrying the same `Idempotency-Key` inserts
+/// exactly once (the retry replays the stored response), and that reusing the key
+/// with different content is a `409` (ADR 0011). Drives the controller directly
+/// with a `&Ctx` carrying the key, exactly what the generated handler injects from
+/// the request header. Gated on `SEIVA_DORM_TEST_DSN`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_catalog_create_is_idempotent() {
+    let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+        eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the idempotency proof");
+        return;
+    };
+    let uow = Arc::new(DormUnitOfWork::new(
+        connect(&DormConfig {
+            dsn,
+            replicas: vec![],
+            read_only: false,
+            schema: None,
+            pool_max: 4,
+            cursor_key: b"admin-data-e2e-secret".to_vec(),
+        })
+        .expect("connect to the test database"),
+    ));
+
+    // Fresh tables: the catalogue and the idempotency store.
+    uow.transaction(|| async {
+        dorm_core::db::execute("DROP TABLE IF EXISTS catalog_items", &[])
+            .await
+            .map_err(|e| Box::new(e) as BoxError)?;
+        dorm_core::db::execute("DROP TABLE IF EXISTS dorm_idempotency", &[])
+            .await
+            .map_err(|e| Box::new(e) as BoxError)?;
+        dorm_core::db::execute(catalog_table_ddl(), &[])
+            .await
+            .map_err(|e| Box::new(e) as BoxError)?;
+        for stmt in idempotency_migrations() {
+            dorm_core::db::execute(&stmt, &[])
+                .await
+                .map_err(|e| Box::new(e) as BoxError)?;
+        }
+        Ok(())
+    })
+    .await
+    .expect("table setup");
+
+    let catalog = CatalogController::new(Arc::clone(&uow), Arc::new(DormIdempotencyStore));
+    let principal =
+        Principal::in_tenant("clerk", "acme", ["catalog.create", "catalog.read", "catalog.cost.view"]);
+    let key = IdempotencyKey::parse("order-42").expect("valid key");
+    let ctx = Ctx::new(principal).with_request("POST", "/v1/catalogs", Some(key.clone()));
+
+    let body = CreateItem {
+        name: "widget".into(),
+        price: 100,
+        cost: Some(60),
+    };
+
+    // First call inserts.
+    let first = catalog.create(&ctx, body.clone()).await.expect("first create");
+    // Retry with the SAME key and SAME content replays the stored response.
+    let replay = catalog
+        .create(&ctx, body.clone())
+        .await
+        .expect("retry replays");
+    assert_eq!(first, replay, "a retry returns the identical stored response");
+
+    // Exactly one row exists for the tenant.
+    let count = catalog.list(&ctx).await.expect("list").len();
+    assert_eq!(count, 1, "the retried create inserted exactly once");
+
+    // Reusing the key with DIFFERENT content is a 409 conflict (not a second row).
+    let conflicting = CreateItem {
+        name: "widget".into(),
+        price: 999, // different content under the same key
+        cost: Some(60),
+    };
+    let err = catalog
+        .create(&ctx, conflicting)
+        .await
+        .expect_err("mismatched content under a used key must be rejected");
+    assert_eq!(
+        err.status,
+        axum::http::StatusCode::CONFLICT,
+        "a key reused with different content is a 409"
+    );
+    assert_eq!(
+        catalog.list(&ctx).await.expect("list after mismatch").len(),
+        1,
+        "the rejected mismatch did not insert"
+    );
+
+    // Cleanup.
+    uow.transaction(|| async {
+        dorm_core::db::execute("DROP TABLE catalog_items", &[])
+            .await
+            .map_err(|e| Box::new(e) as BoxError)?;
+        dorm_core::db::execute("DROP TABLE dorm_idempotency", &[])
             .await
             .map(|_| ())
             .map_err(|e| Box::new(e) as BoxError)
