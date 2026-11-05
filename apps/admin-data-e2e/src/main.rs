@@ -11,7 +11,8 @@ use std::sync::Arc;
 use admin_data_e2e::{catalog_router, catalog_table_ddl, CatalogController};
 use seiva_data_dorm::{connect, DormConfig, DormUnitOfWork};
 use seiva_http::{
-    router_with_modules, Authenticator, Health, HttpSecurity, Principal, TokenAuthenticator,
+    router_with_modules, Authenticator, Health, HttpSecurity, Principal, RateLimit,
+    TokenAuthenticator,
 };
 use seiva_ports::{BoxError, UnitOfWork};
 use seiva_server::serve_router;
@@ -59,12 +60,21 @@ async fn main() -> Result<(), BoxError> {
             ],
         ),
     ));
-    let app = router_with_modules(
-        health.clone(),
-        &HttpSecurity::default(),
-        Some(auth),
-        modules,
-    );
+    // Rate limiting stays ON at the secure default (300 req/min per IP). The
+    // production-load benchmark raises it via `ADMIN_DATA_E2E_RATE_LIMIT` (requests
+    // per minute) so it can measure the auth+DB work path instead of the limiter's
+    // load-shedding; absent the env var the deployment keeps the protective default.
+    let mut security = HttpSecurity::default();
+    if let Ok(rpm) = std::env::var("ADMIN_DATA_E2E_RATE_LIMIT") {
+        let max_requests: u32 = rpm
+            .parse()
+            .map_err(|_| "ADMIN_DATA_E2E_RATE_LIMIT must be a positive integer (requests/minute)")?;
+        security.rate_limit = Some(RateLimit {
+            max_requests,
+            window: std::time::Duration::from_secs(60),
+        });
+    }
+    let app = router_with_modules(health.clone(), &security, Some(auth), modules);
 
     let addr: SocketAddr = std::env::var("ADMIN_DATA_E2E_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8098".to_owned())
