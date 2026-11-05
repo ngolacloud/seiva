@@ -1,0 +1,110 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "DORM Schema",
+  "scopeName": "source.dorm-schema",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#block-keywords" },
+    { "include": "#block-attributes" },
+    { "include": "#field-attributes" },
+    { "include": "#functions" },
+    { "include": "#types" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#booleans" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.dorm-schema",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "block-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.block.dorm-schema",
+          "match": "\\b(datasource|generator|namespace|model|enum|type)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "support.function.dorm-schema",
+          "match": "\\b(env|autoincrement|now|uuid|cuid|dbgenerated)\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "block-attributes": {
+      "patterns": [
+        {
+          "name": "entity.other.attribute-name.block.dorm-schema",
+          "match": "@@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "field-attributes": {
+      "patterns": [
+        {
+          "name": "entity.other.attribute-name.field.dorm-schema",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.dorm-schema",
+          "match": "\\b(Uuid|String|Int|BigInt|Boolean|DateTime|Decimal|Json|Inet|Cidr|MacAddr)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.dorm-schema",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.dorm-schema",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.dorm-schema",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.dorm-schema",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.dorm-schema",
+          "match": "="
+        },
+        {
+          "name": "punctuation.definition.optional.dorm-schema",
+          "match": "\\?"
+        },
+        {
+          "name": "punctuation.definition.list.dorm-schema",
+          "match": "\\[\\]"
+        }
+      ]
+    }
+  }
+}
