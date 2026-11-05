@@ -1,15 +1,27 @@
 # How to add a module
 
-> **Status: draft.** This page is a draft: the outline is accurate, the prose is being written.
+```console
+$ seiva module new billing
+```
 
-Add a new in-process module.
+That is the whole recipe. It:
 
-## On this page
+1. generates `modules/billing/` as the five layer crates (facade, domain,
+   application, infrastructure, interface);
+2. registers them in the workspace `Cargo.toml`, `seiva.toml` and the project
+   schema (a `namespace billing` block with a starter model);
+3. **auto-wires** the module into the composition root — adds its
+   interface/infrastructure deps to `apps/<name>-api/Cargo.toml` and merges its
+   router in `main.rs` (at the managed anchors).
 
-- `seiva module new <name>`
-- The registration edits (workspace, seiva.toml, schema)
-- Wire its router in the composition root
-- Add a `#[requires(..)]` permission
+So the module's route appears immediately — confirm with `seiva openapi`.
+
+## Then
+
+- Edit `modules/billing/facade/src/lib.rs` to shape the contract (methods, DTOs,
+  `#[requires(...)]`). See [Facades](../topics/transport/facades.md).
+- Edit the `namespace billing` block in `schema/<project>.schema` for the model,
+  and run `seiva db dev` to migrate it ([Migrations](../topics/data-layer/migrations.md)).
 
 ## Related
 
@@ -17,5 +29,4 @@ Add a new in-process module.
 
 ---
 
-*Part of the [Seiva documentation](../index.md), organised like the Django
-docs (tutorials · topic guides · reference · how-to).*
+*Part of the [Seiva documentation](../index.md).*

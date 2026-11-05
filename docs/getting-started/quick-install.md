@@ -1,24 +1,46 @@
 # Quick install guide
 
-> **Status: draft.** This page is a draft: the outline is accurate, the prose is being written.
+## Prerequisites
 
-Install the `seiva` CLI and build your first service.
+A recent stable Rust toolchain (`rustup`). A database is optional — a scaffolded
+project runs in-memory until you enable the data layer.
 
-## On this page
+## Install the CLI
 
-- Install the Rust toolchain (`rustup`)
-- `cargo install --path crates/seiva-cli` (or from crates.io once published)
-- Verify with `seiva doctor`
-- Create a project: `seiva project new demo`
-- Run it: `cd demo && seiva start`
+Until the crates are published to crates.io, install `seiva` from the workspace:
 
-## Related
+```console
+$ cargo install --path crates/seiva-cli
+$ seiva --version
+```
 
-- [The full walk-through](../quickstart.md)
-- [Publishing status (crates.io)](../publishing.md)
-- [Seiva at a glance](seiva-at-a-glance.md)
+(Once published: `cargo install seiva-cli`.)
+
+## Create and run a project
+
+```console
+$ seiva project new demo
+$ cd demo
+$ seiva module new notes       # a module, auto-wired into the composition root
+$ seiva start                  # run it (add --watch for hot-reload)
+```
+
+The service serves `/health`, `/openapi.json`, `/docs`, `/admin` and the module's
+`POST /v1/notes`. Check `seiva doctor` for the framework version and which data
+layer is linked.
+
+## Verify
+
+```console
+$ seiva openapi | grep '/v1/notes'      # the project's own contract
+```
+
+## Next
+
+Follow the [tutorial](tutorial/part-1-your-first-module.md), or if you come from
+FastAPI start with [your first day](../first-day.md). The fuller walk-through is
+the [quickstart](../quickstart.md).
 
 ---
 
-*Part of the [Seiva documentation](../index.md), organised like the Django
-docs (tutorials · topic guides · reference · how-to).*
+*Part of the [Seiva documentation](../index.md).*
