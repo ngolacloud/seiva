@@ -448,6 +448,8 @@ dependencies = [
 [[package]]
 name = "dorm-core"
 version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "341009ad071e6f87b85110b2c6c56c4379236d79772b34131e468190c61a9688"
 dependencies = [
  "base64",
  "chrono",
@@ -495,6 +497,8 @@ dependencies = [
 [[package]]
 name = "dorm-outbox"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ef34124efa78ead1b3cae406f7ec8754d1966d1d78b7743d17358c6c04d520a"
 dependencies = [
  "dorm-core",
  "serde_json",

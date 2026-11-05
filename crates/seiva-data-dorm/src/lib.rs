@@ -6,8 +6,8 @@
 //! the DORM data layer off is simply not compiling this crate (the brief's Parte
 //! C), which is why the coupling is confined to one place.
 //!
-//! It depends on DORM by published crate version (redirected to a local checkout
-//! by an interim `[patch.crates-io]` until DORM publishes) and implements **all
+//! It depends on DORM by published crate version (resolved from crates.io) and
+//! implements **all
 //! four ports**: [`Clock`], [`IdGenerator`], the scope-based [`UnitOfWork`] via
 //! [`DormUnitOfWork`] (which maps straight onto DORM's `with_session` +
 //! `db::atomic` — the resolution ADR 0004 chose for the tx-model mismatch), and

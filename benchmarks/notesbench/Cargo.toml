@@ -13,15 +13,6 @@ members = [
     # seiva:module-members (managed by the seiva CLI)
 ]
 
-# INTERIM — remove once the framework crates are published to crates.io.
-# The manifests above depend on the framework by version (`= "0.1"`); until
-# those versions exist on crates.io, this redirects them to a local
-# framework checkout so `cargo build` resolves standalone. Regenerate with
-# `SEIVA_FRAMEWORK_DIR=/path/to/seiva` to point elsewhere.
-[patch.crates-io]
-delonix-seiva = { path = "/home/walter/workspaces/NgolaCloud/projects/seiva/crates/delonix-seiva" }
-seiva-http = { path = "/home/walter/workspaces/NgolaCloud/projects/seiva/crates/seiva-http" }
-seiva-ports = { path = "/home/walter/workspaces/NgolaCloud/projects/seiva/crates/seiva-ports" }
-seiva-openapi = { path = "/home/walter/workspaces/NgolaCloud/projects/seiva/crates/seiva-openapi" }
-seiva-grpc = { path = "/home/walter/workspaces/NgolaCloud/projects/seiva/crates/seiva-grpc" }
-seiva-server = { path = "/home/walter/workspaces/NgolaCloud/projects/seiva/crates/seiva-server" }
+# The manifests above depend on the framework by version (`= "0.1"`). Those
+# crates are published to crates.io (v0.1.0), so `cargo build` resolves them
+# from the registry with no local redirect.
