@@ -68,9 +68,15 @@ New ADRs: **0008–0015** (+ the 0007 addendum). Later commits (0015 distributed
   p50/p95/p99 + status codes + RSS reported, and the per-IP limiter shown shedding a
   flood as sub-ms 429s. Honest caveats stated: single host/loopback, two processes
   model replicas, in-process limiter here (not the distributed Redis one), idempotency
-  not on this write's hot path. A fully containerised, load-balanced multi-replica
-  deployment via `delonix` with the distributed rate-limit/idempotency on the hot path
-  remains the open production-form gap. The published build-profile numbers remain
+  not on this write's hot path. The fully containerised, load-balanced multi-replica
+  deployment via `delonix` — **done** (`benchmarks/production/delonix/`): `delonix
+  compose up` runs PostgreSQL + Redis + two Catalog replicas + HAProxy, and proves
+  the per-client rate budget is ONE across replicas (120/min limit, 4000-req burst
+  through the LB → 119 admitted, not ~240) via the distributed Redis limiter, plus
+  throughput through the containerised LB. The remaining smaller gap: idempotency on
+  this deployment's write hot path (the durable store is proved cross-replica by
+  `seiva-data-dorm`'s multi-process test, but the `Catalog` HTTP POST does not yet
+  attach an `Idempotency-Key`). The published build-profile numbers remain
   overhead-only and are labelled so.
 - **gRPC** is proto-generation only; no served round-trip is claimed, so none is
   asserted (ADR 0007 addendum).
