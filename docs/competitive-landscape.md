@@ -15,28 +15,56 @@ and compete. Written to be used, not to flatter.
 
 Legend: ✅ strong · 🟡 partial/in-progress · ✖ missing.
 
+Legend for the Seiva column: a ⬆︎ marks a cell that moved in the P0–P1 campaign
+(see the [progress delta](#progress-delta) below for the proof).
+
 | Capability | FastAPI | Django | **Seiva** | DORM / Prisma |
 | --- | --- | --- | --- | --- |
-| Auto OpenAPI + live docs UI | ✅ | ✖ | ✅ **faithful from the contract** | — |
+| Auto OpenAPI + live docs UI | ✅ | ✖ | ✅ faithful, **project-aware** ⬆︎ | — |
 | Type/schema-driven validation | ✅ Pydantic | 🟡 forms | ✅ `serde` + `Validate` | — |
 | Request→contract fidelity | ✅ | n/a | ✅ `WireSchema` (no envelope/placeholder) | — |
 | Async, high throughput | ✅ (GC) | 🟡 (GIL/GC) | ✅ **no GC, Rust** | — |
 | Dependency injection / ports | ✅ `Depends` | 🟡 | ✅ trait ports | — |
-| Dev CLI (`dev`/reload) | ✅ fastapi-cli | ✅ runserver | 🟡 `seiva start` (no hot-reload yet) | — |
-| Project/app scaffolding | ✖ | ✅ | ✅ `seiva project/module new` | — |
-| ORM / data layer | ✖ | ✅ | 🟡 DORM (feature, cutover WIP) | ✅ Prisma |
-| Migrations | ✖ | ✅ | 🟡 `seiva db dev/migrate` (DORM) | ✅ migrate |
+| Dev CLI (`dev`/reload) | ✅ fastapi-cli | ✅ runserver | ✅ `seiva start --watch` ⬆︎ | — |
+| Project/app scaffolding | ✖ | ✅ | ✅ `new` + **auto-wire** ⬆︎ | — |
+| ORM / data layer | ✖ | ✅ | ✅ DORM round-trip proven ⬆︎ | ✅ Prisma |
+| Migrations | ✖ | ✅ | ✅ `seiva db init/dev/migrate` ⬆︎ | ✅ migrate |
 | Built-in auth (verified JWT/OIDC) | 🟡 primitives | ✅ sessions | ✅ deny-by-default, verified | — |
 | Object-level authz (BOLA) | ✖ | 🟡 | ✅ `Scoped<T>` compile-time | — |
 | Security-by-default | 🟡 | ✅ | ✅ headers/authn/rate-limit/OWASP | — |
-| Admin GUI | ✖ | ✅ **signature** | ✖ **gap** | 🟡 Studio (data GUI) |
-| Schema DSL + studio | — | — | 🟡 DORM schema; `dorm studio` | ✅ Prisma |
-| DB introspection (brownfield) | ✖ | 🟡 inspectdb | 🟡 (roadmap) | ✅ `db pull` |
-| Multi-database | via SQLAlchemy | ✅ | 🟡 (PG first) | ✅ incl. Mongo |
+| Admin GUI | ✖ | ✅ **signature** | ✅ `/admin` + `seiva db studio` ⬆︎ | 🟡 Studio (data GUI) |
+| Schema DSL + studio | — | — | ✅ schema sync + `db studio` ⬆︎ | ✅ Prisma |
+| DB introspection (brownfield) | ✖ | 🟡 inspectdb | ✅ `seiva db pull` ⬆︎ | ✅ `db pull` |
+| Multi-database | via SQLAlchemy | ✅ | 🟡 PG live; Seiva DSN-agnostic, gated on DORM backend | ✅ incl. Mongo |
 | Single-binary / distroless deploy | ✖ | ✖ | ✅ **built-in** | ✅ (vs Prisma npm+codegen) |
-| Hot reload / editor DX maturity | ✅ | ✅ | 🟡 (compile times, tooling young) | — |
-| Docs (Diátaxis) | ✅ excellent | ✅ **gold standard** | 🟡 structure now mirrors Django; content WIP | ✅ |
+| Hot reload / editor DX maturity | ✅ | ✅ | 🟡 hot-reload done; editor ext + compile times WIP | — |
+| Docs (Diátaxis) | ✅ excellent | ✅ **gold standard** | 🟡 structure mirrors Django; content WIP | ✅ |
 | Ecosystem / mindshare | ✅ huge | ✅ huge | ✖ **nascent** | ✅ huge |
+
+## Progress delta
+
+The P0–P1 campaign that followed the first scorecard. Every ⬆︎ cell above points
+to a slice here, and every slice closed only against a fitness test or a
+reproducible live demo (so the moves are earned, not asserted). Branches are
+stacked and unpushed; the owner integrates.
+
+| Gap | What landed | Proof | Commit |
+| --- | --- | --- | --- |
+| Standalone compile | generated project builds via interim `[patch.crates-io]`; main uses `router_with_modules` | fitness compiles a generated project + module | `d145961` |
+| Contract fidelity | `WireSchema` trait+derive+inventory; body = DTO directly, real schemas | `seiva openapi` → `{title}`/`{id,title}`, 0 placeholders | `feceb67` (ADR 0007) |
+| Dev CLI reload | `seiva start --watch` / `--no-watch` | unit-tested `resolve_reload` | `561b437` |
+| Facade discovery | `seiva module new` auto-wires; `seiva openapi` documents the project | fitness runs the bin → `/v1/widgets` | `a5ab52e` |
+| Data layer | DORM gateway on published-crate deps; module round-trip | live `Accounts::create_user` → persist+outbox+relay vs PG | `dbdd93a`, `06dd60b` |
+| Brownfield introspection | `seiva db pull` (delegates `dorm db pull`) | live → faithful `model CatalogItem` from a PG table | `f203cba` |
+| Migrations | `seiva db init/dev/migrate`; module schema → migration | live → `public.records` from the `notes` model | `006b9a8`, `82a7418` |
+| Admin GUI | `/admin` console (from the contract) + `seiva db studio` (data) | live `/admin` 200; `db studio` served rows | `2da7c64`, `c5fe05f` (+ DORM `552eaaf`) |
+
+**Remaining** (the honest frontier): **P0-4** publish the crates (owner-only) —
+drops the interim patches; **P1-8** multi-database — Seiva's data commands are
+DSN-agnostic, but a *live* second backend is gated on DORM's runtime backend
+(MySQL is a compiler dialect profile in the current checkout; the live backend is
+DORM roadmap, ADR 0011); **P2** — docs content, a VS Code extension, a published
+benchmark, and project-aware `seiva proto`.
 
 ## Where we are genuinely better
 
