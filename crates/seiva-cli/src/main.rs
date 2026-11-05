@@ -179,6 +179,20 @@ enum DbAction {
         #[arg(long)]
         dsn: Option<String>,
     },
+    /// Browse and edit the database in your browser — the data admin, Django/Prisma
+    /// Studio style. Delegates to `dorm studio` (native: reads the live schema, no
+    /// project build). Read-only unless `--write`. Binds 127.0.0.1 only.
+    Studio {
+        /// TCP port to serve on (default 5555).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Allow writes — create, edit and delete rows (off by default).
+        #[arg(long)]
+        write: bool,
+        /// The database DSN (else `DELONIX_ORM_DSN`).
+        #[arg(long)]
+        dsn: Option<String>,
+    },
 }
 
 fn not_yet(what: &str, phase: &str) -> ExitCode {
@@ -759,6 +773,54 @@ fn db_pull(out: Option<String>, dsn: Option<String>) -> ExitCode {
     }
 }
 
+/// The DORM CLI arguments for `seiva db studio`. Pure, so it is unit-tested: a
+/// global `--dsn` (when given) precedes `studio`, then the optional `--port` and
+/// the `--write` flag.
+fn dorm_studio_args(port: Option<u16>, write: bool, dsn: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    if let Some(dsn) = dsn {
+        args.push("--dsn".to_owned());
+        args.push(dsn.to_owned());
+    }
+    args.push("studio".to_owned());
+    if let Some(port) = port {
+        args.push("--port".to_owned());
+        args.push(port.to_string());
+    }
+    if write {
+        args.push("--write".to_owned());
+    }
+    args
+}
+
+/// `seiva db studio`: serve the data admin — browse (and, with `--write`, edit)
+/// the database in a browser — by delegating to `dorm studio`. Native: it reads
+/// the live schema and needs no project build, so it runs anywhere with a DSN
+/// (`--dsn` or `DELONIX_ORM_DSN`). Serves on 127.0.0.1 until interrupted.
+fn db_studio(port: Option<u16>, write: bool, dsn: Option<String>) -> ExitCode {
+    let dorm = dorm_bin();
+    let args = dorm_studio_args(port, write, dsn.as_deref());
+    eprintln!(
+        "seiva: opening the data admin via `{dorm} studio`{} (Ctrl-C to stop) ...",
+        if write {
+            " (writes enabled)"
+        } else {
+            " (read-only)"
+        }
+    );
+    match std::process::Command::new(&dorm).args(&args).status() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(error) => {
+            eprintln!(
+                "seiva: could not run `{dorm}`: {error}\n\
+                 seiva db studio needs the DORM CLI (set SEIVA_DORM_BIN or install dorm-cli)."
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// The directory the project's DORM data layer lives in (the DORM project
 /// `seiva db dev`/`migrate` drive). Fixed as `data/` for this first cut.
 const DORM_PROJECT_DIR: &str = "data";
@@ -1054,6 +1116,7 @@ fn main() -> ExitCode {
             DbAction::Dev { name } => db_dev(&name),
             DbAction::Migrate => db_migrate(),
             DbAction::Pull { out, dsn } => db_pull(out, dsn),
+            DbAction::Studio { port, write, dsn } => db_studio(port, write, dsn),
         },
         Command::Lint => lint(),
         Command::Expand => not_yet("expand", "the macros phase"),
@@ -1146,6 +1209,24 @@ mod tests {
                 "pull",
                 "--out",
                 "out.schema"
+            ]
+        );
+    }
+
+    #[test]
+    fn dorm_studio_args_build_the_delegation() {
+        // Defaults: just `studio` (read-only, DORM's default port).
+        assert_eq!(dorm_studio_args(None, false, None), vec!["studio"]);
+        // With a DSN, port and writes: `--dsn X studio --port N --write`.
+        assert_eq!(
+            dorm_studio_args(Some(5599), true, Some("postgres://x/y")),
+            vec![
+                "--dsn",
+                "postgres://x/y",
+                "studio",
+                "--port",
+                "5599",
+                "--write"
             ]
         );
     }
