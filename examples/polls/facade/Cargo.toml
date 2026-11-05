@@ -1,0 +1,12 @@
+# Facade layer of the `polls` example module (the Django-tutorial app, ported
+# to Seiva): the public, versioned contract. May depend only on shared/kernel
+# and the Seiva macros (ADR 0003).
+[package]
+name = "polls-facade"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+delonix-seiva = { workspace = true }

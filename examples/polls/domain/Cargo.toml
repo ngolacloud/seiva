@@ -1,0 +1,11 @@
+# Domain layer of the `polls` example: entities and rules. Depends on nothing
+# but shared/kernel — the crate graph forbids any other layer, the framework or
+# DORM (ADR 0003).
+[package]
+name = "polls-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

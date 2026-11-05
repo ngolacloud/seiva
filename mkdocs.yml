@@ -1,0 +1,172 @@
+site_name: Delonix Seiva
+site_url: https://ngolacloud.github.io/seiva/
+site_description: >-
+  A Rust backend framework for robust, high-criticality systems — the
+  ergonomics of FastAPI and the batteries of Django, as one compiled binary.
+repo_url: https://github.com/ngolacloud/seiva
+repo_name: ngolacloud/seiva
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    # Light mode (Django daylight).
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    # Dark mode.
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  font:
+    text: Source Sans Pro
+    code: Source Code Pro
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - stylesheets/django.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/index.md
+      - Seiva at a glance: getting-started/seiva-at-a-glance.md
+      - Quick install: getting-started/quick-install.md
+      - Quickstart: quickstart.md
+      - Coming from FastAPI: getting-started/from-fastapi.md
+      - Your first day: first-day.md
+      - Tutorial:
+          - 1 · Your first module: getting-started/tutorial/part-1-your-first-module.md
+          - 2 · Validation and DTOs: getting-started/tutorial/part-2-validation-and-dtos.md
+          - 3 · The data layer: getting-started/tutorial/part-3-the-data-layer.md
+          - 4 · Authentication: getting-started/tutorial/part-4-authentication.md
+          - 5 · Testing: getting-started/tutorial/part-5-testing.md
+          - 6 · Packaging and deploy: getting-started/tutorial/part-6-packaging-and-deploy.md
+      - What to read next: getting-started/what-to-read-next.md
+  - Topic guides:
+      - topics/index.md
+      - The data layer:
+          - topics/data-layer/index.md
+          - Models and schema: topics/data-layer/models.md
+          - Making queries: topics/data-layer/queries.md
+          - Migrations: topics/data-layer/migrations.md
+          - Transactions: topics/data-layer/transactions.md
+          - Raw SQL: topics/data-layer/raw-sql.md
+          - Multiple databases: topics/data-layer/multiple-databases.md
+      - The transport layer:
+          - topics/transport/index.md
+          - Application and composition: topics/transport/application-and-composition.md
+          - Controllers and routing: topics/transport/controllers-and-routing.md
+          - Facades, the contract: topics/transport/facades.md
+          - Middleware layers: topics/transport/middleware-layers.md
+          - Requests and responses: topics/transport/request-and-response.md
+      - API documents: topics/api-documents.md
+      - Validation and DTOs: topics/validation.md
+      - Authentication: topics/authentication.md
+      - Authorization: topics/authorization.md
+      - Security: topics/security.md
+      - Observability: topics/observability.md
+      - Messaging and events: topics/messaging-and-events.md
+      - Background workers: topics/background-workers.md
+      - CQRS dispatch: topics/cqrs.md
+      - Caching: topics/caching.md
+      - Pagination: topics/pagination.md
+      - Sending email: topics/sending-email.md
+      - Sessions: topics/sessions.md
+      - Serialization: topics/serialization.md
+      - Configuration: topics/configuration.md
+      - Testing: topics/testing.md
+      - Performance and cloud-native:
+          - topics/performance.md
+          - LLVM release profile: topics/performance/llvm-profile.md
+          - Production-path load: topics/performance/production-load.md
+      - Admin console migration: topics/admin-console-migration.md
+  - Reference:
+      - reference/index.md
+      - The seiva CLI: reference/cli.md
+      - Settings and environment: reference/settings.md
+      - Contract descriptor: reference/contract-descriptor.md
+      - Wire schema: reference/wire-schema.md
+      - The crates: reference/crates/index.md
+  - How-to guides:
+      - howto/index.md
+      - Add a module: howto/add-a-module.md
+      - Add authentication: howto/add-authentication.md
+      - Switch to DORM: howto/switch-to-dorm.md
+      - Deploy distroless: howto/deploy-distroless.md
+      - Publish the crates: howto/publish-the-crates.md
+      - Write a fitness function: howto/write-a-fitness-function.md
+  - FAQ: faq/index.md
+  - Glossary: glossary.md
+  - Release notes:
+      - releases/index.md
+      - Engineering log: progress.md
+      - Roadmap: roadmap.md
+      - Benchmarks: benchmarks.md
+      - Competitive landscape: competitive-landscape.md
+      - Publishing status: publishing.md
+  - Internals:
+      - internals/index.md
+      - Architecture: architecture.md
+      - The contract and the macros: internals/the-contract-and-macros.md
+      - Evolution evidence: internals/evolution-evidence.md
+      - Release process: internals/release-process.md
+      - Contributing: internals/contributing.md
+      - Documentation structure: STRUCTURE.md
+      - ADRs:
+          - internals/adrs.md
+          - 0001 · Seiva foundations: adr/0001-seiva-foundations.md
+          - 0002 · Core ports and test doubles: adr/0002-core-ports-and-test-doubles.md
+          - 0003 · Module layering and the facade: adr/0003-module-layering-and-facade-impl.md
+          - 0004 · The DORM data-layer gateway: adr/0004-dorm-data-layer-gateway.md
+          - 0005 · Object-level authorization (BOLA): adr/0005-object-level-authorization-bola.md
+          - 0006 · Identity and authentication: adr/0006-identity-and-authentication.md
+          - 0007 · Wire-schema contract fidelity: adr/0007-wire-schema-contract-fidelity.md
+          - 0008 · Admin console as an extension: adr/0008-admin-console-as-an-extension.md
+          - 0009 · Per-module admin registration: adr/0009-per-module-admin-registration.md
+          - 0010 · Extension integration contract: adr/0010-extension-integration-contract.md
+          - 0011 · Durable idempotency: adr/0011-durable-idempotency.md
+          - 0012 · Cloud-native health and limits: adr/0012-cloud-native-health-and-limits.md
+          - 0013 · Admin mutation audit: adr/0013-admin-mutation-audit.md
+          - 0014 · Supply-chain audit of excluded lockfiles: adr/0014-supply-chain-audit-excluded-lockfiles.md
+          - 0015 · Distributed rate limiting: adr/0015-distributed-rate-limit.md
+  - API reference: https://ngolacloud.github.io/seiva/api/

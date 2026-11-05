@@ -89,6 +89,13 @@ members = [
     "examples/notes/application",
     "examples/notes/infrastructure",
     "examples/notes/interface",
+    # The `polls` module (five layers): the Django "first app" tutorial (questions,
+    # choices, voting, results) ported to Seiva. In-memory repository, DORM-free.
+    "examples/polls/facade",
+    "examples/polls/domain",
+    "examples/polls/application",
+    "examples/polls/infrastructure",
+    "examples/polls/interface",
     # The `accounts` module (five layers) over seiva-auth: a real module the CLI
     # `seiva user create` persists through. In-memory repository, DORM-free.
     "examples/accounts/facade",

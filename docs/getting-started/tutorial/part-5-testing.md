@@ -1,35 +1,47 @@
 # Part 5: Testing your module
 
-The generated `notes` module already ships with tests. In this part we see the
-three levels Seiva makes easy: use-case unit tests, the architecture fitness
-functions, and how to run them.
+The Django tutorial's [Part 5](https://docs.djangoproject.com/en/6.1/intro/tutorial05/)
+adds tests for the polls app. The `polls` module ships with tests too; this part
+shows the three levels Seiva makes easy: use-case unit tests, the architecture
+fitness functions, and how to run them.
 
 ## Unit-test the use case (no server, no DB)
 
 The application layer codes against ports, so the use case tests with in-memory
-fakes from `seiva-testing` — no HTTP, no database:
+fakes from `seiva-testing` — no HTTP, no database. This is the real test from
+[`examples/polls/application`](https://github.com/ngolacloud/seiva/tree/main/examples/polls/application),
+condensed:
 
 ```rust
 #[tokio::test]
-async fn create_persists_and_returns_the_dto() {
-    let service = RecordService { repository: FakeRepo::default(), ids: FixedIds };
-    let dto = service.create(CreateRecord { title: "hello".into() }).await.unwrap();
-    assert_eq!(dto.title, "hello");
+async fn ask_add_choice_vote_and_read_back() {
+    let svc = service();                                   // fakes for every port
+
+    let q = svc.ask(CreateQuestion { text: "What's new?".into() }).await.unwrap();
+    let a = svc.add_choice(AddChoice { question_id: q.id, text: "Not much".into() }).await.unwrap();
+
+    svc.vote(Vote { choice_id: a.id }).await.unwrap();
+    let after = svc.vote(Vote { choice_id: a.id }).await.unwrap();
+    assert_eq!(after.votes, 2);                            // the tally is real
+
+    let detail = svc.detail(GetQuestion { id: q.id }).await.unwrap();
+    assert_eq!(detail.choices[0].votes, 2);
 }
 ```
 
-Run them:
+The suite also proves the unhappy paths: an empty question is refused by the
+domain rule (nothing commits), a choice for a missing question errors, and voting
+an unknown choice **rolls the transaction back** and emits no event. Run them:
 
 ```console
 $ cargo test
 ```
 
-The generated module includes this test (and a domain-rule test) out of the box.
-
 ## Architecture fitness functions
 
 `seiva lint` runs the invariants that keep the architecture honest — for example,
-the `interface` layer may not depend on `infrastructure`:
+the `interface` layer may not depend on `infrastructure`, and a module's
+`application` must not name `delonix_seiva` directly:
 
 ```console
 $ seiva lint
@@ -42,14 +54,16 @@ cannot erode (see the `seiva-pattern-fitness` catalogue).
 
 The framework's own `seiva-controller-test` proves a `#[seiva::controller]`
 generates a working, guarded, versioned router end to end — the pattern to copy
-when you want to test a module's routes with a test client.
+when you want to test the polls routes with a test client (a `403` with no token,
+`201` for a valid `ask`, the vote tally rising).
 
 ## The principle
 
-Put input validation in `Validate`, business rules in the `domain` (unit-tested
-with no dependencies), and keep the application layer transport-free so its tests
-need nothing but fakes. The expensive things (a database, a server) are for the
-few integration tests, not the many unit tests. See [Testing](../../topics/testing.md).
+Put input validation in `Validate`, business rules in the `domain` (the vote
+tally, the non-empty text — unit-tested with no dependencies), and keep the
+application layer transport-free so its tests need nothing but fakes. The
+expensive things (a database, a server) are for the few integration tests, not the
+many unit tests. See [Testing](../../topics/testing.md).
 
 ## Next
 

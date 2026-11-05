@@ -2183,6 +2183,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
+name = "polls-application"
+version = "0.1.0"
+dependencies = [
+ "polls-domain",
+ "polls-facade",
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "polls-domain"
+version = "0.1.0"
+
+[[package]]
+name = "polls-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "polls-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "polls-application",
+ "polls-domain",
+ "seiva-ports",
+]
+
+[[package]]
+name = "polls-interface"
+version = "0.1.0"
+dependencies = [
+ "polls-facade",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

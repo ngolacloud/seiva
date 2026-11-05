@@ -1,7 +1,8 @@
 name: pages
 
-# Publishes the framework's API documentation (rustdoc) to GitHub Pages with a
-# small landing page linking the crates and the written guides.
+# Builds and publishes the Delonix Seiva documentation to GitHub Pages:
+#   * the written guides (mkdocs-material, Django-styled) served at the root;
+#   * the Rust API documentation (rustdoc) served under /api/.
 #
 # The `configure-pages` step self-enables Pages (`enablement: true`) using the
 # workflow token, so no manual setup is normally needed. If org policy forbids
@@ -28,99 +29,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install the toolchain
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the documentation toolchain
+        run: pip install mkdocs-material pymdown-extensions
+
+      - name: Install the Rust toolchain
         run: rustup toolchain install stable
       - uses: Swatinem/rust-cache@v2
+
       # DORM-free: the default workspace excludes the DORM-coupled crates, so the
       # public docs build with no credentials.
-      - name: Build the API docs
+      - name: Build the API docs (rustdoc)
         run: cargo doc --no-deps --workspace
-      - name: Write the landing page
+
+      - name: Build the documentation site (mkdocs)
+        run: mkdocs build
+
+      - name: Fold the rustdoc into the site under /api/
         run: |
-          cat > target/doc/index.html <<'HTML'
+          mkdir -p site/api
+          cp -r target/doc/* site/api/
+          # Pages serves no directory listing without an index; redirect /api/
+          # to the framework crate's rustdoc landing.
+          cat > site/api/index.html <<'HTML'
           <!doctype html>
           <html lang="en">
           <head>
             <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Delonix Seiva — documentation</title>
-            <style>
-              :root { color-scheme: light dark; }
-              body { max-width: 52rem; margin: 3rem auto; padding: 0 1.25rem;
-                     font: 16px/1.6 system-ui, sans-serif; }
-              h1 { margin-bottom: 0.25rem; }
-              .sub { color: gray; margin-top: 0; }
-              h2 { margin-top: 2rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
-              ul { padding-left: 1.2rem; } li { margin: .3rem 0; }
-              code { font-family: ui-monospace, monospace; }
-              a { text-decoration: none; } a:hover { text-decoration: underline; }
-            </style>
+            <meta http-equiv="refresh" content="0; url=delonix_seiva/index.html">
+            <link rel="canonical" href="delonix_seiva/index.html">
+            <title>Delonix Seiva — API reference</title>
           </head>
           <body>
-            <h1>Delonix Seiva</h1>
-            <p class="sub">A Rust backend framework for robust, high-criticality systems —
-              the ergonomics of FastAPI and the batteries of Django, as one compiled binary.</p>
-            <p>
-              <a href="https://crates.io/crates/delonix-seiva"><code>delonix-seiva</code> on crates.io (0.1.0)</a>
-              · <a href="https://github.com/ngolacloud/seiva">Source</a>
-              · <a href="https://github.com/ngolacloud/seiva/releases/tag/v0.1.0">Release 0.1.0</a>
-            </p>
-
-            <h2>Start here</h2>
-            <ul>
-              <li><a href="https://github.com/ngolacloud/seiva#readme">Overview (README)</a></li>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/getting-started/seiva-at-a-glance.md">Seiva at a glance</a>
-                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/getting-started/quick-install.md">Quick install</a>
-                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/quickstart.md">Quickstart</a></li>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/first-day.md">Coming from FastAPI</a></li>
-            </ul>
-
-            <h2>Documentation</h2>
-            <p class="sub">Organised like the Django docs (the <a href="https://diataxis.fr">Diátaxis</a> model).</p>
-            <ul>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/getting-started/index.md">Tutorials</a>
-                  — hand-held lessons from empty checkout to a packaged, authenticated service</li>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/topics/index.md">Topic guides</a>
-                  — the data layer, transport, validation, identity, security, events</li>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/reference/index.md">Reference</a>
-                  — the CLI, settings, the contract descriptor and the crates</li>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/howto/index.md">How-to guides</a>
-                  — add a module, switch to DORM, deploy distroless</li>
-            </ul>
-            <ul>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/architecture.md">Architecture</a>
-                  — the layers, the facade contract, the generated transports</li>
-              <li><a href="https://github.com/ngolacloud/seiva/blob/main/docs/benchmarks.md">Benchmarks</a>
-                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/competitive-landscape.md">Competitive landscape</a>
-                  · <a href="https://github.com/ngolacloud/seiva/blob/main/docs/releases/index.md">Release notes</a></li>
-              <li><a href="https://github.com/ngolacloud/seiva/tree/main/docs/adr">Architecture decision records (ADRs)</a></li>
-            </ul>
-
-            <h2>API reference</h2>
-            <ul>
-              <li><a href="delonix_seiva/index.html"><code>delonix-seiva</code></a> — the framework entrypoint (contract, lint, scaffold, worker)</li>
-              <li><a href="seiva_ports/index.html"><code>seiva-ports</code></a> — the trait-only boundary</li>
-              <li><a href="seiva_http/index.html"><code>seiva-http</code></a> — the HTTP transport</li>
-              <li><a href="seiva_grpc/index.html"><code>seiva-grpc</code></a> — proto3/gRPC generation</li>
-              <li><a href="seiva_openapi/index.html"><code>seiva-openapi</code></a> — OpenAPI 3.1 generation</li>
-              <li><a href="seiva_cqrs/index.html"><code>seiva-cqrs</code></a> — command/query dispatch</li>
-              <li><a href="seiva_server/index.html"><code>seiva-server</code></a> — the service runtime</li>
-              <li><a href="seiva_messaging/index.html"><code>seiva-messaging</code></a> — CloudEvents + brokers</li>
-              <li><a href="seiva_auth/index.html"><code>seiva-auth</code></a> · <a href="seiva_config/index.html"><code>seiva-config</code></a> · <a href="seiva_webhooks/index.html"><code>seiva-webhooks</code></a></li>
-            </ul>
+            <p>Redirecting to the <a href="delonix_seiva/index.html">Delonix Seiva API reference</a>…</p>
           </body>
           </html>
           HTML
-          # Pages serves no directory listing without an index; the one above is it.
-          echo "landing page written"
+          echo "rustdoc folded into site/api/"
+
       - uses: actions/configure-pages@v5
         with:
           # Create/enable the Pages site (Actions build type) if it does not
           # exist yet, so the first run provisions it instead of failing.
           enablement: true
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: target/doc
+          path: site
 
   deploy:
     needs: build

@@ -15,9 +15,11 @@ authenticated and packaged service.
 
 ## The tutorial
 
-A guided build of a real module, one concern per part:
+A guided build of a **polls** app — the same application as the
+[Django tutorial](https://docs.djangoproject.com/en/6.1/intro/tutorial01/)
+(questions, choices, voting, results) — one concern per part:
 
-1. [Your first module](tutorial/part-1-your-first-module.md) — scaffold and the five layers
+1. [Your first module](tutorial/part-1-your-first-module.md) — scaffold the polls module and meet the five layers
 2. [Validation and DTOs](tutorial/part-2-validation-and-dtos.md) — `Valid<T>`, RFC 9457, `WireSchema`
 3. [Persisting with the data layer](tutorial/part-3-the-data-layer.md) — swap in DORM
 4. [Authentication and permissions](tutorial/part-4-authentication.md) — verified `Principal`, `#[requires]`

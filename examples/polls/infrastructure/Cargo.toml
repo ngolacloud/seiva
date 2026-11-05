@@ -1,0 +1,13 @@
+# Infrastructure layer of the `polls` example: the repository adapter.
+# Depends on application + domain + seiva-ports. Not on interface (ADR 0003).
+[package]
+name = "polls-infrastructure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+polls-application = { path = "../application" }
+polls-domain = { path = "../domain" }
+seiva-ports = { workspace = true }

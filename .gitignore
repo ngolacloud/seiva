@@ -16,3 +16,7 @@ e2e/admin/node_modules/
 
 # oha raw JSON from the production load benchmark
 benchmarks/production/results/
+
+# The rendered MkDocs documentation site (build artifact; CI builds and deploys
+# it to GitHub Pages — see .github/workflows/pages.yml).
+/site/
