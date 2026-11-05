@@ -74,7 +74,11 @@ extension, and a published benchmark.
    is the structural win: higher throughput, lower tail latency, no interpreter/GIL,
    and a distroless, non-root, shell-less image out of the box (the
    `seiva-cloud-native-check` discipline). Deploy is `COPY one-binary`, not "ship a
-   Python/Node runtime + deps".
+   Python/Node runtime + deps". This is **measured, not asserted** — see
+   [Benchmarks](benchmarks.md): on a trivial no-DB workload Seiva served ~3–5× the
+   throughput of FastAPI and ~15× that of Django, with sub-millisecond p99, on the
+   reference machine (reproduce with `benchmarks/run.sh`; numbers are
+   environment-dependent).
 2. **Contract fidelity by construction.** The OpenAPI document is *generated from
    the same contract the server enforces*, with real schemas (`WireSchema`, ADR
    0007) — no drift between docs and reality. FastAPI gets this from Pydantic; we
