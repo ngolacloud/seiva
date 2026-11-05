@@ -23,15 +23,7 @@ theme:
     - search.suggest
     - search.highlight
   palette:
-    # Light mode (Django daylight).
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: custom
-      accent: custom
-      toggle:
-        icon: material/weather-night
-        name: Switch to dark mode
-    # Dark mode.
+    # Dark mode is the default (follows the OS, but dark leads the identity).
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: custom
@@ -39,15 +31,23 @@ theme:
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
+    # Light mode.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
   font:
-    # Django's signature typefaces: Fira Sans for text, Fira Mono for code.
+    # Fira Sans for text, Fira Mono for code.
     text: Fira Sans
     code: Fira Mono
   icon:
     repo: fontawesome/brands/github
 
 extra_css:
-  - stylesheets/django.css
+  - stylesheets/seiva.css
 
 markdown_extensions:
   - admonition
@@ -63,6 +63,9 @@ markdown_extensions:
       alternate_style: true
   - toc:
       permalink: true
+
+hooks:
+  - docs_ext/mkdocs_hooks.py
 
 plugins:
   - search
@@ -83,6 +86,7 @@ nav:
           - 4 · Authentication: getting-started/tutorial/part-4-authentication.md
           - 5 · Testing: getting-started/tutorial/part-5-testing.md
           - 6 · Packaging and deploy: getting-started/tutorial/part-6-packaging-and-deploy.md
+          - 7 · From monolith to a microservice: getting-started/tutorial/part-7-monolith-to-microservice.md
       - What to read next: getting-started/what-to-read-next.md
   - Topic guides:
       - topics/index.md
