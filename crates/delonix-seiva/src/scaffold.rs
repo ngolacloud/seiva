@@ -333,6 +333,37 @@ pub fn append_namespace_block(schema: &str, module: &str) -> Result<String, Scaf
     ))
 }
 
+/// Adapts the Seiva project schema (`schema/<project>.schema`) into a schema the
+/// DORM data layer migrates from (`data/dorm.schema`). The two share a DSL — DORM
+/// supports `namespace` blocks natively (that is how it imposes the module
+/// boundary) — so the module `namespace`s and their models pass through verbatim.
+/// Two adjustments make it a valid DORM schema:
+///
+/// 1. **The datasource URL.** DORM's migrate reads the DSN from the datasource's
+///    `url`; the project schema omits it (the DSN is environment-supplied), so a
+///    `url = env("DELONIX_ORM_DSN")` is injected when absent.
+/// 2. **`@version`.** The scaffold marks the optimistic-concurrency column with
+///    `@version`, which this DORM's schema parser does not accept yet; it is
+///    dropped so the schema parses. The `version` column itself stays — only the
+///    attribute is removed (the concurrency enforcement is a runtime concern).
+///
+/// Pure, so `seiva db init`/`dev` can write the result and the transform is tested
+/// without a database.
+#[must_use]
+pub fn dorm_schema_from_project(project_schema: &str) -> String {
+    let mut out = project_schema.to_owned();
+    let anchor = "datasource db {\n";
+    if !out.contains("url ") && !out.contains("url=") {
+        if let Some(pos) = out.find(anchor) {
+            out.insert_str(
+                pos + anchor.len(),
+                "  url      = env(\"DELONIX_ORM_DSN\")\n",
+            );
+        }
+    }
+    out.replace("@version", "")
+}
+
 // --- templates ---------------------------------------------------------------
 
 fn seiva_toml(name: &str) -> String {
@@ -1448,5 +1479,24 @@ mod tests {
         let out = append_namespace_block(&schema, "notes").unwrap();
         assert!(out.contains("namespace notes {"));
         assert!(append_namespace_block(&out, "notes").is_err());
+    }
+
+    #[test]
+    fn dorm_schema_adapts_the_project_schema() {
+        // A project schema with a module namespace (and the scaffold's `@version`).
+        let project = append_namespace_block(&project_schema(), "notes").unwrap();
+        let dorm = dorm_schema_from_project(&project);
+        // The datasource gains the env-driven URL DORM's migrate needs.
+        assert!(dorm.contains("url      = env(\"DELONIX_ORM_DSN\")"));
+        // The module namespace and its model pass through (shared DSL).
+        assert!(dorm.contains("namespace notes {"));
+        assert!(dorm.contains("model Record {"));
+        assert!(dorm.contains("id      Uuid   @id"));
+        // `@version` is dropped (DORM's parser rejects it); the column remains.
+        assert!(!dorm.contains("@version"));
+        assert!(dorm.contains("version Int"));
+        // Idempotent on the URL: running it again does not add a second one.
+        let twice = dorm_schema_from_project(&dorm);
+        assert_eq!(twice.matches("DELONIX_ORM_DSN").count(), 1);
     }
 }

@@ -802,9 +802,9 @@ fn require_project() -> Option<String> {
 /// `[patch.crates-io]` at a local DORM checkout so it builds. Idempotent-ish:
 /// refuses if the directory already exists (DORM's `init` does).
 fn db_init(dir: Option<String>) -> ExitCode {
-    if require_project().is_none() {
+    let Some(project) = require_project() else {
         return ExitCode::FAILURE;
-    }
+    };
     let dir = dir.unwrap_or_else(|| DORM_PROJECT_DIR.to_owned());
     if Path::new(&dir).exists() {
         eprintln!("seiva: `{dir}` already exists — the DORM data layer looks set up already.");
@@ -843,9 +843,18 @@ fn db_init(dir: Option<String>) -> ExitCode {
     {
         eprintln!("seiva: warning — could not finalize `{dir}/Cargo.toml`: {error}");
     }
+    // Make the DORM data layer track THIS project's schema from the start: write
+    // `data/dorm.schema` from `schema/<project>.schema` (so the module namespaces
+    // drive it, not DORM's default template) and regenerate the models.
+    if let Err(error) = sync_dorm_schema(&project, &dir) {
+        eprintln!("seiva: warning — could not sync the project schema into `{dir}`: {error}");
+    } else if let Err(code) = run_dorm_in(&dir, &["generate".to_owned()]) {
+        return code;
+    }
     println!(
-        "Set up the DORM data layer in `{dir}/`. Edit `{dir}/dorm.schema`, then \
-         `seiva db dev <name>` to author+apply a migration (needs DELONIX_ORM_DSN)."
+        "Set up the DORM data layer in `{dir}/` from schema/{project}.schema. \
+         Add models with `seiva module new`, then `seiva db dev <name>` to \
+         author+apply a migration (needs DELONIX_ORM_DSN)."
     );
     ExitCode::SUCCESS
 }
@@ -880,51 +889,96 @@ fn finalize_dorm_manifest(manifest: &Path, checkout: Option<&str>) -> std::io::R
     std::fs::write(manifest, out)
 }
 
-/// The command and arguments `seiva db dev`/`migrate` run, delegating to the DORM
-/// CLI. Pure, so the delegation is unit-tested: `dev` authors and applies the
-/// next migration (`dorm migrate dev <name>`); `deploy` applies the chain
-/// (`dorm migrate`, whose default subcommand is deploy).
-fn dorm_migrate_plan(dorm: &str, action: &str, name: Option<&str>) -> (String, Vec<String>) {
+/// Writes the DORM data layer's `<dir>/dorm.schema` from the project's
+/// `schema/<project>.schema`, adapted by [`scaffold::dorm_schema_from_project`]
+/// (the module `namespace`s drive the data layer; the datasource URL and
+/// `@version` are adjusted). Run before a migrate so new modules are picked up.
+fn sync_dorm_schema(project: &str, dir: &str) -> std::io::Result<()> {
+    let src = std::fs::read_to_string(format!("schema/{project}.schema"))?;
+    let dorm_schema = scaffold::dorm_schema_from_project(&src);
+    std::fs::write(Path::new(dir).join("dorm.schema"), dorm_schema)
+}
+
+/// Runs the DORM CLI with `args` inside the data-layer directory `dir`. Maps a
+/// spawn failure or a non-zero exit to an `ExitCode` for the caller to return.
+fn run_dorm_in(dir: &str, args: &[String]) -> Result<(), ExitCode> {
+    let dorm = dorm_bin();
+    match std::process::Command::new(&dorm)
+        .args(args)
+        .current_dir(dir)
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(ExitCode::from(
+            u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
+        )),
+        Err(error) => {
+            eprintln!(
+                "seiva: could not run `{dorm}` in `{dir}`: {error}\n\
+                 seiva db needs the DORM CLI (set SEIVA_DORM_BIN or install dorm-cli)."
+            );
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
+/// The DORM migrate arguments for a Seiva `db` action. Pure, so the mapping is
+/// unit-tested: `dev` authors+applies the next migration (`migrate dev <name>`);
+/// `deploy` applies the recorded chain (`migrate`, whose default is deploy).
+fn dorm_migrate_args(action: &str, name: Option<&str>) -> Vec<String> {
     let mut args = vec!["migrate".to_owned()];
     if action == "dev" {
         args.push("dev".to_owned());
         args.push(name.unwrap_or("migration").to_owned());
     }
-    (dorm.to_owned(), args)
+    args
 }
 
-/// `seiva db dev`/`migrate`: run the DORM migrate lane inside the project's DORM
-/// data layer (`data/`). The DSN comes from `DELONIX_ORM_DSN` (the `dorm.schema`'s
-/// `datasource` reads it).
-fn db_migrate_delegate(action: &str, name: Option<&str>) -> ExitCode {
-    if require_project().is_none() {
-        return ExitCode::FAILURE;
-    }
-    let dir = Path::new(DORM_PROJECT_DIR);
-    if !dir.join("dorm.schema").is_file() {
+/// Guards that the project's DORM data layer exists, returning the project name
+/// and the data dir, or an error `ExitCode` (with a `seiva db init` hint).
+fn require_data_layer() -> Result<(String, String), ExitCode> {
+    let project = require_project().ok_or(ExitCode::FAILURE)?;
+    let dir = DORM_PROJECT_DIR.to_owned();
+    if !Path::new(&dir).join("dorm.schema").is_file() {
         eprintln!(
-            "seiva: no DORM data layer here — run `seiva db init` first (it scaffolds `{}/`).",
-            DORM_PROJECT_DIR
+            "seiva: no DORM data layer here — run `seiva db init` first (scaffolds `{dir}/`)."
         );
+        return Err(ExitCode::FAILURE);
+    }
+    Ok((project, dir))
+}
+
+/// `seiva db dev`: sync the project schema into the data layer, regenerate the
+/// models, then author+apply the next migration — the dev loop. The DSN comes
+/// from `DELONIX_ORM_DSN`.
+fn db_dev(name: &str) -> ExitCode {
+    let (project, dir) = match require_data_layer() {
+        Ok(ok) => ok,
+        Err(code) => return code,
+    };
+    if let Err(error) = sync_dorm_schema(&project, &dir) {
+        eprintln!("seiva: could not sync schema/{project}.schema into `{dir}`: {error}");
         return ExitCode::FAILURE;
     }
-    let dorm = dorm_bin();
-    let (program, args) = dorm_migrate_plan(&dorm, action, name);
-    match std::process::Command::new(&program)
-        .args(&args)
-        .current_dir(dir)
-        .status()
-    {
-        Ok(status) if status.success() => ExitCode::SUCCESS,
-        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
-        Err(error) => {
-            eprintln!(
-                "seiva: could not run `{program}` in `{}`: {error}\n\
-                 seiva db needs the DORM CLI (set SEIVA_DORM_BIN or install dorm-cli).",
-                DORM_PROJECT_DIR
-            );
-            ExitCode::FAILURE
-        }
+    if let Err(code) = run_dorm_in(&dir, &["generate".to_owned()]) {
+        return code;
+    }
+    match run_dorm_in(&dir, &dorm_migrate_args("dev", Some(name))) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => code,
+    }
+}
+
+/// `seiva db migrate`: apply the recorded migration chain (deploy). No schema
+/// sync — it runs exactly the migrations already authored.
+fn db_migrate() -> ExitCode {
+    let (_project, dir) = match require_data_layer() {
+        Ok(ok) => ok,
+        Err(code) => return code,
+    };
+    match run_dorm_in(&dir, &dorm_migrate_args("deploy", None)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => code,
     }
 }
 
@@ -997,8 +1051,8 @@ fn main() -> ExitCode {
         },
         Command::Db { action } => match action {
             DbAction::Init { dir } => db_init(dir),
-            DbAction::Dev { name } => db_migrate_delegate("dev", Some(&name)),
-            DbAction::Migrate => db_migrate_delegate("deploy", None),
+            DbAction::Dev { name } => db_dev(&name),
+            DbAction::Migrate => db_migrate(),
             DbAction::Pull { out, dsn } => db_pull(out, dsn),
         },
         Command::Lint => lint(),
@@ -1097,14 +1151,14 @@ mod tests {
     }
 
     #[test]
-    fn dorm_migrate_plan_maps_dev_and_deploy() {
+    fn dorm_migrate_args_map_dev_and_deploy() {
         // dev → author + apply the next migration by name.
-        let (p, args) = dorm_migrate_plan("dorm", "dev", Some("add_price"));
-        assert_eq!(p, "dorm");
-        assert_eq!(args, vec!["migrate", "dev", "add_price"]);
+        assert_eq!(
+            dorm_migrate_args("dev", Some("add_price")),
+            vec!["migrate", "dev", "add_price"]
+        );
         // deploy → apply the chain (DORM's default `migrate` subcommand).
-        let (_p, args) = dorm_migrate_plan("dorm", "deploy", None);
-        assert_eq!(args, vec!["migrate"]);
+        assert_eq!(dorm_migrate_args("deploy", None), vec!["migrate"]);
     }
 
     #[test]
