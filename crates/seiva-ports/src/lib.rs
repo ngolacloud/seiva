@@ -171,6 +171,77 @@ pub trait IdempotencyStore: Send + Sync {
     }
 }
 
+/// An audit record of a sensitive — typically administrative — mutation
+/// (ADR 0013): who did what, to which object, with what result, and a
+/// correlation id. Field-level `details` are **redacted** of secrets before they
+/// ever reach a sink (see [`AuditEntry::redacted`]); the full request body with
+/// its secrets is never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AuditEntry {
+    /// The acting principal's subject (empty for anonymous).
+    pub actor: String,
+    /// The tenant the action was scoped to, if any.
+    pub tenant: Option<String>,
+    /// The operation, e.g. `"POST /v1/accounts/create_user"`.
+    pub operation: String,
+    /// The target object's id, when the handler knows it.
+    pub object: Option<String>,
+    /// The result, e.g. the HTTP status as a string (`"201"`, `"403"`).
+    pub outcome: String,
+    /// The request's correlation id, for tracing.
+    pub request_id: Option<String>,
+    /// Redacted field-level detail (never the full body, never a secret value).
+    pub details: Vec<(String, String)>,
+}
+
+impl AuditEntry {
+    /// Returns the entry with every sensitive `details` value replaced by
+    /// `"[redacted]"` ([`is_sensitive_field`]). Call this before recording so a
+    /// password, hash, token or key can never land in the audit log.
+    #[must_use]
+    pub fn redacted(mut self) -> Self {
+        for (name, value) in &mut self.details {
+            if is_sensitive_field(name) {
+                *value = "[redacted]".to_owned();
+            }
+        }
+        self
+    }
+}
+
+/// Whether a field name looks sensitive and so its value must be redacted from an
+/// audit record or a log: passwords, hashes, tokens, keys, secrets, credentials
+/// and authorization material (case-insensitive substring match — deliberately
+/// broad, since over-redacting an audit detail is safe and under-redacting leaks).
+#[must_use]
+pub fn is_sensitive_field(name: &str) -> bool {
+    const NEEDLES: &[&str] = &[
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "hash",
+        "apikey",
+        "api_key",
+        "credential",
+        "authorization",
+        "cookie",
+        "private",
+    ];
+    let lower = name.to_ascii_lowercase();
+    // A bare "key" is sensitive on its own, plus any of the needles as substrings.
+    lower == "key" || NEEDLES.iter().any(|needle| lower.contains(needle))
+}
+
+/// A persistent sink for [`AuditEntry`] records (ADR 0013). The base framework
+/// codes against this port; an adapter (the DORM gateway) persists the entries.
+#[async_trait]
+pub trait AuditSink: Send + Sync {
+    /// Persists one audit entry. Called with an already-[`redacted`](AuditEntry::redacted)
+    /// entry.
+    async fn record(&self, entry: &AuditEntry) -> PortResult<()>;
+}
+
 /// The store key for **consumer-side inbox deduplication**: processing one event
 /// at most once per consumer (ADR 0011). Compose it from the consumer's name and
 /// the event id, then claim it through [`IdempotencyStore::begin`] **in the same
@@ -192,6 +263,39 @@ pub fn inbox_key(consumer: &str, event_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sensitive_fields_are_detected_case_insensitively() {
+        for name in [
+            "password", "Password", "api_key", "x-secret", "pwdHash", "key", "cookie",
+        ] {
+            assert!(is_sensitive_field(name), "{name} must be sensitive");
+        }
+        for name in ["username", "title", "amount", "keyboard_layout"] {
+            assert!(!is_sensitive_field(name), "{name} must not be sensitive");
+        }
+    }
+
+    #[test]
+    fn redacted_masks_only_sensitive_values() {
+        let entry = AuditEntry {
+            operation: "POST /x".to_owned(),
+            details: vec![
+                ("username".to_owned(), "alice".to_owned()),
+                ("password".to_owned(), "hunter2".to_owned()),
+            ],
+            ..AuditEntry::default()
+        }
+        .redacted();
+        assert_eq!(
+            entry.details[0],
+            ("username".to_owned(), "alice".to_owned())
+        );
+        assert_eq!(
+            entry.details[1],
+            ("password".to_owned(), "[redacted]".to_owned())
+        );
+    }
 
     #[test]
     fn id_renders_as_lowercase_hex() {

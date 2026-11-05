@@ -10,8 +10,8 @@
 
 use async_trait::async_trait;
 use seiva_ports::{
-    Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome, IdempotencyStore, PortResult,
-    UnitOfWork,
+    AuditEntry, AuditSink, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
+    IdempotencyStore, PortResult, UnitOfWork,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -252,6 +252,38 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
         if let Some(record) = keys.get_mut(scoped_key) {
             record.response = Some(response.to_vec());
         }
+        Ok(())
+    }
+}
+
+/// An [`AuditSink`] that records every entry for assertions. Cheap to clone and
+/// shares its log, so a test holds a handle, passes a clone into the handler or
+/// the audit middleware, and reads back what was recorded.
+#[derive(Clone, Default)]
+pub struct RecordingAuditSink {
+    entries: Arc<Mutex<Vec<AuditEntry>>>,
+}
+
+impl RecordingAuditSink {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every audit entry recorded so far, in order.
+    #[must_use]
+    pub fn entries(&self) -> Vec<AuditEntry> {
+        self.entries.lock().expect("audit sink poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl AuditSink for RecordingAuditSink {
+    async fn record(&self, entry: &AuditEntry) -> PortResult<()> {
+        self.entries
+            .lock()
+            .expect("audit sink poisoned")
+            .push(entry.clone());
         Ok(())
     }
 }

@@ -25,6 +25,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audit;
 pub mod authn;
 pub mod docs;
 pub mod guard;
@@ -43,6 +44,7 @@ use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::get;
 use axum::{Json, Router};
 
+pub use audit::audit;
 pub use authn::authn;
 pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
@@ -57,6 +59,7 @@ pub use problem::{Problem, PROBLEM_JSON};
 pub use rate_limit::{rate_limit, RateLimit, RateLimiter};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};
 pub use security::{cors_layer, security_headers, HttpSecurity};
+pub use seiva_ports::{AuditEntry, AuditSink};
 pub use valid::{Valid, Validate, ValidationError};
 // The identity model is owned by `seiva-identity` (transport-free, shared with
 // MCP); re-exported here so a `seiva_http::Principal` import keeps working.

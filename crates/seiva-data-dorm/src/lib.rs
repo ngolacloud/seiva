@@ -22,8 +22,8 @@
 use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
 use seiva_ports::{
-    BoxError, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome, IdempotencyStore,
-    PortResult, UnitOfWork,
+    AuditEntry, AuditSink, BoxError, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
+    IdempotencyStore, PortResult, UnitOfWork,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -254,6 +254,81 @@ impl IdempotencyStore for DormIdempotencyStore {
         dorm_core::idempotency::purge_expired()
             .await
             .map_err(|e| Box::new(e) as BoxError)
+    }
+}
+
+/// The DDL for the audit table (`seiva_audit`, ADR 0013), re-exported so a
+/// composition root (or a migration) can create it. `CREATE TABLE IF NOT EXISTS`.
+#[must_use]
+pub fn audit_migrations() -> Vec<String> {
+    vec![format!(
+        "CREATE TABLE IF NOT EXISTS {TABLE} (\
+           id bigserial PRIMARY KEY, \
+           at TIMESTAMPTZ NOT NULL DEFAULT now(), \
+           actor TEXT NOT NULL, \
+           tenant TEXT, \
+           operation TEXT NOT NULL, \
+           object TEXT, \
+           outcome TEXT NOT NULL, \
+           request_id TEXT, \
+           details JSONB NOT NULL DEFAULT '{{}}')",
+        TABLE = "seiva_audit"
+    )]
+}
+
+/// The DORM-backed [`AuditSink`] (ADR 0013): appends each entry to `seiva_audit`.
+///
+/// Unlike the idempotency store, audit does **not** join the request's
+/// transaction — it opens its own session per record (so the audit middleware,
+/// which runs above any transaction, can use it) and records the outcome of both
+/// successful and denied mutations. Entries arrive already redacted.
+pub struct DormAuditSink {
+    db: Arc<dorm_core::db::Database>,
+}
+
+impl DormAuditSink {
+    /// Wraps a [`connect`]-built handle as an audit sink.
+    #[must_use]
+    pub fn new(db: dorm_core::db::Database) -> Self {
+        Self { db: Arc::new(db) }
+    }
+}
+
+#[async_trait]
+impl AuditSink for DormAuditSink {
+    async fn record(&self, entry: &AuditEntry) -> PortResult<()> {
+        use dorm_core::value::Value;
+        let opt = |v: &Option<String>| v.clone().map_or(Value::Null, Value::Text);
+        let details = serde_json::Value::Object(
+            entry
+                .details
+                .iter()
+                .cloned()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect(),
+        );
+        let params = vec![
+            Value::Text(entry.actor.clone()),
+            opt(&entry.tenant),
+            Value::Text(entry.operation.clone()),
+            opt(&entry.object),
+            Value::Text(entry.outcome.clone()),
+            opt(&entry.request_id),
+            Value::Json(details),
+        ];
+        let db = self.db.clone();
+        dorm_core::db::with_session(db, async move {
+            dorm_core::db::run(
+                "INSERT INTO seiva_audit \
+                 (actor, tenant, operation, object, outcome, request_id, details) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &params,
+            )
+            .await
+        })
+        .await
+        .map(|_| ())
+        .map_err(|e| Box::new(e) as BoxError)
     }
 }
 
@@ -654,6 +729,89 @@ mod tests {
             dorm_core::db::execute("DROP TABLE seiva_inbox_effect", &[])
                 .await
                 .map_err(|e| Box::new(e) as BoxError)
+        })
+        .await
+        .expect("cleanup succeeds");
+    }
+
+    /// Live proof that the audit sink persists a (redacted) entry to `seiva_audit`
+    /// against real PostgreSQL (ADR 0013). Gated on `SEIVA_DORM_TEST_DSN`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_audit_sink_persists_a_redacted_entry() {
+        let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+            eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the live audit proof");
+            return;
+        };
+        let cfg = DormConfig {
+            dsn,
+            replicas: vec![],
+            read_only: false,
+            schema: None,
+            pool_max: 4,
+            cursor_key: b"live-audit-secret".to_vec(),
+        };
+        // One handle for the sink, a second for the test's own setup/read-back.
+        let sink = DormAuditSink::new(connect(&cfg).expect("connect the sink"));
+        let probe = Arc::new(connect(&cfg).expect("connect the probe"));
+
+        // Create the table and clean a prior run, via a one-off session.
+        let ddl = audit_migrations();
+        dorm_core::db::with_session(probe.clone(), async move {
+            for stmt in &ddl {
+                dorm_core::db::run_ddl(stmt).await?;
+            }
+            dorm_core::db::run("DELETE FROM seiva_audit WHERE actor = 'alice'", &[]).await?;
+            Ok::<_, dorm_core::Error>(())
+        })
+        .await
+        .expect("audit setup succeeds");
+
+        // Record an entry whose sensitive detail was redacted by the caller.
+        let entry = AuditEntry {
+            actor: "alice".to_owned(),
+            tenant: Some("acme".to_owned()),
+            operation: "POST /v1/accounts/create_user".to_owned(),
+            object: Some("user-1".to_owned()),
+            outcome: "201".to_owned(),
+            request_id: Some("req-xyz".to_owned()),
+            details: vec![
+                ("username".to_owned(), "alice".to_owned()),
+                ("password".to_owned(), "secret".to_owned()),
+            ],
+        }
+        .redacted();
+        sink.record(&entry).await.expect("audit record persists");
+
+        // Read it back and assert the row + that the secret never landed.
+        let rows = dorm_core::db::with_session(probe.clone(), async move {
+            dorm_core::db::sql(
+                "SELECT operation, outcome, tenant, object, request_id, details::text \
+                 FROM seiva_audit WHERE actor = 'alice'",
+                &[],
+            )
+            .await
+        })
+        .await
+        .expect("read-back succeeds");
+        assert_eq!(rows.len(), 1, "exactly one audit row");
+        let operation: String = rows[0].try_get(0).expect("operation");
+        let outcome: String = rows[0].try_get(1).expect("outcome");
+        let details: String = rows[0].try_get(5).expect("details");
+        assert_eq!(operation, "POST /v1/accounts/create_user");
+        assert_eq!(outcome, "201");
+        assert!(details.contains("\"username\""));
+        assert!(
+            details.contains("[redacted]"),
+            "the password value is redacted"
+        );
+        assert!(
+            !details.contains("secret"),
+            "the secret value never persisted: {details}"
+        );
+
+        // Cleanup.
+        dorm_core::db::with_session(probe, async move {
+            dorm_core::db::run("DELETE FROM seiva_audit WHERE actor = 'alice'", &[]).await
         })
         .await
         .expect("cleanup succeeds");

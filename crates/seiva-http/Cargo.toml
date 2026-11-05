@@ -41,6 +41,9 @@ serde_json = "1"
 # scoped-key tuple and the request's canonical JSON. serde_json's default Map is
 # a BTreeMap, so object keys serialise in sorted order — a stable fingerprint.
 sha2 = "0.10"
+# A failed audit write (ADR 0013) must not fail the request, but it must not pass
+# silently either: it is logged at warn through the framework's tracing.
+tracing = "0.1"
 # CORS enforcement: the battle-tested tower layer rather than a hand-rolled
 # preflight. Only the `cors` feature; the secure default mounts no layer at all.
 tower-http = { version = "0.6", features = ["cors"] }

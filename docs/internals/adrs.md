@@ -18,6 +18,7 @@ The index of ADRs.
 - ADR 0010 — The extension integration contract (`dx add` / `seiva ext add`)
 - ADR 0011 — Durable business idempotency as a port, reusing DORM
 - ADR 0012 — Cloud-native health probes and rate-limit posture
+- ADR 0013 — Persistent audit of administrative mutations
 
 ## Related
 
