@@ -70,6 +70,7 @@ maps to Seiva.)
 - [Architecture](architecture.md) and the [design internals](internals/index.md)
 - [Architecture Decision Records](internals/adrs.md) (the [`adr/`](adr/) directory)
 - [FAQ](faq/index.md) · [Glossary](glossary.md)
+- [Competitive landscape](competitive-landscape.md) and the [roadmap](roadmap.md)
 - [Release notes](releases/index.md) and the [engineering log](progress.md)
 - [Publishing status](publishing.md) · [Contributing](internals/contributing.md)
 

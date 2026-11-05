@@ -65,6 +65,9 @@ Legend: ✅ strong · 🟡 partial/in-progress · ✖ missing.
 
 ## Where we must improve (prioritised)
 
+> The plan to close every gap below — with verifiable done-criteria — is the
+> [roadmap](roadmap.md).
+
 **P0 — table stakes to be taken seriously vs FastAPI/Django:**
 
 1. **Ship the data layer (DORM cutover).** "ORM optional, cutover WIP" is the single
