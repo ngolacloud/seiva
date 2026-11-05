@@ -107,3 +107,24 @@ declares in `#[requires(..)]` (ADR 0006) — one source of truth for authorizati
   the composition root.** Viable, but it reintroduces a hand-maintained central
   list; the link-time inventory matches how facades already self-register and
   needs no central wiring.
+
+## Addendum (2026-11-05) — the data-layer admin backend (row CRUD)
+
+The first slice of the "model-row CRUD" follow-up is built and proved, keeping the
+rule above (the console drives **contract operations**, never direct table
+access, so domain invariants stay in the module):
+
+- `apps/admin-data-e2e` is a compact DORM-backed CRUD module — a `Catalog` facade
+  with all five operations (`create`/`get`/`list`/`update`/`delete`) over a real
+  PostgreSQL table via `DormUnitOfWork` — that registers an `AdminResource`
+  (`catalog.read/create/change/delete`) and mounts the console behind a token
+  authenticator. The DORM coupling makes it an excluded crate (built by the
+  token-gated CI jobs, audited by `deny.excluded.toml`).
+- A live test (`live_catalog_full_crud_round_trip`, gated on `SEIVA_DORM_TEST_DSN`)
+  proves create → get → list (ordered) → update → delete each persist through
+  DORM against real PostgreSQL.
+
+Still pending (next slice): the console's row-CRUD **UI** — a list table from
+`list`, a detail/edit form from `get`/`update`, a delete action — and a browser
+E2E over it, plus tenant-scoped row filtering and field masking (a `Ctx`/Principal
+seam into the module).

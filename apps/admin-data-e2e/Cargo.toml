@@ -1,0 +1,49 @@
+# admin-data-e2e — the data-layer admin proof (ADR 0009 Phase-3 follow-up).
+#
+# A compact DORM-backed CRUD module (`Catalog`: create/get/list/update/delete over
+# a real PostgreSQL table) with the console mounted behind a token authenticator,
+# so the admin console drives row CRUD through the module's CONTRACT OPERATIONS
+# (never direct table access — the domain invariants stay in the module).
+#
+# DORM-coupled, so EXCLUDED from the default workspace (like dorm-e2e); a
+# token-gated CI job and the local DORM checkout build it. The `[patch]` + the
+# `[workspace]` table at the bottom let it build standalone.
+[package]
+name = "admin-data-e2e"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "admin_data_e2e"
+path = "src/lib.rs"
+
+[[bin]]
+name = "admin-data-e2e"
+path = "src/main.rs"
+
+[dependencies]
+delonix-seiva = { path = "../../crates/delonix-seiva", default-features = false }
+seiva-ports = { path = "../../crates/seiva-ports" }
+seiva-http = { path = "../../crates/seiva-http" }
+seiva-server = { path = "../../crates/seiva-server" }
+seiva-console-admin = { path = "../../crates/seiva-console-admin" }
+seiva-data-dorm = { path = "../../crates/seiva-data-dorm" }
+seiva-openapi = { path = "../../crates/seiva-openapi" }
+dorm-core = "0.6"
+# The `#[controller]` macro expands to an axum router.
+axum = "0.8"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[patch.crates-io]
+dorm-core = { path = "../../../DORM/crates/dorm-core" }
+dorm-outbox = { path = "../../../DORM/crates/dorm-outbox" }
+
+[workspace]

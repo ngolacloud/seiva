@@ -36,7 +36,7 @@ New ADRs: **0008–0014** (+ the 0007 addendum). Indexed in
 | `/admin` → 404 with no extension; no admin in `cargo tree` | `seiva-http`, `seiva-server` | ✅ | base 404 test; tree = 0 occurrences |
 | Extension install is explicit, no hooks, needs recompile | `seiva ext add`, ADR 0010 | ✅ | live proof; declarative manifest, no build.rs |
 | Repeated install duplicates nothing | `add_extension_*`/`mount_*` | ✅ | idempotency tests |
-| Module `--admin` → listed/authorized registration | ADR 0009 | 🟡 | registration + authz-filtered registry done; list/detail/form **UI** over data rows pending |
+| Module `--admin` → listed/authorized registration | ADR 0009 | 🟡 | registration + authz-filtered registry done; a DORM-backed CRUD module (`apps/admin-data-e2e`, `Catalog`) proves all five operations live over PG; the console row-CRUD **UI** (list table/detail/edit/delete) is the next slice |
 | Module without registration not exposed | registry gate | ✅ | absent from registry → absent from console |
 | Other tenant / no permission → no access | registry filter + `Scoped<T>` (ADR 0005) | ✅ | registry hides unauthorized; BOLA guard on the API |
 | Repeated admin request → one effect across replicas | idempotency (ADR 0011) | ✅ | **live PG** 20-connection proof |

@@ -22,6 +22,10 @@ exclude = [
     # The DORM end-to-end proof: the real "main" composing the gateway, the
     # outbox relay and the server over real DORM. Built by the `dorm-e2e` CI job.
     "apps/dorm-e2e",
+    # The data-layer admin proof (ADR 0009 Phase-3): a DORM-backed CRUD module
+    # (`Catalog`) the console drives over PG. DORM-coupled, so excluded like the
+    # siblings; built by the token-gated `dorm-gateway` job.
+    "apps/admin-data-e2e",
 ]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,

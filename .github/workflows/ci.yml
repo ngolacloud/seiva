@@ -142,7 +142,8 @@ jobs:
         run: |
           set -euo pipefail
           for crate in crates/seiva-data-dorm crates/seiva-outbox-relay \
-                       crates/seiva-rag-worker crates/seiva-mcp apps/dorm-e2e; do
+                       crates/seiva-rag-worker crates/seiva-mcp apps/dorm-e2e \
+                       apps/admin-data-e2e; do
             echo "::group::deny $crate"
             cargo deny --manifest-path "$crate/Cargo.toml" \
               --config deny.excluded.toml check advisories
@@ -216,3 +217,15 @@ jobs:
           # Serialize: the live tests each create tables, and concurrent
           # CREATE TABLE IF NOT EXISTS on one Postgres races.
           cargo test --manifest-path apps/dorm-e2e/Cargo.toml --all-features -- --test-threads=1
+      - name: Build, lint and test the data-layer admin app (Catalog CRUD)
+        if: steps.gate.outputs.present == 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # The live CRUD round-trip connects here (same Postgres service); absent
+          # this var the test skips.
+          SEIVA_DORM_TEST_DSN: "host=localhost port=5432 user=postgres password=postgres dbname=dorm_e2e sslmode=disable"
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path apps/admin-data-e2e/Cargo.toml --all --check
+          cargo clippy --manifest-path apps/admin-data-e2e/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo test --manifest-path apps/admin-data-e2e/Cargo.toml --all-features -- --test-threads=1
