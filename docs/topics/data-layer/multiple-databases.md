@@ -15,35 +15,42 @@ through to DORM, and the gateway's `connect` takes the DSN too:
 So which database a Seiva service talks to is a deployment choice (the DSN), not a
 code choice. The *reach* of that choice is set by DORM's runtime.
 
+## Choosing a backend
+
+`seiva db init --backend <postgres|mysql|sqlite>` (default `postgres`) sets the
+DORM feature and the schema's `provider`; `seiva db dev`/`migrate` then target
+that backend, reading the DSN from `DELONIX_ORM_DSN`.
+
 ## What works today
 
 **PostgreSQL** is the primary, first-class backend.
 
-**CockroachDB** works too, with **zero code changes** — it is wire-compatible with
-PostgreSQL, so the same `tokio-postgres` path serves it. This is proven live:
-pointing `DELONIX_ORM_DSN` at a CockroachDB node, `seiva db init` then
-`seiva db dev` authored and applied a migration and created the module's table
-(`records` with `id uuid, title text, version bigint`) and the migration ledger —
-exactly as against PostgreSQL. Any PostgreSQL-wire database (CockroachDB, and
-managed Postgres such as Neon/Supabase) is reachable the same way.
+**MySQL** works via DORM's `mysql` driver. Proven live end to end through Seiva:
 
 ```console
-# a CockroachDB single-node, for example
-$ DELONIX_ORM_DSN="host=localhost port=26257 user=root dbname=app sslmode=disable" \
-    seiva db dev initial
+$ seiva db init --backend mysql
+$ DELONIX_ORM_DSN='mysql://root:pw@127.0.0.1:3306/app' seiva db dev initial
 ```
 
-## What does not work yet — and why
+created the module's `records` table (`id char(36)` primary key — `Uuid` maps to
+`CHAR(36)` — `title text`, `version int`) and the migration ledger in MySQL 8,
+from the module's model with no hand-written SQL.
 
-**MySQL, SQL Server, Oracle and MongoDB are not live backends yet.** DORM's query
-*compiler* already carries their SQL **dialect** profiles (ADR 0011), but DORM's
-async *runtime* (`dorm-core`'s `db`: the pool, the executor, transactions) is
-wired directly to the PostgreSQL driver. The remaining step — "one `db` over a
-backend trait", the driver seam DORM's `dorm-sqlite` crate calls out — is a
-DORM-side piece of ADR 0011. Until it lands, non-PostgreSQL-wire engines compile
-their SQL but cannot be executed through the async runtime, so Seiva cannot drive
-them live. This is a DORM capability, not a Seiva limitation: the moment DORM
-executes a dialect, Seiva reaches it through the same DSN with no change here.
+**CockroachDB** works with **zero configuration beyond the DSN** — it is
+wire-compatible with PostgreSQL, so the `postgres` backend serves it. Proven live:
+`seiva db init` + `seiva db dev` against a CockroachDB node created the same
+`records` table there. Any PostgreSQL-wire database (CockroachDB, and managed
+Postgres such as Neon/Supabase) is reachable this way.
+
+**SQLite** is available the same way (`--backend sqlite`), for local/embedded use.
+
+## What is not live yet
+
+**SQL Server, Oracle and MongoDB** are on DORM's roadmap (ADR 0011): the query
+compiler carries dialect profiles, and the backend-trait (`Driver`) seam that made
+MySQL/SQLite live extends to them as DORM adds each driver. When DORM ships a
+driver, Seiva reaches it through the same `--backend`/DSN with no change here —
+the Seiva side is already backend-agnostic.
 
 ## Related
 
