@@ -24,15 +24,15 @@ description = "Delonix Seiva — HTTP transport (axum/tower): RFC 9457 problems,
 [dependencies]
 # The contract crate, data-layer OFF: we read `FacadeDescriptor` to drive routing
 # and the permission guard. default-features = false keeps the `dorm` toggle off.
-delonix-seiva = { path = "../delonix-seiva", default-features = false }
+delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
 # The trait-only ports: we map their opaque `BoxError` into an RFC 9457 problem.
-seiva-ports = { path = "../seiva-ports" }
+seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
 # The verified caller: `Principal` and the `Authenticator` the authn middleware
 # runs. Transport-free, so the same identity model serves HTTP and MCP (ADR 0006).
-seiva-identity = { path = "../seiva-identity" }
+seiva-identity = { version = "0.1.0", path = "../seiva-identity" }
 # The OpenAPI 3.1 generator: `/openapi.json` is generated from the facades
 # linked into the binary, not hand-written. Data-layer-free like this crate.
-seiva-openapi = { path = "../seiva-openapi" }
+seiva-openapi = { version = "0.1.0", path = "../seiva-openapi" }
 
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
@@ -46,4 +46,4 @@ tower-http = { version = "0.6", features = ["cors"] }
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 # A controllable `Clock` so the rate-limiter's window is tested without sleeping.
-seiva-testing = { path = "../seiva-testing" }
+seiva-testing = { version = "0.1.0", path = "../seiva-testing" }
