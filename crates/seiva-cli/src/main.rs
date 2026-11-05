@@ -150,6 +150,20 @@ enum DbAction {
     Dev { module: String },
     /// Apply every DORM module's migrations in dependency order.
     Migrate,
+    /// Introspect an existing database into a schema file (brownfield adoption).
+    ///
+    /// Delegates to the DORM CLI (`dorm db pull`): it reads the live PostgreSQL
+    /// `public` schema and writes approximate `model` blocks you fold into your
+    /// modules' `namespace`s. The DSN comes from `--dsn` or the `DELONIX_ORM_DSN`
+    /// environment variable. Needs the `dorm` CLI on PATH (or `SEIVA_DORM_BIN`).
+    Pull {
+        /// Where to write the pulled schema (default `schema/<project>.pulled.schema`).
+        #[arg(long)]
+        out: Option<String>,
+        /// The database DSN to introspect (else `DELONIX_ORM_DSN`).
+        #[arg(long)]
+        dsn: Option<String>,
+    },
 }
 
 fn not_yet(what: &str, phase: &str) -> ExitCode {
@@ -666,6 +680,70 @@ fn has_cargo_watch() -> bool {
         .unwrap_or(false)
 }
 
+/// The DORM CLI binary `seiva db` delegates to. `SEIVA_DORM_BIN` overrides it
+/// (so a locally built `dorm` can be used without installing); otherwise `dorm`
+/// is resolved from `PATH`.
+fn dorm_bin() -> String {
+    std::env::var("SEIVA_DORM_BIN").unwrap_or_else(|_| "dorm".to_owned())
+}
+
+/// The command and arguments `seiva db pull` runs. Pure, so the delegation is
+/// unit-tested without spawning a process: a global `--dsn` (when given) precedes
+/// the `db pull --out <path>` subcommand, matching the DORM CLI's argument shape.
+fn db_pull_plan(dorm: &str, out: &str, dsn: Option<&str>) -> (String, Vec<String>) {
+    let mut args: Vec<String> = Vec::new();
+    if let Some(dsn) = dsn {
+        args.push("--dsn".to_owned());
+        args.push(dsn.to_owned());
+    }
+    args.extend(["db", "pull", "--out", out].map(str::to_owned));
+    (dorm.to_owned(), args)
+}
+
+/// `seiva db pull`: introspect an existing database into a schema file, by
+/// delegating to the DORM CLI (`dorm db pull`). DORM is a separate product with
+/// its own CLI, so Seiva orchestrates rather than linking it. Run inside a
+/// project; the default output is `schema/<project>.pulled.schema` (a separate
+/// file, so the managed `schema/<project>.schema` is never clobbered).
+fn db_pull(out: Option<String>, dsn: Option<String>) -> ExitCode {
+    let manifest = match std::fs::read_to_string("seiva.toml") {
+        Ok(contents) => contents,
+        Err(_) => {
+            eprintln!(
+                "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(name) = scaffold::project_name(&manifest) else {
+        eprintln!("seiva: seiva.toml has no `[project] name`.");
+        return ExitCode::FAILURE;
+    };
+    let out = out.unwrap_or_else(|| format!("schema/{name}.pulled.schema"));
+
+    let dorm = dorm_bin();
+    let (program, args) = db_pull_plan(&dorm, &out, dsn.as_deref());
+    eprintln!("seiva: introspecting via `{dorm} db pull` → {out} ...");
+    match std::process::Command::new(&program).args(&args).status() {
+        Ok(status) if status.success() => {
+            println!(
+                "Pulled the schema into `{out}`. Review it and fold each `model` into \
+                 the owning module's `namespace` in schema/{name}.schema."
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(error) => {
+            eprintln!(
+                "seiva: could not run `{program}`: {error}\n\
+                 seiva db pull needs the DORM CLI — install it (`cargo install dorm-cli`) \
+                 or set SEIVA_DORM_BIN to its path."
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `seiva proto`: prints the proto3 service document for the built-in facades.
 fn proto() -> ExitCode {
     eprintln!(
@@ -736,6 +814,7 @@ fn main() -> ExitCode {
         Command::Db { action } => match action {
             DbAction::Dev { .. } => not_yet("db dev", "the data-layer phase"),
             DbAction::Migrate => not_yet("db migrate", "the data-layer phase"),
+            DbAction::Pull { out, dsn } => db_pull(out, dsn),
         },
         Command::Lint => lint(),
         Command::Expand => not_yet("expand", "the macros phase"),
@@ -806,6 +885,30 @@ mod tests {
         let (program, args) = start_plan("shop-api", false);
         assert_eq!(program, "cargo");
         assert_eq!(args, vec!["run", "--bin", "shop-api"]);
+    }
+
+    #[test]
+    fn db_pull_plan_delegates_to_the_dorm_cli() {
+        // No DSN: just `db pull --out <path>`.
+        let (program, args) = db_pull_plan("dorm", "schema/shop.pulled.schema", None);
+        assert_eq!(program, "dorm");
+        assert_eq!(
+            args,
+            vec!["db", "pull", "--out", "schema/shop.pulled.schema"]
+        );
+        // With a DSN: the global `--dsn` precedes the subcommand.
+        let (_p, args) = db_pull_plan("dorm", "out.schema", Some("postgres://x/y"));
+        assert_eq!(
+            args,
+            vec![
+                "--dsn",
+                "postgres://x/y",
+                "db",
+                "pull",
+                "--out",
+                "out.schema"
+            ]
+        );
     }
 
     #[test]
