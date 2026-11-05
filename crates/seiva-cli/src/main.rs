@@ -146,9 +146,24 @@ enum ModuleAction {
 
 #[derive(Subcommand)]
 enum DbAction {
-    /// Generate models, create and apply a migration locally for one module.
-    Dev { module: String },
-    /// Apply every DORM module's migrations in dependency order.
+    /// Set up the project's DORM data layer: scaffold a DORM project under `data/`
+    /// (schema, migrations, the migrate binaries) that `seiva db dev`/`migrate`
+    /// drive. Delegates to `dorm init`; run once per project. See `seiva db dev`.
+    Init {
+        /// The directory to create the DORM project in (default `data`).
+        #[arg(long)]
+        dir: Option<String>,
+    },
+    /// Author the next migration from the schema and apply it — the dev loop
+    /// (`prisma migrate dev` / Django `makemigrations` + `migrate`). Delegates to
+    /// `dorm migrate dev` inside the project's `data/` DORM project.
+    Dev {
+        /// A short name for the migration (e.g. `add_price`).
+        #[arg(default_value = "migration")]
+        name: String,
+    },
+    /// Apply the recorded migration chain (`prisma migrate deploy`). Delegates to
+    /// `dorm migrate` inside the project's `data/` DORM project.
     Migrate,
     /// Introspect an existing database into a schema file (brownfield adoption).
     ///
@@ -744,6 +759,175 @@ fn db_pull(out: Option<String>, dsn: Option<String>) -> ExitCode {
     }
 }
 
+/// The directory the project's DORM data layer lives in (the DORM project
+/// `seiva db dev`/`migrate` drive). Fixed as `data/` for this first cut.
+const DORM_PROJECT_DIR: &str = "data";
+
+/// A local DORM checkout to point the generated DORM project's interim
+/// `[patch.crates-io]` at, until DORM publishes: `SEIVA_DORM_DIR` if set, else the
+/// sibling `../DORM` beside the framework checkout, when it exists. `None` means
+/// "assume DORM is published" (no patch written) — the real-user path.
+fn dorm_checkout() -> Option<String> {
+    if let Ok(dir) = std::env::var("SEIVA_DORM_DIR") {
+        return Some(dir);
+    }
+    let sibling = Path::new(&framework_root()).parent()?.join("DORM");
+    sibling
+        .is_dir()
+        .then(|| sibling.to_string_lossy().into_owned())
+}
+
+/// Reads the `[project] name` from `seiva.toml`, or prints an error and returns
+/// `None` when not in a project — the common guard for the `db` subcommands.
+fn require_project() -> Option<String> {
+    match std::fs::read_to_string("seiva.toml") {
+        Ok(manifest) => match scaffold::project_name(&manifest) {
+            Some(name) => Some(name),
+            None => {
+                eprintln!("seiva: seiva.toml has no `[project] name`.");
+                None
+            }
+        },
+        Err(_) => {
+            eprintln!(
+                "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+            );
+            None
+        }
+    }
+}
+
+/// `seiva db init`: scaffold the project's DORM data layer under `data/` by
+/// delegating to `dorm init`, then (until DORM publishes) point its
+/// `[patch.crates-io]` at a local DORM checkout so it builds. Idempotent-ish:
+/// refuses if the directory already exists (DORM's `init` does).
+fn db_init(dir: Option<String>) -> ExitCode {
+    if require_project().is_none() {
+        return ExitCode::FAILURE;
+    }
+    let dir = dir.unwrap_or_else(|| DORM_PROJECT_DIR.to_owned());
+    if Path::new(&dir).exists() {
+        eprintln!("seiva: `{dir}` already exists — the DORM data layer looks set up already.");
+        return ExitCode::FAILURE;
+    }
+    let dorm = dorm_bin();
+    eprintln!("seiva: scaffolding the DORM data layer in `{dir}/` via `{dorm} init` ...");
+    match std::process::Command::new(&dorm)
+        .args(["init", &dir])
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => return ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(error) => {
+            eprintln!(
+                "seiva: could not run `{dorm}`: {error}\n\
+                 seiva db needs the DORM CLI — install it (`cargo install dorm-cli`) \
+                 or set SEIVA_DORM_BIN."
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    // The DORM project is its own cargo workspace, not a member of the Seiva
+    // project's workspace (it has its own deps and, interim, its own patch). An
+    // empty `[workspace]` table makes it a standalone root so the parent workspace
+    // ignores it; otherwise cargo refuses the nested package.
+    let checkout = dorm_checkout();
+    if checkout.is_none() {
+        eprintln!(
+            "seiva: note — no local DORM checkout found (set SEIVA_DORM_DIR); \
+             `{dir}` will resolve DORM from crates.io."
+        );
+    }
+    if let Err(error) =
+        finalize_dorm_manifest(&Path::new(&dir).join("Cargo.toml"), checkout.as_deref())
+    {
+        eprintln!("seiva: warning — could not finalize `{dir}/Cargo.toml`: {error}");
+    }
+    println!(
+        "Set up the DORM data layer in `{dir}/`. Edit `{dir}/dorm.schema`, then \
+         `seiva db dev <name>` to author+apply a migration (needs DELONIX_ORM_DSN)."
+    );
+    ExitCode::SUCCESS
+}
+
+/// Finalizes the generated DORM project's manifest so it builds nested inside a
+/// Seiva project: appends an empty `[workspace]` table (making it a standalone
+/// workspace root the parent ignores) and, when a local `checkout` is given, an
+/// interim `[patch.crates-io]` redirecting every `dorm-* = "x"` dependency it
+/// declares to `<checkout>/crates`.
+fn finalize_dorm_manifest(manifest: &Path, checkout: Option<&str>) -> std::io::Result<()> {
+    let mut out = std::fs::read_to_string(manifest)?;
+    out.push_str(
+        "\n# A standalone workspace root, so the parent Seiva workspace ignores this\n\
+         # DORM data layer (it has its own deps and migrate binaries).\n\
+         [workspace]\n",
+    );
+    if let Some(checkout) = checkout {
+        out.push_str(
+            "\n# INTERIM (seiva db init) — remove once DORM is published to crates.io.\n\
+             [patch.crates-io]\n",
+        );
+        for line in out.clone().lines() {
+            if let Some(name) = line.split('=').next().map(str::trim) {
+                if name.starts_with("dorm-") && line.contains("= \"") {
+                    out.push_str(&format!(
+                        "{name} = {{ path = \"{checkout}/crates/{name}\" }}\n"
+                    ));
+                }
+            }
+        }
+    }
+    std::fs::write(manifest, out)
+}
+
+/// The command and arguments `seiva db dev`/`migrate` run, delegating to the DORM
+/// CLI. Pure, so the delegation is unit-tested: `dev` authors and applies the
+/// next migration (`dorm migrate dev <name>`); `deploy` applies the chain
+/// (`dorm migrate`, whose default subcommand is deploy).
+fn dorm_migrate_plan(dorm: &str, action: &str, name: Option<&str>) -> (String, Vec<String>) {
+    let mut args = vec!["migrate".to_owned()];
+    if action == "dev" {
+        args.push("dev".to_owned());
+        args.push(name.unwrap_or("migration").to_owned());
+    }
+    (dorm.to_owned(), args)
+}
+
+/// `seiva db dev`/`migrate`: run the DORM migrate lane inside the project's DORM
+/// data layer (`data/`). The DSN comes from `DELONIX_ORM_DSN` (the `dorm.schema`'s
+/// `datasource` reads it).
+fn db_migrate_delegate(action: &str, name: Option<&str>) -> ExitCode {
+    if require_project().is_none() {
+        return ExitCode::FAILURE;
+    }
+    let dir = Path::new(DORM_PROJECT_DIR);
+    if !dir.join("dorm.schema").is_file() {
+        eprintln!(
+            "seiva: no DORM data layer here — run `seiva db init` first (it scaffolds `{}/`).",
+            DORM_PROJECT_DIR
+        );
+        return ExitCode::FAILURE;
+    }
+    let dorm = dorm_bin();
+    let (program, args) = dorm_migrate_plan(&dorm, action, name);
+    match std::process::Command::new(&program)
+        .args(&args)
+        .current_dir(dir)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(error) => {
+            eprintln!(
+                "seiva: could not run `{program}` in `{}`: {error}\n\
+                 seiva db needs the DORM CLI (set SEIVA_DORM_BIN or install dorm-cli).",
+                DORM_PROJECT_DIR
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `seiva proto`: prints the proto3 service document for the built-in facades.
 fn proto() -> ExitCode {
     eprintln!(
@@ -812,8 +996,9 @@ fn main() -> ExitCode {
             ModuleAction::Merge { .. } => not_yet("module merge", "the module-mode phase"),
         },
         Command::Db { action } => match action {
-            DbAction::Dev { .. } => not_yet("db dev", "the data-layer phase"),
-            DbAction::Migrate => not_yet("db migrate", "the data-layer phase"),
+            DbAction::Init { dir } => db_init(dir),
+            DbAction::Dev { name } => db_migrate_delegate("dev", Some(&name)),
+            DbAction::Migrate => db_migrate_delegate("deploy", None),
             DbAction::Pull { out, dsn } => db_pull(out, dsn),
         },
         Command::Lint => lint(),
@@ -909,6 +1094,17 @@ mod tests {
                 "out.schema"
             ]
         );
+    }
+
+    #[test]
+    fn dorm_migrate_plan_maps_dev_and_deploy() {
+        // dev → author + apply the next migration by name.
+        let (p, args) = dorm_migrate_plan("dorm", "dev", Some("add_price"));
+        assert_eq!(p, "dorm");
+        assert_eq!(args, vec!["migrate", "dev", "add_price"]);
+        // deploy → apply the chain (DORM's default `migrate` subcommand).
+        let (_p, args) = dorm_migrate_plan("dorm", "deploy", None);
+        assert_eq!(args, vec!["migrate"]);
     }
 
     #[test]
