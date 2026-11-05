@@ -34,9 +34,14 @@ console ships as a separate crate, `seiva-console-admin`, that a composition roo
 opts into explicitly:
 
 ```rust
-// in your apps/<name>-api composition root, after building the module router:
-let app = seiva_console_admin::mount(app); // now GET /admin serves the console
+// in your apps/<name>-api composition root, merge into `modules` BEFORE the
+// framework layers wrap them (so /admin gets authn, headers and the rate limit):
+let modules = seiva_console_admin::mount(modules);
+let app = seiva_http::router_with_modules(health, &security, auth, modules);
 ```
+
+`seiva ext add seiva-console-admin` inserts that line at the managed anchor for
+you (ADR 0010).
 
 Once mounted, `GET /admin` is a self-contained console (no CDN, strict
 hash-based CSP) that renders each **registered, authorized** resource with its

@@ -30,14 +30,20 @@ compose it, then recompile.
    With the independent DX tool this is `dx add seiva-console-admin`; with Cargo
    it is the line above. Either way the integration is explicit and auditable.
 
-2. **Mount it** where you build the application router, after merging your
-   modules:
+2. **Mount it into the `modules` router BEFORE the framework layers wrap it**, so
+   `/admin` gets authn (the `Principal` is populated — the registry depends on
+   it), the security headers and the rate limit like any route:
 
    ```rust
-   // before: let app = seiva_http::router_with_modules(health, &security, auth, modules);
+   let modules = /* your merged module routers */;
+   let modules = seiva_console_admin::mount(modules); // adds GET /admin (+ registry)
    let app = seiva_http::router_with_modules(health, &security, auth, modules);
-   let app = seiva_console_admin::mount(app); // GET /admin now serves the console
    ```
+
+   Mounting onto the already-layered `app` (after `router_with_modules`) would
+   leave `/admin` outside every middleware — no authn, so the registry would
+   always come back empty. A scaffolded project has a managed anchor in the right
+   place, and `seiva ext add seiva-console-admin` inserts the line there.
 
 3. **Recompile.** The route appears only after a rebuild — by design.
 

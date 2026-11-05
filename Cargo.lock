@@ -2615,6 +2615,7 @@ dependencies = [
  "base64",
  "delonix-seiva",
  "http-body-util",
+ "seiva-http",
  "seiva-identity",
  "serde_json",
  "sha2",

@@ -18,9 +18,13 @@
 //!
 //! ```no_run
 //! use axum::Router;
-//! # fn modules() -> Router { Router::new() }
-//! let app: Router = modules();
-//! let app = seiva_console_admin::mount(app); // now GET /admin serves the console
+//! # fn module_routers() -> Router { Router::new() }
+//! // Merge into the pre-layer `modules` router, BEFORE `router_with_modules`
+//! // wraps it — so /admin gets authn (the Principal populated), the security
+//! // headers and the rate limit like any module route.
+//! let modules: Router = module_routers();
+//! let modules = seiva_console_admin::mount(modules); // adds GET /admin (+ registry)
+//! // let app = seiva_http::router_with_modules(health, &security, auth, modules);
 //! ```
 //!
 //! The dependency is one-way: this crate depends on `axum::Router` (Seiva's
@@ -420,10 +424,17 @@ pub fn admin_router() -> Router {
 }
 
 /// Mounts the console onto `router` (adds `GET /admin` and `GET
-/// /admin/registry.json`) and returns it. This is
-/// the explicit opt-in a composition root calls; without it the backend has no
-/// admin route. Mounting twice is rejected by axum (a duplicate route panics at
-/// build time), surfacing a double-mount as a startup error rather than silently.
+/// /admin/registry.json`) and returns it. This is the explicit opt-in a
+/// composition root calls; without it the backend has no admin route.
+///
+/// Call it on the **pre-layer `modules` router**, before
+/// `seiva_http::router_with_modules` wraps it — the console's routes then get
+/// authn (so `/admin/registry.json` sees the caller's `Principal`), the security
+/// headers and the rate limit like any module route. Mounting onto the
+/// already-layered application router would leave `/admin` outside every
+/// middleware (no authn → the registry would always be empty). Mounting twice is
+/// rejected by axum (a duplicate route panics at build time), surfacing a
+/// double-mount as a startup error rather than silently.
 pub fn mount(router: Router) -> Router {
     router.merge(admin_router())
 }

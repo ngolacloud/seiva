@@ -25,8 +25,10 @@ version = "0.1"
 
 [compose]
 # Inserted in the composition root's main.rs at the managed `// seiva:extensions`
-# anchor, after `let app = router_with_modules(...);` — it shadows `app`.
-mount = "let app = seiva_console_admin::mount(app);"
+# anchor, which sits BEFORE `let app = router_with_modules(...);`. It merges into
+# `modules` so the console's /admin is wrapped by the framework layers (authn —
+# so the Principal is populated — security headers, rate limit) like any route.
+mount = "let modules = seiva_console_admin::mount(modules);"
 
 # This extension needs no Cargo feature and no runtime configuration. It reads the
 # service's own authorization-filtered admin registry (ADR 0009); nothing else.

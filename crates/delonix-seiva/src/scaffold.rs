@@ -337,7 +337,9 @@ pub struct ExtensionManifest {
 pub const CONSOLE_ADMIN_EXTENSION: ExtensionManifest = ExtensionManifest {
     crate_name: "seiva-console-admin",
     version_req: "0.1",
-    mount_stmt: "let app = seiva_console_admin::mount(app);",
+    // Mounts into `modules` BEFORE `router_with_modules` layers them, so /admin is
+    // covered by authn/security-headers/rate-limit (see the composition point).
+    mount_stmt: "let modules = seiva_console_admin::mount(modules);",
     summary: "The optional admin console at /admin (ADR 0008/0009).",
 };
 
@@ -575,12 +577,15 @@ fn app_main_rs(name: &str) -> String {
          \x20   // inserts each module's merge at the anchor below.\n\
          \x20   let modules = Router::new();\n\
          \x20   {MODULE_MERGES_ANCHOR}\n\
-         \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\
-         \x20   // Optional extensions mount here (the managed composition point).\n\
-         \x20   // `seiva ext add <name>` inserts each extension's mount call before\n\
-         \x20   // this anchor, shadowing `app` — explicit and recompiled, never a\n\
-         \x20   // silent hook. (See the admin console: ADR 0008/0009/0010.)\n\
-         \x20   {EXTENSIONS_ANCHOR}\n\n\
+         \x20   // Optional extensions merge into `modules` HERE — the managed\n\
+         \x20   // composition point — BEFORE `router_with_modules` wraps everything,\n\
+         \x20   // so an extension's routes (e.g. the admin console's /admin) get\n\
+         \x20   // authn (the `Principal` populated), the security headers and the\n\
+         \x20   // rate limit like any module route. `seiva ext add <name>` inserts\n\
+         \x20   // each extension's mount at the anchor below — explicit and\n\
+         \x20   // recompiled, never a silent hook. (Admin console: ADR 0008/0009/0010.)\n\
+         \x20   {EXTENSIONS_ANCHOR}\n\
+         \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
          \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
          \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
          \x20       Ok(()) => ExitCode::SUCCESS,\n\

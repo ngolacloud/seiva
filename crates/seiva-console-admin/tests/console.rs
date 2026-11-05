@@ -202,3 +202,68 @@ fn shipped_extension_manifest_matches_the_builtin_contract() {
     assert!(shipped.contains(&format!("version = \"{}\"", builtin.version_req)));
     assert!(shipped.contains(&format!("mount = \"{}\"", builtin.mount_stmt)));
 }
+
+// --- End-to-end: the console sees the Principal THROUGH the framework layers ---
+//
+// The security fix (ADR 0010): the console must mount into the pre-layer
+// `modules` router so `router_with_modules` wraps /admin with authn — otherwise
+// the Principal is never populated and the registry is always empty. This proves
+// the composed, layered path, with a real authenticator.
+
+use std::sync::Arc;
+
+#[tokio::test]
+async fn registry_sees_the_authenticated_principal_through_the_layers() {
+    use seiva_http::{router_with_modules, Health, HttpSecurity, Principal, TokenAuthenticator};
+
+    // The composition a real root uses: console mounted into `modules`, then layered.
+    let modules = mount(axum::Router::new());
+    let auth = TokenAuthenticator::new().with_token("good", Principal::new("clerk", ["shop.read"]));
+    let app = router_with_modules(
+        Health::starting(),
+        &HttpSecurity::default(),
+        Some(Arc::new(auth)),
+        modules,
+    );
+
+    // With a valid bearer, authn populates the Principal → the registry lists the
+    // resource the caller may view (proving the Principal reached the handler).
+    let authed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/registry.json")
+                .header("authorization", "Bearer good")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), StatusCode::OK);
+    let bytes = authed.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let ids: Vec<&str> = body["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["resource"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&"widgets"),
+        "the authenticated caller's authorized resource must appear: {body}"
+    );
+
+    // Without a token the caller is anonymous → the registry is empty (fail-closed).
+    let anon = app
+        .oneshot(
+            Request::builder()
+                .uri("/admin/registry.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = anon.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["resources"].as_array().unwrap().len(), 0);
+}

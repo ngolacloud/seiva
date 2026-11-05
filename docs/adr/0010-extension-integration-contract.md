@@ -42,8 +42,14 @@ two edits by hand.**
 - **Managed composition point.** `seiva project new` now emits two managed
   anchors in the composition root: `# seiva:extension-deps` in the app
   `Cargo.toml` `[dependencies]`, and `// seiva:extensions` in `main.rs`
-  immediately after `let app = router_with_modules(…);`. The mount statement
-  shadows `app` (`let app = seiva_console_admin::mount(app);`).
+  **before** `let app = router_with_modules(…);`, after the module merges. The
+  mount statement merges into the pre-layer `modules` router
+  (`let modules = seiva_console_admin::mount(modules);`), so the extension's
+  routes are wrapped by the framework layers — authn (the `Principal` is
+  populated, which the admin registry depends on), security headers and the rate
+  limit — exactly like a module route. Mounting onto the already-layered `app`
+  would leave the routes outside every middleware (the regression ADR 0008's
+  security note and the owner's brief forbid); the anchor's position prevents it.
 - **Manifest shape.** `ExtensionManifest` (in `delonix_seiva::scaffold`):
   `crate_name`, `version_req`, `mount_stmt`, `summary`. The console ships the
   same data as a declarative `seiva-extension.toml` (`[dependency]`, `[compose]`)
