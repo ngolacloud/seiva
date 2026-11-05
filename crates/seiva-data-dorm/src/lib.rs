@@ -249,6 +249,12 @@ impl IdempotencyStore for DormIdempotencyStore {
             .await
             .map_err(|e| Box::new(e) as BoxError)
     }
+
+    async fn purge_expired(&self) -> PortResult<u64> {
+        dorm_core::idempotency::purge_expired()
+            .await
+            .map_err(|e| Box::new(e) as BoxError)
+    }
 }
 
 #[cfg(test)]
@@ -526,6 +532,126 @@ mod tests {
         // Cleanup.
         uow.transaction(|| async {
             dorm_core::db::execute("DROP TABLE seiva_idem_effect", &[])
+                .await
+                .map_err(|e| Box::new(e) as BoxError)
+        })
+        .await
+        .expect("cleanup succeeds");
+    }
+
+    /// Live proof of consumer-side inbox dedup and TTL purge against real
+    /// PostgreSQL (ADR 0011). Gated on `SEIVA_DORM_TEST_DSN`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_inbox_dedup_and_purge() {
+        use seiva_ports::inbox_key;
+
+        let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+            eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the live inbox/purge proof");
+            return;
+        };
+        let uow = DormUnitOfWork::new(
+            connect(&DormConfig {
+                dsn,
+                replicas: vec![],
+                read_only: false,
+                schema: None,
+                pool_max: 4,
+                cursor_key: b"live-inbox-secret".to_vec(),
+            })
+            .expect("connect to the test database"),
+        );
+
+        // Setup: the idempotency table + a consumed-effects counter table.
+        uow.transaction(|| async {
+            for stmt in &idempotency_migrations() {
+                dorm_core::db::execute(stmt, &[])
+                    .await
+                    .map_err(|e| Box::new(e) as BoxError)?;
+            }
+            dorm_core::db::execute("DROP TABLE IF EXISTS seiva_inbox_effect", &[])
+                .await
+                .map_err(|e| Box::new(e) as BoxError)?;
+            dorm_core::db::execute(
+                "CREATE TABLE seiva_inbox_effect (id serial primary key)",
+                &[],
+            )
+            .await
+            .map_err(|e| Box::new(e) as BoxError)?;
+            dorm_core::db::execute(
+                "DELETE FROM dorm_idempotency WHERE key LIKE 'inbox:billing:%' OR key = 'ttl-key'",
+                &[],
+            )
+            .await
+            .map_err(|e| Box::new(e) as BoxError)?;
+            Ok(())
+        })
+        .await
+        .expect("setup succeeds");
+
+        // Deliver the SAME event to the same consumer twice: the effect+mark run
+        // in one transaction, so the redelivery is skipped — one effect.
+        let key = inbox_key("billing", "evt-1");
+        for _ in 0..2 {
+            let key = key.clone();
+            uow.transaction(move || async move {
+                let store = DormIdempotencyStore;
+                if store
+                    .begin(&key, "evt-1", std::time::Duration::from_secs(300))
+                    .await?
+                    == IdempotencyOutcome::Fresh
+                {
+                    dorm_core::db::execute("INSERT INTO seiva_inbox_effect DEFAULT VALUES", &[])
+                        .await
+                        .map_err(|e| Box::new(e) as BoxError)?;
+                    store.finish(&key, b"").await?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("consume succeeds");
+        }
+        let count = uow
+            .transaction(|| async {
+                dorm_core::db::sql("SELECT count(*)::int FROM seiva_inbox_effect", &[])
+                    .await
+                    .map_err(|e| Box::new(e) as BoxError)
+            })
+            .await
+            .expect("count succeeds");
+        let effects: i32 = count[0].try_get(0).expect("count column");
+        assert_eq!(effects, 1, "a redelivered event must be consumed once");
+
+        // TTL purge: a key claimed with ttl 0 is already expired; purge removes it.
+        uow.transaction(|| async {
+            DormIdempotencyStore
+                .begin("ttl-key", "fp", std::time::Duration::from_secs(0))
+                .await
+                .map(|_| ())
+        })
+        .await
+        .expect("claim succeeds");
+        let purged = uow
+            .transaction(|| async { DormIdempotencyStore.purge_expired().await })
+            .await
+            .expect("purge succeeds");
+        assert!(
+            purged >= 1,
+            "the expired key must be purged (removed {purged})"
+        );
+        // The purged key is free to claim again (Fresh).
+        let reclaim = uow
+            .transaction(|| async {
+                DormIdempotencyStore
+                    .begin("ttl-key", "fp", std::time::Duration::from_secs(300))
+                    .await
+            })
+            .await
+            .expect("begin succeeds");
+        assert_eq!(reclaim, IdempotencyOutcome::Fresh);
+
+        // Cleanup.
+        uow.transaction(|| async {
+            dorm_core::db::execute("DROP TABLE seiva_inbox_effect", &[])
                 .await
                 .map_err(|e| Box::new(e) as BoxError)
         })

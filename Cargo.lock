@@ -2728,6 +2728,7 @@ dependencies = [
  "delonix-seiva",
  "seiva-config",
  "seiva-http",
+ "seiva-testing",
  "serde_json",
  "tokio",
  "tower",

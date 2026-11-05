@@ -381,4 +381,31 @@ mod tests {
             IdempotencyOutcome::Fresh
         );
     }
+
+    #[tokio::test]
+    async fn inbox_dedup_consumes_a_redelivered_event_once() {
+        use seiva_ports::inbox_key;
+        let store = InMemoryIdempotencyStore::new();
+        let ttl = Duration::from_secs(60);
+        let key = inbox_key("billing", "evt-1");
+        let mut effects = 0;
+
+        // Two deliveries of the same (consumer, event): claim+mark, effect once.
+        for _ in 0..2 {
+            if store.begin(&key, "evt-1", ttl).await.unwrap() == IdempotencyOutcome::Fresh {
+                effects += 1;
+                store.finish(&key, b"").await.unwrap();
+            }
+        }
+        assert_eq!(effects, 1, "a redelivered event is consumed once");
+
+        // A different event id for the same consumer is independent.
+        assert_eq!(
+            store
+                .begin(&inbox_key("billing", "evt-2"), "evt-2", ttl)
+                .await
+                .unwrap(),
+            IdempotencyOutcome::Fresh
+        );
+    }
 }

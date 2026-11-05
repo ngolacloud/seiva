@@ -162,6 +162,31 @@ pub trait IdempotencyStore: Send + Sync {
     /// Persists `response` for `scoped_key` and marks it completed, so a later
     /// [`begin`](Self::begin) returns [`Replay`](IdempotencyOutcome::Replay).
     async fn finish(&self, scoped_key: &str, response: &[u8]) -> PortResult<()>;
+
+    /// Deletes records whose TTL has elapsed; returns how many. A scheduled
+    /// worker calls this so the store does not grow without bound. The default is
+    /// a no-op (returns `0`) for stores that expire records some other way.
+    async fn purge_expired(&self) -> PortResult<u64> {
+        Ok(0)
+    }
+}
+
+/// The store key for **consumer-side inbox deduplication**: processing one event
+/// at most once per consumer (ADR 0011). Compose it from the consumer's name and
+/// the event id, then claim it through [`IdempotencyStore::begin`] **in the same
+/// transaction** as the effect — on [`Fresh`](IdempotencyOutcome::Fresh) apply
+/// the effect and [`finish`](IdempotencyStore::finish); on any other outcome the
+/// event was already handled, so skip it (and still ack after commit). A
+/// redelivery of the same event id resolves to the same key, so the effect never
+/// repeats even though the broker may deliver more than once.
+///
+/// ```
+/// use seiva_ports::inbox_key;
+/// assert_eq!(inbox_key("billing", "evt-123"), "inbox:billing:evt-123");
+/// ```
+#[must_use]
+pub fn inbox_key(consumer: &str, event_id: &str) -> String {
+    format!("inbox:{consumer}:{event_id}")
 }
 
 #[cfg(test)]

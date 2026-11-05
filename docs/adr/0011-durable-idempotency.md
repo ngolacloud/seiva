@@ -88,10 +88,19 @@ outbox. Instead the application drives `IdempotencyStore::begin` inside its
 (`seiva-http/tests/idempotency_http.rs`) shows the full pattern (one effect on
 `Fresh`, replay on retry, `409` on mismatch, `400` on a malformed key).
 
-### Not in this ADR (next increments)
+### Consumer inbox & TTL purge (delivered)
 
-- A consumer-side inbox/dedup (by event id + consumer) for the broker path.
-- `purge_expired` wired to a scheduled worker for TTL cleanup.
+- **Inbox dedup.** `seiva_ports::inbox_key(consumer, event_id)` composes the store
+  key for consumer-side deduplication; a consumer claims it through the same
+  `IdempotencyStore::begin` inside the consume transaction (effect + mark
+  together, ack after commit), so a broker redelivery is consumed once. Proved
+  live (`live_inbox_dedup_and_purge`: the same event delivered twice → one
+  effect) and offline (`seiva-testing`).
+- **TTL purge.** `IdempotencyStore::purge_expired` (DORM → `purge_expired` SQL)
+  plus `seiva_server::run_idempotency_purge`, a scheduled worker over
+  `run_worker` that purges inside a `UnitOfWork` transaction. Proved live (a
+  `ttl=0` key is purged and then reclaimable `Fresh`) and the worker glue is
+  tested with the in-memory doubles.
 
 ## Alternatives considered
 

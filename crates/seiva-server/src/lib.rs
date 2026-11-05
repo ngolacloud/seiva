@@ -536,6 +536,37 @@ pub async fn run_workers(shutdown: impl Future<Output = ()> + Send) -> Vec<Worke
     vec![report]
 }
 
+/// Runs a background worker that purges expired idempotency records (ADR 0011) on
+/// `config.interval` until `shutdown` resolves. Each pass runs
+/// [`IdempotencyStore::purge_expired`](delonix_seiva::ports::IdempotencyStore::purge_expired)
+/// inside a [`UnitOfWork`](delonix_seiva::ports::UnitOfWork) transaction — the
+/// DORM store's purge needs an open session — and reports how many it removed.
+///
+/// The composition root wires it next to [`serve`]; both share one `shutdown`.
+/// The `store` and `uow` are shared (`Arc`) so each pass owns its own clones and
+/// the loop never borrows across awaits.
+pub async fn run_idempotency_purge<U, St, Sh>(
+    uow: std::sync::Arc<U>,
+    store: std::sync::Arc<St>,
+    config: WorkerConfig,
+    shutdown: Sh,
+) -> WorkerReport
+where
+    U: delonix_seiva::ports::UnitOfWork + 'static,
+    St: delonix_seiva::ports::IdempotencyStore + 'static,
+    Sh: Future<Output = ()>,
+{
+    run_worker(config, shutdown, move || {
+        let uow = std::sync::Arc::clone(&uow);
+        let store = std::sync::Arc::clone(&store);
+        async move {
+            uow.transaction(move || async move { store.purge_expired().await })
+                .await
+        }
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -863,5 +894,19 @@ mod tests {
         assert!(report.passes >= 1, "at least one pass runs before shutdown");
         assert_eq!(report.processed, 0, "the demo pass processes nothing");
         assert_eq!(report.errors, 0, "the demo pass never fails");
+    }
+
+    #[tokio::test]
+    async fn idempotency_purge_worker_runs_passes_and_never_fails() {
+        use seiva_testing::{InMemoryIdempotencyStore, InMemoryUnitOfWork};
+        use std::sync::Arc;
+
+        let uow = Arc::new(InMemoryUnitOfWork::new());
+        let store = Arc::new(InMemoryIdempotencyStore::new());
+        // Zero interval + immediate shutdown: it runs a pass, then stops.
+        let config = WorkerConfig::new("idempotency-purge", std::time::Duration::ZERO);
+        let report = run_idempotency_purge(uow, store, config, async {}).await;
+        assert!(report.passes >= 1, "the purge worker ran at least one pass");
+        assert_eq!(report.errors, 0, "purge must not fail");
     }
 }
