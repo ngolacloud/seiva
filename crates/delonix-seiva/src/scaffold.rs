@@ -550,17 +550,18 @@ fn facade_lib(module: &str, pascal: &str) -> String {
          //! RFC 9457 `Problem` here — the module owns its wire contract. Hence this\n\
          //! layer depends on `delonix-seiva`, `serde` and `seiva-http`.\n\
          #![allow(async_fn_in_trait)]\n\n\
-         use delonix_seiva::facade;\n\
+         use delonix_seiva::{{facade, WireSchema}};\n\
          use seiva_http::{{Problem, Validate, ValidationError}};\n\
          use serde::{{Deserialize, Serialize}};\n\n\
          /// Command DTO: the JSON body of `create`, validated by the controller's\n\
          /// `Valid<T>` extractor. Rename `Record`/`title` to the real shape.\n\
-         #[derive(Debug, Clone, Deserialize, Serialize)]\n\
+         /// `WireSchema` publishes its real fields to the OpenAPI document.\n\
+         #[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]\n\
          pub struct CreateRecord {{\n    /// The record's title; must be non-empty after trimming.\n    pub title: String,\n}}\n\n\
          impl Validate for CreateRecord {{\n    fn validate(&self) -> Result<(), ValidationError> {{\n        if self.title.trim().is_empty() {{\n            return Err(ValidationError::new(\"title must not be empty\"));\n        }}\n        Ok(())\n    }}\n}}\n\n\
          /// Response DTO: what `create` returns. Never a domain type — the\n\
          /// application layer maps the domain entity to this at the boundary.\n\
-         #[derive(Debug, Clone, PartialEq, Eq, Serialize)]\n\
+         #[derive(Debug, Clone, PartialEq, Eq, Serialize, WireSchema)]\n\
          pub struct RecordDto {{\n    /// The record's identifier.\n    pub id: u128,\n    /// The record's title.\n    pub title: String,\n}}\n\n\
          /// The facade's error type. The controller maps it to an RFC 9457 problem\n\
          /// via this `Into<Problem>`, so the module owns how failures surface.\n\
@@ -918,10 +919,8 @@ mod tests {
     #[test]
     fn generated_project_compiles_standalone() {
         let root = framework_root();
-        let work = std::env::temp_dir().join(format!(
-            "seiva-scaffold-fitness-{}",
-            std::process::id()
-        ));
+        let work =
+            std::env::temp_dir().join(format!("seiva-scaffold-fitness-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&work);
         std::fs::create_dir_all(&work).expect("create work dir");
 
@@ -1064,7 +1063,7 @@ mod tests {
         let files = module_files("notes").unwrap();
         let facade = contents(&files, "modules/notes/facade/src/lib.rs");
         // The macro is imported and applied with an explicit version.
-        assert!(facade.contains("use delonix_seiva::facade;"));
+        assert!(facade.contains("use delonix_seiva::{facade, WireSchema};"));
         assert!(facade.contains("#[facade(version = \"v1\")]"));
         // At least one method carries a `#[requires(..)]`, keyed to the module.
         assert!(facade.contains("#[requires(\"notes.create\")]"));
@@ -1074,8 +1073,9 @@ mod tests {
             "async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError>;"
         ));
         // Wire DTOs: serde + Validate on the write DTO, Serialize on the response,
-        // error → Problem mapping. This is the controller-test shape.
-        assert!(facade.contains("#[derive(Debug, Clone, Deserialize, Serialize)]"));
+        // WireSchema so the OpenAPI document carries the real fields, error →
+        // Problem mapping. This is the controller-test shape.
+        assert!(facade.contains("#[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]"));
         assert!(facade.contains("impl Validate for CreateRecord"));
         assert!(facade.contains("impl From<RecordError> for Problem"));
     }

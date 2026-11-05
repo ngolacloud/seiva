@@ -493,3 +493,39 @@ com a chave da fixture → 200.
 Pendente (não bloqueia este tema): adotar `router_with_modules` no `main` gerado
 pelo scaffold (ligado ao bloqueador #2, publicação+compilação do projeto gerado);
 unificação do `seiva-mcp`.
+
+## Fidelidade do contrato OpenAPI (bloqueador #3) — ADR 0007 (2026-11-05)
+
+O descriptor do facade carrega os tipos como *nomes* (string), por isso o gerador
+OpenAPI produzia um contrato infiel de duas formas: (1) o corpo de um write era
+embrulhado como objeto chaveado pelo nome do parâmetro (`{"cmd":…}`), quando o
+`#[controller]` desserializa o corpo diretamente como o DTO (`Valid<CreateNote>`,
+e proíbe >1 param de corpo) — um cliente que seguisse o doc era rejeitado; (2) o
+schema de qualquer DTO era `{"type":"string","x-seiva-rust-type":"…"}`, afirmando
+*string* onde o fio leva um objeto.
+
+Resolvido com `WireSchema` (ADR 0007), sem reflexão: um DTO descreve-se via
+`#[derive(WireSchema)]` (trait `delonix_seiva::schema::WireSchema` + impls dos
+escalares/`Vec`/`Option`/`&T`), que implementa o schema (objeto composto campo-a-
+campo; `Option` fora de `required`) E regista o tipo por nome num inventário
+link-time — o mesmo mecanismo que o `#[facade]` já usa para descobrir facades. O
+gerador resolve o nome via `registered_schema` ANTES do placeholder (tipo sem
+derive degrada graciosamente). **Aditivo**: o descriptor não muda (`ty: &str`
+mantém-se), por isso o gerador gRPC e os checks de contrato ficam intocados. O
+corpo de um write passa a ser o schema do DTO diretamente (sem envelope). Exemplos
+(notes/accounts) e o template do scaffold derivam `WireSchema`.
+
+Provado por efeito: `seiva openapi` documenta o create de `notes` com corpo
+`{title}` e resposta `{id,title}`, **0** `x-seiva-rust-type` no documento real.
+Testes: gerador 11/11 (corpo-direto, resposta-do-inventário, placeholder p/ tipo
+não registado), schema 4/4, fitness que COMPILA o projeto gerado (DTOs com derive)
+a passar, workspace inteiro verde.
+
+**Ressalvas (datadas 2026-11-05):**
+
+- **gRPC/proto continua com placeholder** (lê `ty`, mapeamento próprio) — enriquecer
+  a mensagem proto a partir do `WireSchema` fica como follow-up.
+- **`Vec<u8>`** compõe como array de inteiros (não o `format:"byte"` do mapeador por
+  string) quando chega por campo composto — divergência menor, documentada.
+- **Colisão de nomes curtos** entre DTOs de crates diferentes (first-match) — herdada
+  dos descriptors chaveados por nome curto.

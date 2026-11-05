@@ -17,18 +17,21 @@
 //!
 //! A facade descriptor carries parameter and return **types as Rust type
 //! strings** (for example `"CreateNote"`, `"&Ctx"`, `"Result<NoteDto, String>"`),
-//! not a structural description of those types. This generator therefore never
-//! fabricates a DTO's internal fields. It maps the well-known scalar types to
-//! their JSON Schema equivalents and, for everything else, emits an honest
-//! placeholder that names the Rust type:
+//! not a structural description. This generator still fabricates nothing: it maps
+//! the well-known scalar types to their JSON Schema equivalents, and for a named
+//! type it looks the real shape up in the link-time schema inventory
+//! ([`delonix_seiva::schema::registered_schema`]) — populated by every DTO that
+//! derives [`WireSchema`](delonix_seiva::schema::WireSchema). A named type that
+//! did *not* derive `WireSchema` (so is absent from the inventory) falls back to
+//! an honest placeholder naming the Rust type:
 //!
 //! ```json
 //! { "type": "string", "x-seiva-rust-type": "CreateNote" }
 //! ```
 //!
-//! An auditor reading the document can see exactly which wire shapes are known
-//! and which are placeholders standing in for a named Rust type. See
-//! [`schema_for_rust_type`](self#the-type-mapping) below for the full table.
+//! An auditor reading the document can see exactly which wire shapes are resolved
+//! from a `WireSchema` DTO and which remain placeholders standing in for a named
+//! Rust type. See [`schema_for_rust_type`](self#the-type-mapping) for the table.
 //!
 //! # The path and operation conventions
 //!
@@ -53,13 +56,16 @@
 //! injected by the transport — it is never a wire field. Such parameters are
 //! skipped when building request bodies, path parameters and query parameters.
 //!
-//! ## Request bodies are keyed by parameter name
+//! ## Request bodies are the parameter DTO directly
 //!
-//! Because parameter types are opaque Rust type strings, a write method's
-//! request body is an `object` whose properties are its non-context parameters,
-//! keyed by parameter name, each property carrying the [schema for its Rust
-//! type](self#the-type-mapping). The generator never invents the parameters'
-//! internal fields.
+//! A write method takes at most one body parameter (the generated
+//! `#[seiva::controller]` enforces this and deserialises the body *as* that
+//! parameter's DTO through `seiva_http::Valid<T>`). The request body schema is
+//! therefore that parameter's [schema](self#the-type-mapping) directly — not an
+//! object keyed by the parameter name, which would mis-document the wire
+//! contract. A write with no body parameter carries no body. (A hand-built
+//! descriptor declaring more than one body parameter — impossible through the
+//! controller — falls back to an object keyed by parameter name.)
 //!
 //! ## Responses unwrap one `Result` level
 //!
@@ -208,10 +214,13 @@ pub fn resource_of(facade_name: &str) -> String {
 /// | `Vec<u8>`                                            | `{"type":"string","format":"byte"}`       |
 /// | `Vec<T>`                                             | `{"type":"array","items":<schema of T>}`  |
 /// | `()`                                                 | `{"type":"null"}`                         |
+/// | *(a `WireSchema` DTO, by name)*                      | its registered object schema              |
 /// | *(anything else)*                                    | `{"type":"string","x-seiva-rust-type":"<ty>"}` |
 ///
-/// The final row is the honest placeholder: the generator cannot see inside a
-/// named type, so it records the Rust type name rather than fabricating a shape.
+/// A named type is resolved from the link-time schema inventory when it derived
+/// [`WireSchema`](delonix_seiva::schema::WireSchema); otherwise the final row is
+/// the honest placeholder — the generator records the Rust type name rather than
+/// fabricating a shape.
 pub fn schema_for_rust_type(ty: &str) -> Value {
     let ty = ty.trim();
     match ty {
@@ -226,6 +235,10 @@ pub fn schema_for_rust_type(ty: &str) -> Value {
         _ => {
             if let Some(inner) = ty.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')) {
                 json!({ "type": "array", "items": schema_for_rust_type(inner) })
+            } else if let Some(real) = delonix_seiva::schema::registered_schema(ty) {
+                // A DTO that derived `WireSchema` contributed its real shape to
+                // the link-time inventory; use it instead of the placeholder.
+                real
             } else {
                 json!({ "type": "string", "x-seiva-rust-type": ty })
             }
@@ -354,23 +367,38 @@ fn operation_for(facade: &FacadeDescriptor, method: &MethodDescriptor, route: &R
             }
         }
         Verb::Post => {
-            // A write method's body is an object keyed by parameter name.
-            if !wire_params.is_empty() {
-                let mut properties = serde_json::Map::new();
-                let mut required = Vec::new();
-                for param in &wire_params {
-                    properties.insert(param.name.to_string(), schema_for_rust_type(param.ty));
-                    required.push(Value::from(param.name));
+            // The generated `#[controller]` deserialises a write body AS the single
+            // parameter's DTO directly (`seiva_http::Valid<T>`), and rejects more
+            // than one body parameter. So the body schema IS that DTO's schema — an
+            // object keyed by parameter name would mis-document the wire contract.
+            match wire_params.as_slice() {
+                [] => {}
+                [only] => {
+                    request_body = Some(RequestBody {
+                        required: true,
+                        content: media("application/json", schema_for_rust_type(only.ty)),
+                    });
                 }
-                let schema = json!({
-                    "type": "object",
-                    "properties": Value::Object(properties),
-                    "required": Value::Array(required),
-                });
-                request_body = Some(RequestBody {
-                    required: true,
-                    content: media("application/json", schema),
-                });
+                many => {
+                    // Unreachable through `#[controller]` (it forbids >1 body
+                    // parameter), but a hand-built descriptor could declare it;
+                    // document it honestly as an object keyed by parameter name.
+                    let mut properties = serde_json::Map::new();
+                    let mut required = Vec::new();
+                    for param in many {
+                        properties.insert(param.name.to_string(), schema_for_rust_type(param.ty));
+                        required.push(Value::from(param.name));
+                    }
+                    let schema = json!({
+                        "type": "object",
+                        "properties": Value::Object(properties),
+                        "required": Value::Array(required),
+                    });
+                    request_body = Some(RequestBody {
+                        required: true,
+                        content: media("application/json", schema),
+                    });
+                }
             }
         }
     }
@@ -597,27 +625,41 @@ mod tests {
     }
 
     #[test]
-    fn create_request_body_carries_the_cmd_parameter_schema() {
+    fn create_request_body_is_the_dto_schema_directly() {
         let doc = notes_doc();
         let schema = &doc["paths"]["/v1/notes"]["post"]["requestBody"]["content"]
             ["application/json"]["schema"];
+        // The body is `CreateNote` itself (what `Valid<CreateNote>` deserialises),
+        // NOT an object keyed by the `cmd` parameter name. `CreateNote` derived
+        // `WireSchema`, so its real fields are resolved from the inventory.
         assert_eq!(schema["type"], "object");
-        // `cmd: CreateNote` becomes a property, schema-ised as the placeholder.
-        assert_eq!(
-            schema["properties"]["cmd"],
-            json!({ "type": "string", "x-seiva-rust-type": "CreateNote" })
+        assert!(
+            schema
+                .get("properties")
+                .and_then(|p| p.get("cmd"))
+                .is_none(),
+            "the body must not be wrapped under the `cmd` parameter name"
         );
-        assert_eq!(schema["required"], json!(["cmd"]));
+        assert_eq!(schema["properties"]["title"], json!({ "type": "string" }));
+        assert_eq!(schema["required"], json!(["title"]));
     }
 
     #[test]
-    fn return_result_notedto_string_schema_ises_notedto_as_placeholder() {
+    fn return_type_resolves_the_dto_schema_from_the_inventory() {
         let doc = notes_doc();
         let schema = &doc["paths"]["/v1/notes"]["post"]["responses"]["201"]["content"]
             ["application/json"]["schema"];
+        // `Result<NoteDto, String>` → `NoteDto`, resolved to its real shape.
         assert_eq!(
             schema,
-            &json!({ "type": "string", "x-seiva-rust-type": "NoteDto" })
+            &json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer", "format": "u128" },
+                    "title": { "type": "string" },
+                },
+                "required": ["id", "title"],
+            })
         );
     }
 
@@ -630,14 +672,17 @@ mod tests {
             },
             &[CTX_FACADE],
         );
-        // create: the only body property is `cmd`; `ctx: &Ctx` is skipped.
+        // create: the only wire body parameter is `cmd` (`ctx: &Ctx` is skipped),
+        // so the body is `CreateAccount`'s schema directly. `CreateAccount` is a
+        // synthetic type with no `WireSchema` impl, so it stays a placeholder —
+        // which also proves `ctx` was dropped (otherwise the body would be a
+        // two-property object, not a bare placeholder).
         let body = &doc["paths"]["/v2/accounts"]["post"]["requestBody"]["content"]
             ["application/json"]["schema"];
-        assert!(
-            body["properties"].get("ctx").is_none(),
-            "&Ctx must not be a wire field"
+        assert_eq!(
+            body,
+            &json!({ "type": "string", "x-seiva-rust-type": "CreateAccount" })
         );
-        assert_eq!(body["required"], json!(["cmd"]));
 
         // get: `id: u64` is the path parameter; `ctx` is not a parameter at all.
         let get = &doc["paths"]["/v2/accounts/{id}"]["get"];
@@ -692,9 +737,25 @@ mod tests {
             json!({ "type": "array", "items": { "type": "string" } })
         );
         assert_eq!(schema_for_rust_type("()"), json!({ "type": "null" }));
+        // An unknown named type (no `WireSchema` impl linked) stays a placeholder.
+        assert_eq!(
+            schema_for_rust_type("TotallyUnknownType"),
+            json!({ "type": "string", "x-seiva-rust-type": "TotallyUnknownType" })
+        );
+    }
+
+    #[test]
+    fn a_wire_schema_dto_resolves_to_its_real_shape_not_a_placeholder() {
+        // `CreateNote` derived `WireSchema` (notes-facade is a dev-dependency, so
+        // it is linked here), so the generator resolves its fields by name rather
+        // than emitting the `x-seiva-rust-type` placeholder.
         assert_eq!(
             schema_for_rust_type("CreateNote"),
-            json!({ "type": "string", "x-seiva-rust-type": "CreateNote" })
+            json!({
+                "type": "object",
+                "properties": { "title": { "type": "string" } },
+                "required": ["title"],
+            })
         );
     }
 

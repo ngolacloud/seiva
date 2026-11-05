@@ -7,7 +7,10 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, ImplItem, ItemImpl, ItemTrait, LitStr, Pat, ReturnType, TraitItem, Type};
+use syn::{
+    Data, DeriveInput, Fields, FnArg, GenericArgument, ImplItem, ItemImpl, ItemTrait, LitStr, Pat,
+    PathArguments, ReturnType, TraitItem, Type,
+};
 
 /// A method parameter captured from the trait: its name and canonical type.
 struct ParamInfo {
@@ -196,6 +199,117 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// Derives `delonix_seiva::schema::WireSchema` for a DTO so it contributes its
+/// own JSON Schema fragment to the OpenAPI generator, with no reflection (ADR
+/// 0007). Applied as `#[derive(seiva::WireSchema)]` (re-exported as
+/// `delonix_seiva::WireSchema`).
+///
+/// It implements `WireSchema` — an `object` schema whose properties are the
+/// struct's fields, each field's schema composed from its type via
+/// `<FieldTy as WireSchema>::schema()` — and registers the type by name in the
+/// link-time schema inventory so a generator holding only a type-name string can
+/// resolve the real shape. A field typed `Option<T>` is optional (left out of
+/// `required`) and carries `T`'s schema.
+///
+/// Supports a struct with named fields — the shape of a wire DTO. A tuple
+/// struct, a unit struct or an enum is rejected with a compile error, since those
+/// have no field-name → schema mapping to document.
+#[proc_macro_derive(WireSchema)]
+pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(item as DeriveInput);
+    let ident = &input.ident;
+    let name_str = ident.to_string();
+
+    let fields = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(named) => &named.named,
+            _ => {
+                return syn::Error::new_spanned(
+                    ident,
+                    "WireSchema supports a struct with named fields (a wire DTO)",
+                )
+                .to_compile_error()
+                .into();
+            }
+        },
+        _ => {
+            return syn::Error::new_spanned(
+                ident,
+                "WireSchema supports a struct with named fields, not an enum or union",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    // A generic DTO would need its schema parameterised per instantiation; the
+    // by-name registry keys on a single name, so reject generics explicitly
+    // rather than emit a registration that cannot be resolved.
+    if !input.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &input.generics,
+            "WireSchema does not support generic types",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let field_descs = fields.iter().map(|field| {
+        let field_name = field.ident.as_ref().expect("named field").to_string();
+        // An `Option<T>` field is not required and documents `T`'s schema.
+        let (schema_ty, required) = match option_inner(&field.ty) {
+            Some(inner) => (inner, false),
+            None => (field.ty.clone(), true),
+        };
+        quote! {
+            ::delonix_seiva::schema::Field {
+                name: #field_name,
+                schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
+                required: #required,
+            }
+        }
+    });
+
+    quote! {
+        impl ::delonix_seiva::schema::WireSchema for #ident {
+            fn schema() -> ::delonix_seiva::serde_json::Value {
+                ::delonix_seiva::schema::object_schema(&[ #(#field_descs),* ])
+            }
+        }
+
+        // Register the type by name so a generator with only a type-name string
+        // (the facade descriptor carries names, not shapes) resolves the real
+        // schema through `delonix_seiva::schema::registered_schema`.
+        ::delonix_seiva::inventory::submit! {
+            ::delonix_seiva::schema::SchemaRegistration {
+                name: #name_str,
+                schema: <#ident as ::delonix_seiva::schema::WireSchema>::schema,
+            }
+        }
+    }
+    .into()
+}
+
+/// The inner type `T` of an `Option<T>`, or `None` if the type is not a plain
+/// `Option<_>`. Matches on the final path segment, so `Option`, `std::option::Option`
+/// and `core::option::Option` are all recognised.
+fn option_inner(ty: &Type) -> Option<Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|arg| match arg {
+        GenericArgument::Type(inner) => Some(inner.clone()),
+        _ => None,
+    })
 }
 
 /// Converts a `CamelCase` trait name into a `snake_case` identifier fragment, so

@@ -20,6 +20,9 @@ description = "Delonix Seiva — a Rust backend framework for robust, high-criti
 seiva-ports = { workspace = true }
 seiva-macros = { workspace = true }
 serde = { workspace = true }
+# The wire-schema contribution (`WireSchema`) returns a JSON Schema fragment as a
+# `serde_json::Value`, re-exported so `#[derive(WireSchema)]` output can name it.
+serde_json = "1"
 toml = { workspace = true }
 thiserror = { workspace = true }
 # Link-time facade discovery: `#[seiva::facade]` submits each descriptor into an

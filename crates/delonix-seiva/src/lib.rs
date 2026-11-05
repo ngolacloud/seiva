@@ -28,6 +28,7 @@ pub mod contract;
 pub mod lint;
 pub mod manifest;
 pub mod scaffold;
+pub mod schema;
 pub mod worker;
 
 /// Marks a trait as a module's versioned public contract (ADR 0001). See
@@ -38,6 +39,16 @@ pub use seiva_macros::facade;
 /// into the discovery inventory via `::delonix_seiva::inventory::submit!` without
 /// the facade crate depending on `inventory` directly.
 pub use inventory;
+
+/// Re-exported so `#[derive(WireSchema)]` output can name `serde_json::Value`
+/// (`::delonix_seiva::serde_json::Value`) without the DTO's crate depending on
+/// `serde_json` directly.
+pub use serde_json;
+
+/// Derives [`schema::WireSchema`] for a DTO — the type contributes its own JSON
+/// Schema fragment and registers it by name for the OpenAPI generator (ADR 0007).
+/// See [`schema`] for what it generates and the hand-written equivalent.
+pub use seiva_macros::WireSchema;
 
 /// Generates a facade-driven axum router from an `impl <Facade> for <Service>`
 /// block: one route per method, its path version and required permission read
