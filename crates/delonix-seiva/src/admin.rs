@@ -42,7 +42,7 @@
 /// The permission a console caller must hold for each admin operation on a
 /// resource. An **empty** string means the operation is not offered at all (the
 /// console neither shows nor attempts it); a non-empty string is checked against
-/// the caller's [`Principal`](seiva_identity::Principal) permissions. Authorization
+/// the caller's `Principal` (from `seiva-identity`) permissions. Authorization
 /// is always enforced server-side by the module's `#[controller]` guard too; this
 /// drives *exposure and UX*, it does not replace the guard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

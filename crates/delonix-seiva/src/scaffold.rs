@@ -65,6 +65,15 @@ const MODULE_MERGES_ANCHOR: &str = "// seiva:module-merges (managed by the seiva
 /// `seiva module new` inserts the module's `interface`/`infrastructure` path deps.
 const APP_MODULE_DEPS_ANCHOR: &str = "# seiva:module-deps (managed by the seiva CLI)";
 
+/// The marker line in the app crate's `Cargo.toml` `[dependencies]` before which
+/// `seiva ext add` inserts an optional extension's dependency (ADR 0010).
+const APP_EXTENSION_DEPS_ANCHOR: &str = "# seiva:extension-deps (managed by the seiva CLI)";
+
+/// The marker line in the composition root's `main.rs` — the managed composition
+/// point — before which `seiva ext add` inserts each extension's mount statement
+/// (shadowing `app`), after the framework router is built (ADR 0010).
+const EXTENSIONS_ANCHOR: &str = "// seiva:extensions (managed by the seiva CLI)";
+
 /// Validates a project or module name: lowercase ASCII, starts with a letter,
 /// then letters/digits/underscores, no trailing or doubled underscore.
 pub fn validate_name(name: &str) -> Result<(), ScaffoldError> {
@@ -306,6 +315,98 @@ pub fn wire_module_in_main(main_rs: &str, module: &str) -> Result<String, Scaffo
     Ok(main_rs.replacen(anchor_line, &format!("{merge}{anchor_line}"), 1))
 }
 
+/// The declarative integration contract for an optional Seiva extension (ADR
+/// 0010): pure data describing how a composition root wires the extension in — a
+/// dependency to add and a mount statement to insert at the managed composition
+/// point. A tool (`seiva ext add`, or the independent DX) reads this and applies
+/// the edits; it is **never** a `build.rs` or an install script, and declaring
+/// the dependency alone never mounts routes — the mount is explicit and recompiled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionManifest {
+    /// The extension's crate name (the `dx add` / `cargo add` argument).
+    pub crate_name: &'static str,
+    /// The version requirement added to the composition root's `[dependencies]`.
+    pub version_req: &'static str,
+    /// The statement inserted at the managed composition point, shadowing `app`.
+    pub mount_stmt: &'static str,
+    /// A one-line human description for the CLI.
+    pub summary: &'static str,
+}
+
+/// The first-party admin console's integration contract.
+pub const CONSOLE_ADMIN_EXTENSION: ExtensionManifest = ExtensionManifest {
+    crate_name: "seiva-console-admin",
+    version_req: "0.1",
+    mount_stmt: "let app = seiva_console_admin::mount(app);",
+    summary: "The optional admin console at /admin (ADR 0008/0009).",
+};
+
+/// The first-party extensions `seiva ext add` knows how to wire, by crate name.
+/// Kept tiny and first-party on purpose: `seiva` fetches and executes **nothing**
+/// to discover how to install an extension. A third-party extension ships the
+/// same shape as a `seiva-extension.toml`, which the independent DX reads.
+#[must_use]
+pub fn extension_manifest(name: &str) -> Option<ExtensionManifest> {
+    match name {
+        "seiva-console-admin" => Some(CONSOLE_ADMIN_EXTENSION),
+        _ => None,
+    }
+}
+
+/// Adds `ext`'s dependency to the app crate's `[dependencies]` at the managed
+/// extension anchor. **Idempotent**: if the crate is already a dependency the
+/// text is returned unchanged. Returns [`ScaffoldError::MissingAnchor`] when the
+/// manifest is not a recognised Seiva composition root (so the caller can emit a
+/// manual patch instead). Pure.
+pub fn add_extension_to_app_manifest(
+    cargo: &str,
+    ext: &ExtensionManifest,
+) -> Result<String, ScaffoldError> {
+    let dep_key = format!("{} =", ext.crate_name);
+    if cargo.lines().any(|l| l.trim_start().starts_with(&dep_key)) {
+        return Ok(cargo.to_owned()); // already declared — idempotent no-op
+    }
+    let anchor_line = cargo
+        .lines()
+        .find(|line| line.trim() == APP_EXTENSION_DEPS_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: APP_EXTENSION_DEPS_ANCHOR.to_owned(),
+            what: "apps/<name>-api/Cargo.toml".to_owned(),
+        })?;
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let addition = format!("{indent}{} = \"{}\"\n", ext.crate_name, ext.version_req);
+    Ok(cargo.replacen(anchor_line, &format!("{addition}{anchor_line}"), 1))
+}
+
+/// Inserts `ext`'s mount statement at the managed composition point in `main.rs`.
+/// **Idempotent**: if the mount is already present the text is returned
+/// unchanged. Returns [`ScaffoldError::MissingAnchor`] on an unrecognised project.
+/// Pure.
+pub fn mount_extension_in_main(
+    main_rs: &str,
+    ext: &ExtensionManifest,
+) -> Result<String, ScaffoldError> {
+    if main_rs.contains(ext.mount_stmt) {
+        return Ok(main_rs.to_owned()); // already mounted — idempotent no-op
+    }
+    let anchor_line = main_rs
+        .lines()
+        .find(|line| line.trim() == EXTENSIONS_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: EXTENSIONS_ANCHOR.to_owned(),
+            what: "apps/<name>-api/src/main.rs".to_owned(),
+        })?;
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let addition = format!("{indent}{}\n", ext.mount_stmt);
+    Ok(main_rs.replacen(anchor_line, &format!("{addition}{anchor_line}"), 1))
+}
+
 /// Registers a module in `seiva.toml` by appending a `[modules.<name>]` section.
 /// Pure.
 pub fn register_module_in_seiva_toml(seiva: &str, module: &str) -> Result<String, ScaffoldError> {
@@ -421,6 +522,8 @@ fn bin_cargo_toml(app: &str) -> String {
          serde_json = \"1\"\n\
          tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
          tracing = \"0.1\"\n\
+         # Optional extensions `seiva ext add` wires in (e.g. seiva-console-admin):\n\
+         {APP_EXTENSION_DEPS_ANCHOR}\n\
          # Module crates `seiva module new` wires into the composition root:\n\
          {APP_MODULE_DEPS_ANCHOR}\n"
     )
@@ -472,7 +575,12 @@ fn app_main_rs(name: &str) -> String {
          \x20   // inserts each module's merge at the anchor below.\n\
          \x20   let modules = Router::new();\n\
          \x20   {MODULE_MERGES_ANCHOR}\n\
-         \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
+         \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\
+         \x20   // Optional extensions mount here (the managed composition point).\n\
+         \x20   // `seiva ext add <name>` inserts each extension's mount call before\n\
+         \x20   // this anchor, shadowing `app` — explicit and recompiled, never a\n\
+         \x20   // silent hook. (See the admin console: ADR 0008/0009/0010.)\n\
+         \x20   {EXTENSIONS_ANCHOR}\n\n\
          \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
          \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
          \x20       Ok(()) => ExitCode::SUCCESS,\n\
@@ -1356,6 +1464,66 @@ mod tests {
         // It still compiles as valid-looking Rust: the controller follows the
         // registration (the block was inserted, not appended past EOF).
         assert!(interface.contains("pub struct NotesController"));
+    }
+
+    #[test]
+    fn scaffolded_app_has_the_extension_composition_points() {
+        let files = project_files("shop").unwrap();
+        let cargo = contents(&files, "apps/shop-api/Cargo.toml");
+        let main = contents(&files, "apps/shop-api/src/main.rs");
+        assert!(cargo.contains(APP_EXTENSION_DEPS_ANCHOR));
+        assert!(main.contains(EXTENSIONS_ANCHOR));
+    }
+
+    #[test]
+    fn ext_add_is_explicit_and_idempotent() {
+        let files = project_files("shop").unwrap();
+        let cargo0 = contents(&files, "apps/shop-api/Cargo.toml");
+        let main0 = contents(&files, "apps/shop-api/src/main.rs");
+        let ext = CONSOLE_ADMIN_EXTENSION;
+
+        // The freshly scaffolded root must NOT already contain the mount — else
+        // the idempotency `contains` check would wrongly treat an example in a
+        // comment as "already mounted" and never insert the real statement.
+        assert!(
+            !main0.contains(ext.mount_stmt),
+            "the template must not pre-contain the mount statement"
+        );
+        assert!(!cargo0.contains("seiva-console-admin ="));
+
+        // First application wires both the dependency and the mount.
+        let cargo1 = add_extension_to_app_manifest(cargo0, &ext).unwrap();
+        let main1 = mount_extension_in_main(main0, &ext).unwrap();
+        assert!(cargo1.contains("seiva-console-admin = \"0.1\""));
+        assert_eq!(
+            main1.matches(ext.mount_stmt).count(),
+            1,
+            "exactly one mount statement after a single application"
+        );
+
+        // Second application is a no-op: nothing duplicated.
+        let cargo2 = add_extension_to_app_manifest(&cargo1, &ext).unwrap();
+        let main2 = mount_extension_in_main(&main1, &ext).unwrap();
+        assert_eq!(cargo1, cargo2, "the dependency must not be added twice");
+        assert_eq!(main1, main2, "the mount must not be inserted twice");
+        assert_eq!(main2.matches("seiva_console_admin::mount").count(), 1);
+    }
+
+    #[test]
+    fn ext_add_on_an_unrecognised_project_is_a_missing_anchor() {
+        let ext = CONSOLE_ADMIN_EXTENSION;
+        // A hand-written manifest/main with no managed anchors.
+        let err = add_extension_to_app_manifest("[dependencies]\naxum = \"0.8\"\n", &ext)
+            .expect_err("no extension anchor");
+        assert!(matches!(err, ScaffoldError::MissingAnchor { .. }));
+        let err = mount_extension_in_main("fn main() {}\n", &ext).expect_err("no mount anchor");
+        assert!(matches!(err, ScaffoldError::MissingAnchor { .. }));
+    }
+
+    #[test]
+    fn extension_manifest_resolves_only_known_extensions() {
+        assert!(extension_manifest("seiva-console-admin").is_some());
+        assert!(extension_manifest("not-an-extension").is_none());
     }
 
     #[test]

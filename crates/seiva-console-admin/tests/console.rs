@@ -188,3 +188,17 @@ async fn registry_is_empty_for_an_anonymous_caller() {
     let body = registry_as(None).await;
     assert_eq!(body["resources"].as_array().unwrap().len(), 0, "{body}");
 }
+
+// --- The shipped extension manifest matches the first-party contract ----------
+
+#[test]
+fn shipped_extension_manifest_matches_the_builtin_contract() {
+    // The console ships a declarative `seiva-extension.toml` (ADR 0010) that the
+    // independent DX reads; `seiva`'s built-in manifest must agree with it, or a
+    // DX-driven install and a `seiva ext add` would wire the crate differently.
+    let shipped = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/seiva-extension.toml"));
+    let builtin = delonix_seiva::scaffold::CONSOLE_ADMIN_EXTENSION;
+    assert!(shipped.contains(&format!("crate = \"{}\"", builtin.crate_name)));
+    assert!(shipped.contains(&format!("version = \"{}\"", builtin.version_req)));
+    assert!(shipped.contains(&format!("mount = \"{}\"", builtin.mount_stmt)));
+}

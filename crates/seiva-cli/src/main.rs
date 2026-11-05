@@ -54,6 +54,11 @@ enum Command {
         #[command(subcommand)]
         action: ModuleAction,
     },
+    /// Add or manage optional extensions (e.g. the admin console).
+    Ext {
+        #[command(subcommand)]
+        action: ExtAction,
+    },
     /// Data-layer commands (DORM modules only).
     Db {
         #[command(subcommand)]
@@ -148,6 +153,17 @@ enum ModuleAction {
     Split { name: String },
     /// Fold a service module back into the project schema.
     Merge { name: String },
+}
+
+#[derive(Subcommand)]
+enum ExtAction {
+    /// Integrate an optional extension into the composition root (ADR 0010):
+    /// `seiva ext add seiva-console-admin`. Adds the dependency and inserts the
+    /// mount at the managed composition point, then you recompile. Explicit and
+    /// idempotent — running it twice changes nothing — and it executes no install
+    /// script. For a project without the managed anchors, it prints the exact
+    /// patch to apply by hand and reports integration as pending.
+    Add { name: String },
 }
 
 #[derive(Subcommand)]
@@ -377,6 +393,101 @@ fn project_name(seiva: &str) -> Option<String> {
         .lines()
         .find_map(|line| line.trim().strip_prefix("name = "))
         .map(|v| v.trim().trim_matches('"').to_owned())
+}
+
+/// `seiva ext add <name>`: integrate an optional extension into the composition
+/// root (ADR 0010). Explicit and idempotent; executes no install script. On a
+/// project without the managed anchors it prints the exact patch and reports the
+/// integration as pending instead of guessing.
+fn ext_add(name: &str) -> ExitCode {
+    let root = Path::new(".");
+    if !root.join("seiva.toml").is_file() {
+        eprintln!(
+            "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+        );
+        return ExitCode::FAILURE;
+    }
+    let ext = match scaffold::extension_manifest(name) {
+        Some(ext) => ext,
+        None => {
+            eprintln!(
+                "seiva: unknown extension `{name}`. Known: seiva-console-admin.\n       \
+                 A third-party extension ships a `seiva-extension.toml`; wire it with the\n       \
+                 independent `dx` tool, or add the dependency and its mount by hand."
+            );
+            return ExitCode::from(64);
+        }
+    };
+
+    let seiva = match std::fs::read_to_string(root.join("seiva.toml")) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("seiva: reading seiva.toml: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(project) = project_name(&seiva) else {
+        eprintln!("seiva: could not read [project] name from seiva.toml");
+        return ExitCode::FAILURE;
+    };
+    let app_dir = root.join(format!("apps/{project}-api"));
+    let cargo_path = app_dir.join("Cargo.toml");
+    let main_path = app_dir.join("src/main.rs");
+
+    let (Ok(cargo), Ok(main)) = (
+        std::fs::read_to_string(&cargo_path),
+        std::fs::read_to_string(&main_path),
+    ) else {
+        return ext_add_manual(&ext, "the composition root was not found where expected");
+    };
+
+    // Compute BOTH edits before writing either: a missing anchor must leave the
+    // project untouched and fall back to a manual patch, never half-applied.
+    let new_cargo = scaffold::add_extension_to_app_manifest(&cargo, &ext);
+    let new_main = scaffold::mount_extension_in_main(&main, &ext);
+    let (Ok(new_cargo), Ok(new_main)) = (new_cargo, new_main) else {
+        return ext_add_manual(&ext, "this project has no managed extension anchors");
+    };
+
+    let unchanged = new_cargo == cargo && new_main == main;
+    if let Err(e) = std::fs::write(&cargo_path, &new_cargo) {
+        eprintln!("seiva: writing {}: {e}", cargo_path.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = std::fs::write(&main_path, &new_main) {
+        eprintln!("seiva: writing {}: {e}", main_path.display());
+        return ExitCode::FAILURE;
+    }
+
+    if unchanged {
+        println!("`{name}` is already integrated — nothing to do.");
+    } else {
+        println!(
+            "Added `{name}` to `{project}-api` ({}). Recompile to serve it: `cargo build` (or `seiva start`).",
+            ext.summary
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// Prints the exact manual patch for an extension and reports integration as
+/// pending — the fallback for a project the CLI does not recognise as a managed
+/// composition root. Returns a distinct exit code so scripts can detect it.
+fn ext_add_manual(ext: &scaffold::ExtensionManifest, why: &str) -> ExitCode {
+    eprintln!(
+        "seiva: {why}; integration is PENDING.\n\n\
+         Apply this by hand (the Cargo equivalent of `dx add`):\n\n\
+         1. In the composition root's Cargo.toml `[dependencies]`:\n\
+         \x20      {crate} = \"{ver}\"\n\n\
+         2. In its `main.rs`, after `let app = router_with_modules(...);`:\n\
+         \x20      {mount}\n\n\
+         3. Recompile (`cargo build`). A declared dependency alone does not mount\n\
+         \x20   routes — the mount statement is what wires it, explicitly.",
+        crate = ext.crate_name,
+        ver = ext.version_req,
+        mount = ext.mount_stmt,
+    );
+    ExitCode::from(65)
 }
 
 fn lint() -> ExitCode {
@@ -1226,6 +1337,9 @@ fn main() -> ExitCode {
             }
             ModuleAction::Split { .. } => not_yet("module split", "the module-mode phase"),
             ModuleAction::Merge { .. } => not_yet("module merge", "the module-mode phase"),
+        },
+        Command::Ext { action } => match action {
+            ExtAction::Add { name } => ext_add(&name),
         },
         Command::Db { action } => match action {
             DbAction::Init { dir, backend } => db_init(dir, backend),

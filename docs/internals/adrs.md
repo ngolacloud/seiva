@@ -15,6 +15,7 @@ The index of ADRs.
 - ADR 0007 — Wire-schema contract fidelity
 - ADR 0008 — The admin console is an extension, not part of the base
 - ADR 0009 — Per-module admin registration and the authorization gate
+- ADR 0010 — The extension integration contract (`dx add` / `seiva ext add`)
 
 ## Related
 
