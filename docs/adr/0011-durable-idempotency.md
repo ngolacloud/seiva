@@ -73,11 +73,23 @@ first-class; proven against a real database.
 other DORM jobs). The response is stored as a JSONB byte array (simple, lossless;
 slightly larger than base64 — revisit if large bodies become common).
 
+### HTTP integration (delivered)
+
+The transport's half lives in `seiva_http::idempotency`: an
+`OptionalIdempotencyKey` extractor (validates the header — bounded length,
+visible ASCII; absent is `None`, malformed is `400`), `scoped_key` (folds tenant
++ subject + method + path into the key so tenants/identities never collide or
+replay one another), `fingerprint` (canonical SHA-256 of method + path + query +
+the body as sorted-key JSON), and `mismatch_problem`/`in_progress_problem`
+(`409`). A **generic outer middleware is deliberately avoided**: it runs above
+any transaction and so could not keep the reservation atomic with the mutation +
+outbox. Instead the application drives `IdempotencyStore::begin` inside its
+`UnitOfWork` transaction; an end-to-end test
+(`seiva-http/tests/idempotency_http.rs`) shows the full pattern (one effect on
+`Fresh`, replay on retry, `409` on mismatch, `400` on a malformed key).
+
 ### Not in this ADR (next increments)
 
-- An HTTP middleware that reads `Idempotency-Key`, composes the scoped key +
-  fingerprint from the request, and short-circuits `Replay`/`Mismatch`/`InProgress`
-  (buffering and replaying the response) — a consumer of the port.
 - A consumer-side inbox/dedup (by event id + consumer) for the broker path.
 - `purge_expired` wired to a scheduled worker for TTL cleanup.
 

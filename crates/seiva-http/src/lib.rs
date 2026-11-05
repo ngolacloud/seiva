@@ -29,6 +29,7 @@ pub mod authn;
 pub mod docs;
 pub mod guard;
 pub mod health;
+pub mod idempotency;
 pub mod problem;
 pub mod rate_limit;
 pub mod request_id;
@@ -46,6 +47,10 @@ pub use authn::authn;
 pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
 pub use health::{health_router, Health, HealthState};
+pub use idempotency::{
+    fingerprint, in_progress_problem, mismatch_problem, scoped_key, IdempotencyKey,
+    OptionalIdempotencyKey, IDEMPOTENCY_HEADER, MAX_KEY_LEN,
+};
 pub use problem::{Problem, PROBLEM_JSON};
 pub use rate_limit::{rate_limit, RateLimit, RateLimiter};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};

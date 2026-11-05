@@ -37,6 +37,10 @@ seiva-openapi = { version = "0.1.0", path = "../seiva-openapi" }
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Canonical request fingerprint for idempotency (ADR 0011): SHA-256 over the
+# scoped-key tuple and the request's canonical JSON. serde_json's default Map is
+# a BTreeMap, so object keys serialise in sorted order — a stable fingerprint.
+sha2 = "0.10"
 # CORS enforcement: the battle-tested tower layer rather than a hand-rolled
 # preflight. Only the `cors` feature; the secure default mounts no layer at all.
 tower-http = { version = "0.6", features = ["cors"] }
