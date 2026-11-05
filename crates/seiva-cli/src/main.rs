@@ -64,7 +64,19 @@ enum Command {
     /// Show what the Seiva macros expand to.
     Expand,
     /// Run the project locally (dev loop).
-    Start,
+    ///
+    /// Rebuilds and restarts on change when `cargo watch` is available (the
+    /// FastAPI `--reload` equivalent). `--watch` requires it (and errors if it is
+    /// missing); `--no-watch` forces a plain `cargo run`; with neither, hot-reload
+    /// is auto-detected.
+    Start {
+        /// Force hot-reload; error if `cargo watch` is not installed.
+        #[arg(long, conflicts_with = "no_watch")]
+        watch: bool,
+        /// Disable hot-reload (a plain `cargo run`).
+        #[arg(long)]
+        no_watch: bool,
+    },
     /// Report the environment: framework version and which data layer is linked.
     Doctor,
     /// Print the OpenAPI 3.1 document.
@@ -549,7 +561,7 @@ fn emit_project_openapi(name: &str, compact: bool) -> ExitCode {
 /// `<name>-api`), sets `APP_ENV=development`, and execs cargo. With `cargo watch`
 /// installed it rebuilds-and-restarts on change (the FastAPI `--reload`
 /// equivalent); without it, a plain `cargo run` plus a hint to install it.
-fn start() -> ExitCode {
+fn start(watch: bool, no_watch: bool) -> ExitCode {
     let manifest = match std::fs::read_to_string("seiva.toml") {
         Ok(contents) => contents,
         Err(_) => {
@@ -568,11 +580,17 @@ fn start() -> ExitCode {
     };
     let app = format!("{name}-api");
 
-    let hot_reload = has_cargo_watch();
-    if !hot_reload {
+    let hot_reload = match resolve_reload(watch, no_watch, has_cargo_watch()) {
+        Ok(reload) => reload,
+        Err(message) => {
+            eprintln!("seiva: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !hot_reload && !no_watch {
         eprintln!(
             "seiva: `cargo watch` not found — running without hot-reload \
-             (install it with `cargo install cargo-watch`)."
+             (install it with `cargo install cargo-watch`, or pass `--no-watch`)."
         );
     }
     let (program, args) = start_plan(&app, hot_reload);
@@ -593,6 +611,28 @@ fn start() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Decides whether `start` runs with hot-reload, given the `--watch`/`--no-watch`
+/// flags and whether `cargo watch` is available. Pure, so the policy is
+/// unit-tested: `--no-watch` wins (plain run); `--watch` requires `cargo watch`
+/// (an error names how to install it); with neither, reload is auto-detected.
+fn resolve_reload(
+    watch: bool,
+    no_watch: bool,
+    cargo_watch_available: bool,
+) -> Result<bool, String> {
+    if no_watch {
+        return Ok(false);
+    }
+    if watch && !cargo_watch_available {
+        return Err(
+            "`--watch` needs `cargo watch` — install it with `cargo install cargo-watch`, \
+             or run without `--watch`."
+                .to_owned(),
+        );
+    }
+    Ok(watch || cargo_watch_available)
 }
 
 /// The command and arguments `start` runs, split out as a pure function so both
@@ -699,7 +739,7 @@ fn main() -> ExitCode {
         },
         Command::Lint => lint(),
         Command::Expand => not_yet("expand", "the macros phase"),
-        Command::Start => start(),
+        Command::Start { watch, no_watch } => start(watch, no_watch),
         Command::Openapi { compact, .. } => openapi(compact),
         Command::Proto => proto(),
         Command::User { action } => match action {
@@ -766,6 +806,19 @@ mod tests {
         let (program, args) = start_plan("shop-api", false);
         assert_eq!(program, "cargo");
         assert_eq!(args, vec!["run", "--bin", "shop-api"]);
+    }
+
+    #[test]
+    fn resolve_reload_honours_the_flags_and_availability() {
+        // Auto-detect with neither flag: follows availability.
+        assert_eq!(resolve_reload(false, false, true), Ok(true));
+        assert_eq!(resolve_reload(false, false, false), Ok(false));
+        // `--no-watch` always disables, even when cargo-watch is present.
+        assert_eq!(resolve_reload(false, true, true), Ok(false));
+        // `--watch` forces reload when available.
+        assert_eq!(resolve_reload(true, false, true), Ok(true));
+        // `--watch` without cargo-watch is an actionable error.
+        assert!(resolve_reload(true, false, false).is_err());
     }
 
     #[test]
