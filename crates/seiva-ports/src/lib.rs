@@ -8,15 +8,16 @@
 //! layer stay independent of both the framework and the ORM.
 //!
 //! This is the first cut of the boundary; its exact shape is fixed by the Seiva
-//! core ADR. The four ports below are the ones every module relies on:
-//! [`UnitOfWork`], [`EventPublisher`], [`Clock`] and [`IdGenerator`].
+//! core ADR. The ports below are the ones a module relies on:
+//! [`UnitOfWork`], [`EventPublisher`], [`Clock`], [`IdGenerator`] and the durable
+//! [`IdempotencyStore`] (ADR 0011).
 
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
 use std::future::Future;
 use std::pin::Pin;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 /// The error any port may surface, kept opaque and dependency-free: a boxed
 /// std error so this crate carries no error library. Adapters map their
@@ -106,6 +107,61 @@ pub trait UnitOfWork: Send + Sync {
         F: FnOnce() -> Fut + Send + 'a,
         Fut: Future<Output = PortResult<T>> + Send + 'a,
         T: Send + 'a;
+}
+
+/// What claiming an idempotency key found — the outcome of [`IdempotencyStore::begin`].
+///
+/// The key is already **scoped** by the caller (tenant + identity + operation +
+/// version folded in) before it reaches the store, so two tenants' keys can never
+/// collide here. The `fingerprint` the caller passes alongside pins the key to one
+/// request's semantically-relevant bytes; reusing the key with a different
+/// fingerprint is [`Mismatch`](IdempotencyOutcome::Mismatch) and must not execute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdempotencyOutcome {
+    /// First claim: the caller performs the effect, then calls
+    /// [`finish`](IdempotencyStore::finish) with the response to persist.
+    Fresh,
+    /// Already completed: the stored response bytes — return them, perform **no**
+    /// effect. (The caller owns the encoding; the store moves opaque bytes.)
+    Replay(Vec<u8>),
+    /// A concurrent claim of the same key is still in flight: the caller waits a
+    /// bounded time or answers a conflict (`409`/`425`), never executing twice.
+    InProgress,
+    /// The key was reused with a **different** fingerprint — the same key must
+    /// mean the same operation. The caller answers `409` and does not execute.
+    Mismatch,
+}
+
+/// A durable, distributed idempotency store — the reusable guarantee behind a
+/// retried command, HTTP call, job or admin action (ADR 0011).
+///
+/// The base framework codes against this port and never against a specific
+/// database: an adapter (the DORM gateway, say) provides the durability and the
+/// cross-replica atomicity. The contract:
+///
+/// - [`begin`](Self::begin) atomically claims `scoped_key` for a request
+///   fingerprinted `fingerprint`, valid for `ttl`. It is the only arbiter of
+///   concurrency — a durable uniqueness/CAS, not an in-memory lock — so two
+///   replicas racing the same key resolve to exactly one [`Fresh`](IdempotencyOutcome::Fresh).
+/// - The caller performs the effect only on `Fresh`, then calls
+///   [`finish`](Self::finish) with the response. For true atomicity the
+///   reservation, the domain mutation and the outbox write run in **one**
+///   transaction, so a committed key always has its effect and vice versa.
+/// - [`finish`](Self::finish) persists the response so a later `begin` replays it
+///   without re-executing.
+#[async_trait]
+pub trait IdempotencyStore: Send + Sync {
+    /// Claims `scoped_key` for `fingerprint`, valid `ttl`. See [`IdempotencyOutcome`].
+    async fn begin(
+        &self,
+        scoped_key: &str,
+        fingerprint: &str,
+        ttl: Duration,
+    ) -> PortResult<IdempotencyOutcome>;
+
+    /// Persists `response` for `scoped_key` and marks it completed, so a later
+    /// [`begin`](Self::begin) returns [`Replay`](IdempotencyOutcome::Replay).
+    async fn finish(&self, scoped_key: &str, response: &[u8]) -> PortResult<()>;
 }
 
 #[cfg(test)]

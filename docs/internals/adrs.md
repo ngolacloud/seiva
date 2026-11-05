@@ -16,6 +16,7 @@ The index of ADRs.
 - ADR 0008 — The admin console is an extension, not part of the base
 - ADR 0009 — Per-module admin registration and the authorization gate
 - ADR 0010 — The extension integration contract (`dx add` / `seiva ext add`)
+- ADR 0011 — Durable business idempotency as a port, reusing DORM
 
 ## Related
 

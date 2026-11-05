@@ -9,7 +9,11 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use seiva_ports::{Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{
+    Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome, IdempotencyStore, PortResult,
+    UnitOfWork,
+};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -187,6 +191,71 @@ impl UnitOfWork for InMemoryUnitOfWork {
     }
 }
 
+/// An in-memory [`IdempotencyStore`] double for unit-testing the idempotency
+/// **state machine** (Fresh → Replay, Mismatch, InProgress) with no database.
+///
+/// It is a faithful single-process model: the `Mutex` serialises `begin`, so a
+/// key claimed and not yet `finish`ed answers [`IdempotencyOutcome::InProgress`]
+/// to a second claim, and a completed key answers [`Replay`](IdempotencyOutcome::Replay).
+/// It does **not** prove the *distributed, durable* guarantee — a Mutex is not a
+/// cross-replica CAS and nothing survives a restart. The real guarantee is proved
+/// against a live database with the DORM-backed store (ADR 0011); use this only
+/// for logic tests.
+#[derive(Clone, Default)]
+pub struct InMemoryIdempotencyStore {
+    keys: Arc<Mutex<HashMap<String, IdemRecord>>>,
+}
+
+#[derive(Clone)]
+struct IdemRecord {
+    fingerprint: String,
+    response: Option<Vec<u8>>,
+}
+
+impl InMemoryIdempotencyStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl IdempotencyStore for InMemoryIdempotencyStore {
+    async fn begin(
+        &self,
+        scoped_key: &str,
+        fingerprint: &str,
+        _ttl: Duration,
+    ) -> PortResult<IdempotencyOutcome> {
+        let mut keys = self.keys.lock().expect("idempotency store poisoned");
+        match keys.get(scoped_key) {
+            None => {
+                keys.insert(
+                    scoped_key.to_owned(),
+                    IdemRecord {
+                        fingerprint: fingerprint.to_owned(),
+                        response: None,
+                    },
+                );
+                Ok(IdempotencyOutcome::Fresh)
+            }
+            Some(record) if record.fingerprint != fingerprint => Ok(IdempotencyOutcome::Mismatch),
+            Some(record) => match &record.response {
+                Some(bytes) => Ok(IdempotencyOutcome::Replay(bytes.clone())),
+                None => Ok(IdempotencyOutcome::InProgress),
+            },
+        }
+    }
+
+    async fn finish(&self, scoped_key: &str, response: &[u8]) -> PortResult<()> {
+        let mut keys = self.keys.lock().expect("idempotency store poisoned");
+        if let Some(record) = keys.get_mut(scoped_key) {
+            record.response = Some(response.to_vec());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +344,41 @@ mod tests {
         assert_eq!(handler.uow.outcomes(), [TxOutcome::Committed]);
         assert_eq!(handler.events.topics(), ["notes.created"]);
         assert_eq!(handler.events.events()[0].payload, id.0);
+    }
+
+    #[tokio::test]
+    async fn idempotency_state_machine_fresh_then_replay_mismatch_inprogress() {
+        let store = InMemoryIdempotencyStore::new();
+        let ttl = Duration::from_secs(60);
+
+        // First claim is Fresh.
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::Fresh
+        );
+        // While in flight (no finish yet), a second claim is InProgress.
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::InProgress
+        );
+        // The same key with a DIFFERENT fingerprint is a Mismatch (never executes).
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-b", ttl).await.unwrap(),
+            IdempotencyOutcome::Mismatch
+        );
+        // After finishing, the key replays the stored response.
+        store
+            .finish("acme:create:k1", b"stored-result")
+            .await
+            .unwrap();
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::Replay(b"stored-result".to_vec())
+        );
+        // A different scoped key (another tenant) is wholly independent.
+        assert_eq!(
+            store.begin("globex:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::Fresh
+        );
     }
 }
