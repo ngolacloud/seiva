@@ -17,7 +17,7 @@ homepage = "https://github.com/ngolacloud/seiva"
 description = "Delonix Seiva — OpenAPI 3.1 document generation from facade descriptors, with zero reflection. DORM-free."
 
 [dependencies]
-delonix-seiva = { path = "../delonix-seiva", default-features = false }
+delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

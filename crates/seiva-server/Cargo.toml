@@ -28,12 +28,12 @@ description = "Delonix Seiva — the service runtime: mounts the facade-driven H
 [dependencies]
 # The HTTP transport: `router(health)` already merges the controllers, the health
 # endpoints and `/openapi.json`; `Health` is the Starting/Ready/Draining handle.
-seiva-http = { path = "../seiva-http" }
+seiva-http = { version = "0.1.0", path = "../seiva-http" }
 # Typed 12-factor configuration + the AppEnv production-safety guard.
-seiva-config = { path = "../seiva-config" }
+seiva-config = { version = "0.1.0", path = "../seiva-config" }
 # The framework crate: its worker runtime (`worker::run_worker`) drives the host.
 # default-features = false keeps the `dorm` toggle off (the data layer stays out).
-delonix-seiva = { path = "../delonix-seiva", default-features = false }
+delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"] }

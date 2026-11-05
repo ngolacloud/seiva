@@ -20,7 +20,7 @@ description = "Application-layer CQRS dispatch for Delonix Seiva: a statically-w
 [dependencies]
 # The single dependency: the result/error boundary (`PortResult`, `BoxError`).
 # No runtime, no framework, no data layer rides in through this.
-seiva-ports = { path = "../seiva-ports" }
+seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
 
 [dev-dependencies]
 # The tests drive async handlers on a current-thread runtime. A dev-dependency
