@@ -829,12 +829,7 @@ fn interface_lib(snake: &str, pascal: &str) -> String {
          //! time. The COMPOSITION ROOT in `apps/` picks the concrete adapters and\n\
          //! calls `{snake}_router({pascal}Controller::new(repo, ids))`. The same\n\
          //! descriptor drives this module's OpenAPI document ([`openapi`]), so the\n\
-         //! wire contract is generated, never hand-maintained.\n\
-         //!\n\
-         //! The generated handlers return `Result<_, seiva_http::Problem>`, a large\n\
-         //! value, so the large-`Err` lint is allowed crate-wide (as `seiva-http`\n\
-         //! itself does).\n\
-         #![allow(clippy::result_large_err)]\n\n\
+         //! wire contract is generated, never hand-maintained.\n\n\
          use std::sync::Arc;\n\n\
          use delonix_seiva::contract::Facade;\n\
          use delonix_seiva::controller;\n\
@@ -1294,8 +1289,10 @@ mod tests {
         assert!(interface.contains("seiva_openapi::openapi_document("));
         assert!(!interface.contains("seiva_grpc"));
         assert!(interface.contains("NotesFacade::DESCRIPTOR"));
-        // The large-Err lint allowance the generated handlers need.
-        assert!(interface.contains("#![allow(clippy::result_large_err)]"));
+        // The generated interface must NOT silence `result_large_err`: `Problem`
+        // is small enough (see seiva-http) that handlers returning it by value
+        // never trip the lint, so scaffolded projects keep the gate intact.
+        assert!(!interface.contains("result_large_err"));
     }
 
     #[test]

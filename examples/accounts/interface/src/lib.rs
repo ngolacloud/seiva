@@ -41,13 +41,8 @@
 //! these method names; nicer REST paths (`GET /v1/accounts/{username}`) would
 //! require renaming the facade methods to `create`/`get`, which is out of scope
 //! here. The macro is not modified.
-//!
-//! The generated handlers return `Result<_, seiva_http::Problem>`, a large
-//! value, so the large-`Err` lint is allowed crate-wide (as `seiva-http` itself
-//! does).
 
 #![forbid(unsafe_code)]
-#![allow(clippy::result_large_err)]
 
 use std::sync::Arc;
 

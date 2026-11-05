@@ -411,9 +411,9 @@ fn is_ctx_type(ty: &Type) -> bool {
 ///   mapping to the wire; it leaves at most one *primary* parameter per method.
 /// - The service is injected as axum state, so its type must be
 ///   `Clone + Send + Sync + 'static`.
-/// - The generated handlers return `Result<_, Problem>` and `Problem` is a large
-///   value, so the consuming crate needs `#![allow(clippy::result_large_err)]`
-///   (as `seiva-http` itself does).
+/// - The generated handlers return `Result<_, Problem>`; `Problem` is kept small
+///   enough (its strings are `Box<str>`) that it never trips
+///   `clippy::result_large_err`, so the consuming crate needs no lint allowance.
 ///
 /// Anything outside these shapes is a **compile error**, never silently wrong
 /// code:

@@ -223,7 +223,9 @@ mod tests {
 
         // Commit is durable: a later transaction sees row 1 (UPDATE affects 1).
         let updated = uow
-            .transaction(|| async { exec("UPDATE seiva_rt SET title = 'again' WHERE id = 1").await })
+            .transaction(|| async {
+                exec("UPDATE seiva_rt SET title = 'again' WHERE id = 1").await
+            })
             .await
             .expect("read-back transaction succeeds");
         assert_eq!(updated, 1, "the committed row must be visible afterwards");

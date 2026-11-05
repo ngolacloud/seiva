@@ -251,9 +251,11 @@ dependencies = [
 name = "delonix-seiva"
 version = "0.1.0"
 dependencies = [
+ "inventory",
  "seiva-macros",
  "seiva-ports",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "toml",
