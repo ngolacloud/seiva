@@ -19,9 +19,21 @@ seiva-messaging = { path = "../seiva-messaging" }
 # error type. `delonix-seiva` is data-layer-free, so no DORM feature is pulled.
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
 seiva-ports = { path = "../seiva-ports" }
-dorm-outbox = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
-dorm-core = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
+# DORM by published version (owner decision, roadmap P0-1). The root manifest
+# that builds this crate (the gateway standalone, or the dorm-e2e app) carries the
+# interim `[patch.crates-io]` redirecting these to the local DORM checkout until
+# DORM publishes.
+dorm-outbox = "0.1"
+dorm-core = "0.6"
 serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
+
+# INTERIM — remove once dorm-core/dorm-outbox are published to crates.io. Lets this
+# excluded crate build standalone by redirecting the DORM crates to the local
+# checkout beside Seiva (projects/DORM). When built as a dependency of the dorm-e2e
+# app, that app's root `[patch]` governs instead and this one is ignored.
+[patch.crates-io]
+dorm-core = { path = "../../../DORM/crates/dorm-core" }
+dorm-outbox = { path = "../../../DORM/crates/dorm-outbox" }

@@ -6,8 +6,9 @@
 //! the DORM data layer off is simply not compiling this crate (the brief's Parte
 //! C), which is why the coupling is confined to one place.
 //!
-//! It compiles against DORM pinned by git revision and implements **all four
-//! ports**: [`Clock`], [`IdGenerator`], the scope-based [`UnitOfWork`] via
+//! It depends on DORM by published crate version (redirected to a local checkout
+//! by an interim `[patch.crates-io]` until DORM publishes) and implements **all
+//! four ports**: [`Clock`], [`IdGenerator`], the scope-based [`UnitOfWork`] via
 //! [`DormUnitOfWork`] (which maps straight onto DORM's `with_session` +
 //! `db::atomic` — the resolution ADR 0004 chose for the tx-model mismatch), and
 //! [`EventPublisher`] via [`DormOutboxPublisher`] (writes to the transactional
@@ -180,6 +181,72 @@ mod tests {
     #[test]
     fn system_clock_reads_a_time() {
         assert!(SystemClock.now() >= std::time::UNIX_EPOCH);
+    }
+
+    /// Live round-trip against a real PostgreSQL, proving the gateway's
+    /// [`UnitOfWork`] actually commits on `Ok` and rolls back on `Err` through
+    /// DORM (`with_session` + `db::atomic`). Gated on `SEIVA_DORM_TEST_DSN`
+    /// (a libpq DSN, e.g. `host=/var/run/postgresql dbname=seiva_dorm_test`);
+    /// skips cleanly when it is unset so the default `cargo test` stays offline.
+    #[tokio::test]
+    async fn live_unit_of_work_commits_and_rolls_back() {
+        let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+            eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the live round-trip");
+            return;
+        };
+        let uow = DormUnitOfWork::new(
+            connect(&DormConfig {
+                dsn,
+                replicas: vec![],
+                read_only: false,
+                schema: None,
+                pool_max: 4,
+                cursor_key: b"live-test-secret".to_vec(),
+            })
+            .expect("connect to the test database"),
+        );
+        let exec = |sql: &'static str| async move {
+            dorm_core::db::execute(sql, &[])
+                .await
+                .map_err(|e| Box::new(e) as BoxError)
+        };
+
+        // A clean slate, then a committing transaction creates and inserts.
+        uow.transaction(|| async {
+            exec("DROP TABLE IF EXISTS seiva_rt").await?;
+            exec("CREATE TABLE seiva_rt (id int primary key, title text)").await?;
+            exec("INSERT INTO seiva_rt (id, title) VALUES (1, 'hello')").await?;
+            Ok(())
+        })
+        .await
+        .expect("the committing transaction succeeds");
+
+        // Commit is durable: a later transaction sees row 1 (UPDATE affects 1).
+        let updated = uow
+            .transaction(|| async { exec("UPDATE seiva_rt SET title = 'again' WHERE id = 1").await })
+            .await
+            .expect("read-back transaction succeeds");
+        assert_eq!(updated, 1, "the committed row must be visible afterwards");
+
+        // Rollback: insert row 2 then fail — the insert must NOT persist.
+        let rolled_back = uow
+            .transaction(|| async {
+                exec("INSERT INTO seiva_rt (id, title) VALUES (2, 'doomed')").await?;
+                Err::<(), BoxError>("deliberate failure to force rollback".into())
+            })
+            .await;
+        assert!(rolled_back.is_err(), "the failing transaction returns Err");
+
+        // Row 2 is gone (DELETE affects 0 rows); row 1 (committed) is untouched.
+        let deleted = uow
+            .transaction(|| async { exec("DELETE FROM seiva_rt WHERE id = 2").await })
+            .await
+            .expect("verification transaction succeeds");
+        assert_eq!(deleted, 0, "the rolled-back row must not have persisted");
+
+        uow.transaction(|| async { exec("DROP TABLE seiva_rt").await })
+            .await
+            .expect("cleanup succeeds");
     }
 
     #[test]
