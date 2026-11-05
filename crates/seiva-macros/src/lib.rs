@@ -222,28 +222,6 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
     let ident = &input.ident;
     let name_str = ident.to_string();
 
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => &named.named,
-            _ => {
-                return syn::Error::new_spanned(
-                    ident,
-                    "WireSchema supports a struct with named fields (a wire DTO)",
-                )
-                .to_compile_error()
-                .into();
-            }
-        },
-        _ => {
-            return syn::Error::new_spanned(
-                ident,
-                "WireSchema supports a struct with named fields, not an enum or union",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
     // A generic DTO would need its schema parameterised per instantiation; the
     // by-name registry keys on a single name, so reject generics explicitly
     // rather than emit a registration that cannot be resolved.
@@ -256,26 +234,67 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
         .into();
     }
 
-    let field_descs = fields.iter().map(|field| {
-        let field_name = field.ident.as_ref().expect("named field").to_string();
-        // An `Option<T>` field is not required and documents `T`'s schema.
-        let (schema_ty, required) = match option_inner(&field.ty) {
-            Some(inner) => (inner, false),
-            None => (field.ty.clone(), true),
-        };
-        quote! {
-            ::delonix_seiva::schema::Field {
-                name: #field_name,
-                schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
-                required: #required,
+    // The body of the generated `schema()`: an `object` for a struct with named
+    // fields, or a string-`enum` for a C-like (unit-variant) enum.
+    let schema_body = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(named) => {
+                let field_descs = named.named.iter().map(|field| {
+                    let field_name = field.ident.as_ref().expect("named field").to_string();
+                    // An `Option<T>` field is not required and documents `T`'s schema.
+                    let (schema_ty, required) = match option_inner(&field.ty) {
+                        Some(inner) => (inner, false),
+                        None => (field.ty.clone(), true),
+                    };
+                    quote! {
+                        ::delonix_seiva::schema::Field {
+                            name: #field_name,
+                            schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
+                            required: #required,
+                        }
+                    }
+                });
+                quote! { ::delonix_seiva::schema::object_schema(&[ #(#field_descs),* ]) }
             }
+            _ => {
+                return syn::Error::new_spanned(
+                    ident,
+                    "WireSchema supports a struct with named fields (a wire DTO)",
+                )
+                .to_compile_error()
+                .into();
+            }
+        },
+        Data::Enum(data) => {
+            // Only C-like enums (every variant a unit) map faithfully to a string
+            // enum. A data-carrying variant would need a `oneOf`, not yet supported.
+            if let Some(bad) = data
+                .variants
+                .iter()
+                .find(|v| !matches!(v.fields, Fields::Unit))
+            {
+                return syn::Error::new_spanned(
+                    bad,
+                    "WireSchema supports only unit-variant (C-like) enums; a data-carrying \
+                     variant would need a `oneOf`, which is not yet supported",
+                )
+                .to_compile_error()
+                .into();
+            }
+            let variant_names = data.variants.iter().map(|v| v.ident.to_string());
+            quote! { ::delonix_seiva::schema::enum_schema(&[ #(#variant_names),* ]) }
         }
-    });
+        Data::Union(_) => {
+            return syn::Error::new_spanned(ident, "WireSchema does not support a union")
+                .to_compile_error()
+                .into();
+        }
+    };
 
     quote! {
         impl ::delonix_seiva::schema::WireSchema for #ident {
             fn schema() -> ::delonix_seiva::serde_json::Value {
-                ::delonix_seiva::schema::object_schema(&[ #(#field_descs),* ])
+                #schema_body
             }
         }
 
