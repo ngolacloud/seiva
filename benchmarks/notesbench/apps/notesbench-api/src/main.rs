@@ -9,10 +9,10 @@ use std::process::ExitCode;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
-    // `seiva openapi` / `seiva proto` run this binary with SEIVA_EMIT set to
-    // print THIS project's generated contract — from the facades its modules
-    // register at link time — and exit, instead of serving. Done before
-    // logging so stdout carries only the document.
+    // `seiva openapi` runs this binary with SEIVA_EMIT set to print THIS
+    // project's generated contract — from the facades its modules register at
+    // link time — and exit, instead of serving. Done before logging so stdout
+    // carries only the document.
     if let Ok(kind) = std::env::var("SEIVA_EMIT") {
         return emit_contract(&kind);
     }
@@ -95,14 +95,8 @@ fn emit_contract(kind: &str) -> ExitCode {
                 }
             }
         }
-        "proto" => {
-            for facade in &facades {
-                println!("{}", seiva_grpc::proto_document(facade));
-            }
-            ExitCode::SUCCESS
-        }
         other => {
-            eprintln!("seiva: unknown SEIVA_EMIT value `{other}` (expected `openapi` or `proto`)");
+            eprintln!("seiva: unknown SEIVA_EMIT value `{other}` (expected `openapi`)");
             ExitCode::FAILURE
         }
     }

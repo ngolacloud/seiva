@@ -13,12 +13,11 @@ seiva-server = "0.1"
 seiva-http = "0.1"
 # The composition root holds the merged module routes as an `axum::Router`.
 axum = "0.8"
-# Emitting THIS project's contract (`seiva openapi`/`proto`, via SEIVA_EMIT):
-# the facade registry and the OpenAPI/proto generators, driven by the
+# Emitting THIS project's contract (`seiva openapi`, via SEIVA_EMIT):
+# the facade registry and the OpenAPI generator, driven by the
 # linked modules.
 delonix-seiva = { version = "0.1", default-features = false }
 seiva-openapi = "0.1"
-seiva-grpc = "0.1"
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"
