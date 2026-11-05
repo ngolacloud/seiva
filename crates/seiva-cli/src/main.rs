@@ -67,12 +67,12 @@ enum Command {
     Start,
     /// Report the environment: framework version and which data layer is linked.
     Doctor,
-    /// Print the OpenAPI 3.1 document for the built-in demonstration facade(s).
+    /// Print the OpenAPI 3.1 document.
     ///
-    /// LIMITATION: this first cut cannot introspect a user's own crate at
-    /// runtime, so it documents only the framework's built-in demonstration
-    /// facade (`NotesFacade`). A later phase will discover a project's own
-    /// facades. A short note to this effect is also printed to stderr.
+    /// Inside a project (a `seiva.toml` is present) this documents THAT project's
+    /// facades: it builds and runs the composition root with `SEIVA_EMIT=openapi`,
+    /// which emits the document from the modules linked into the binary. Outside a
+    /// project it falls back to the framework's built-in demonstration facade.
     Openapi {
         /// Pretty-print the JSON (the default when no style flag is given).
         #[arg(long, conflicts_with = "compact")]
@@ -176,10 +176,7 @@ fn framework_root() -> String {
         return dir;
     }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or(manifest);
+    let root = manifest.parent().and_then(Path::parent).unwrap_or(manifest);
     std::fs::canonicalize(root)
         .unwrap_or_else(|_| root.to_path_buf())
         .to_string_lossy()
@@ -260,7 +257,7 @@ fn module_new(name: &str, external: bool) -> ExitCode {
         eprintln!("seiva: module files written, but registration failed: {err}");
         return ExitCode::FAILURE;
     }
-    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema.");
+    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema, and wired into the composition root.");
     ExitCode::SUCCESS
 }
 
@@ -288,6 +285,18 @@ fn register_module(root: &Path, name: &str) -> Result<(), String> {
     let project = project_name(&seiva).ok_or("could not read [project] name from seiva.toml")?;
     edit(root.join(format!("schema/{project}.schema")), &|s| {
         scaffold::append_namespace_block(s, name)
+    })?;
+
+    // Auto-wire the module into the composition root: add its interface/
+    // infrastructure deps to the app crate, and merge its router in `main.rs`.
+    // This is what makes `seiva openapi` document the module (its facade only
+    // registers once the binary links it), and saves the hand-wiring step.
+    let app_dir = root.join(format!("apps/{project}-api"));
+    edit(app_dir.join("Cargo.toml"), &|s| {
+        scaffold::add_module_to_app_manifest(s, name)
+    })?;
+    edit(app_dir.join("src/main.rs"), &|s| {
+        scaffold::wire_module_in_main(s, name)
     })?;
     Ok(())
 }
@@ -470,13 +479,66 @@ fn read_password_line() -> std::io::Result<String> {
     Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
-/// `seiva openapi`: prints the OpenAPI 3.1 document for the built-in facades.
+/// `seiva openapi`: prints the OpenAPI 3.1 document. Inside a project (a
+/// `seiva.toml` is present) it documents **that project's** facades by building
+/// and running the composition root with `SEIVA_EMIT=openapi` — which emits the
+/// document from the modules linked into the binary, then exits. Outside a
+/// project it falls back to the built-in demonstration facade(s).
 fn openapi(compact: bool) -> ExitCode {
-    eprintln!(
-        "seiva: note — this documents the built-in demonstration facade(s) only; \
-         runtime introspection of a project's own facades is a later phase."
-    );
-    println!("{}", builtin_openapi_json(compact));
+    match std::fs::read_to_string("seiva.toml") {
+        Ok(manifest) => match scaffold::project_name(&manifest) {
+            Some(name) => emit_project_openapi(&name, compact),
+            None => {
+                eprintln!("seiva: seiva.toml has no `[project] name`.");
+                ExitCode::FAILURE
+            }
+        },
+        Err(_) => {
+            eprintln!(
+                "seiva: no project here — documenting the built-in demonstration facade(s). \
+                 Run inside a project (see `seiva project new`) to document your own."
+            );
+            println!("{}", builtin_openapi_json(compact));
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// Builds and runs `apps/<name>-api` with `SEIVA_EMIT=openapi` to print the
+/// project's own OpenAPI document (from its linked modules). Build output goes to
+/// stderr (inherited); only the document reaches stdout, so it is pipeable.
+fn emit_project_openapi(name: &str, compact: bool) -> ExitCode {
+    let app = format!("{name}-api");
+    eprintln!("seiva: building `{app}` to document this project's facades ...");
+    let output = match std::process::Command::new("cargo")
+        .args(["run", "--quiet", "--bin", &app])
+        .env("SEIVA_EMIT", "openapi")
+        .stderr(std::process::Stdio::inherit())
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("seiva: failed to run `{app}`: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !output.status.success() {
+        eprintln!("seiva: `{app}` exited with {}", output.status);
+        return ExitCode::from(1);
+    }
+    let json = String::from_utf8_lossy(&output.stdout);
+    if compact {
+        // Re-serialise compactly; fall back to the raw pretty output on any error.
+        match serde_json::from_str::<serde_json::Value>(json.trim()) {
+            Ok(value) => println!(
+                "{}",
+                serde_json::to_string(&value).unwrap_or_else(|_| json.to_string())
+            ),
+            Err(_) => print!("{json}"),
+        }
+    } else {
+        print!("{json}");
+    }
     ExitCode::SUCCESS
 }
 

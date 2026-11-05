@@ -56,6 +56,15 @@ pub enum ScaffoldError {
 /// module crate members are inserted.
 const MEMBERS_ANCHOR: &str = "# seiva:module-members (managed by the seiva CLI)";
 
+/// The marker line in the composition root's `main.rs` before which `seiva module
+/// new` inserts each module's router merge (so the facades link into the binary
+/// and `seiva openapi` documents them).
+const MODULE_MERGES_ANCHOR: &str = "// seiva:module-merges (managed by the seiva CLI)";
+
+/// The marker line in the app crate's `Cargo.toml` `[dependencies]` before which
+/// `seiva module new` inserts the module's `interface`/`infrastructure` path deps.
+const APP_MODULE_DEPS_ANCHOR: &str = "# seiva:module-deps (managed by the seiva CLI)";
+
 /// Validates a project or module name: lowercase ASCII, starts with a letter,
 /// then letters/digits/underscores, no trailing or doubled underscore.
 pub fn validate_name(name: &str) -> Result<(), ScaffoldError> {
@@ -241,6 +250,62 @@ pub fn add_members_to_workspace(cargo: &str, module: &str) -> Result<String, Sca
     Ok(cargo.replacen(anchor_line, &format!("{additions}{anchor_line}"), 1))
 }
 
+/// Inserts the module's `interface`/`infrastructure` path dependencies into the
+/// app crate's `Cargo.toml`, before the managed anchor — so the composition root
+/// links the module (and its facade registers for `seiva openapi`). Pure.
+pub fn add_module_to_app_manifest(cargo: &str, module: &str) -> Result<String, ScaffoldError> {
+    let anchor_line = cargo
+        .lines()
+        .find(|line| line.trim() == APP_MODULE_DEPS_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: APP_MODULE_DEPS_ANCHOR.to_owned(),
+            what: "apps/<name>-api/Cargo.toml".to_owned(),
+        })?;
+    if cargo.contains(&format!("{module}-interface = {{ path")) {
+        return Err(ScaffoldError::AlreadyPresent(format!("module `{module}`")));
+    }
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let additions = format!(
+        "{indent}{module}-interface = {{ path = \"../../modules/{module}/interface\" }}\n\
+         {indent}{module}-infrastructure = {{ path = \"../../modules/{module}/infrastructure\" }}\n"
+    );
+    Ok(cargo.replacen(anchor_line, &format!("{additions}{anchor_line}"), 1))
+}
+
+/// Inserts the module's router merge into the composition root's `main.rs`, before
+/// the managed anchor, picking the in-memory adapters. Shadows `modules` so each
+/// merge composes. Pure; the controller/router/adapter names follow the generated
+/// module's shape (`<m>_router`, `<Pascal>Controller`, the in-memory adapters).
+pub fn wire_module_in_main(main_rs: &str, module: &str) -> Result<String, ScaffoldError> {
+    let anchor_line = main_rs
+        .lines()
+        .find(|line| line.trim() == MODULE_MERGES_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: MODULE_MERGES_ANCHOR.to_owned(),
+            what: "apps/<name>-api/src/main.rs".to_owned(),
+        })?;
+    if main_rs.contains(&format!("{module}_interface::{module}_router(")) {
+        return Err(ScaffoldError::AlreadyPresent(format!("module `{module}`")));
+    }
+    let pascal = to_pascal_case(module);
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let merge = format!(
+        "{indent}let modules = modules.merge({module}_interface::{module}_router(\n\
+         {indent}    {module}_interface::{pascal}Controller::new(\n\
+         {indent}        {module}_infrastructure::InMemoryRecordRepository::new(),\n\
+         {indent}        {module}_infrastructure::CounterIdGenerator::default(),\n\
+         {indent}    ),\n\
+         {indent}));\n"
+    );
+    Ok(main_rs.replacen(anchor_line, &format!("{merge}{anchor_line}"), 1))
+}
+
 /// Registers a module in `seiva.toml` by appending a `[modules.<name>]` section.
 /// Pure.
 pub fn register_module_in_seiva_toml(seiva: &str, module: &str) -> Result<String, ScaffoldError> {
@@ -309,8 +374,15 @@ fn bin_cargo_toml(app: &str) -> String {
          seiva-http = \"{FRAMEWORK_VERSION}\"\n\
          # The composition root holds the merged module routes as an `axum::Router`.\n\
          axum = \"0.8\"\n\
+         # Emitting THIS project's contract (`seiva openapi`, via SEIVA_EMIT): the\n\
+         # facade registry and the OpenAPI generator, driven by the linked modules.\n\
+         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
+         serde_json = \"1\"\n\
          tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
-         tracing = \"0.1\"\n"
+         tracing = \"0.1\"\n\
+         # Module crates `seiva module new` wires into the composition root:\n\
+         {APP_MODULE_DEPS_ANCHOR}\n"
     )
 }
 
@@ -321,14 +393,22 @@ fn bin_cargo_toml(app: &str) -> String {
 fn app_main_rs(name: &str) -> String {
     let app = format!("{name}-api");
     format!(
-        "//! Composition root for `{name}`: the service's `main`. Wire your\n\
-         //! modules' routers into `modules` below; keep business logic out.\n\n\
+        "//! Composition root for `{name}`: the service's `main`. `seiva module new`\n\
+         //! wires each module's router in at the managed anchor below; keep business\n\
+         //! logic out.\n\n\
          use axum::Router;\n\
          use seiva_http::{{router_with_modules, Health, HttpSecurity}};\n\
          use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
          use std::process::ExitCode;\n\n\
          #[tokio::main(flavor = \"multi_thread\")]\n\
          async fn main() -> ExitCode {{\n\
+         \x20   // `seiva openapi` / `seiva proto` run this binary with SEIVA_EMIT set to\n\
+         \x20   // print THIS project's generated contract — from the facades its modules\n\
+         \x20   // register at link time — and exit, instead of serving. Done before\n\
+         \x20   // logging so stdout carries only the document.\n\
+         \x20   if let Ok(kind) = std::env::var(\"SEIVA_EMIT\") {{\n\
+         \x20       return emit_contract(&kind);\n\
+         \x20   }}\n\n\
          \x20   // Structured JSON logs to stdout before anything else.\n\
          \x20   observability::init();\n\n\
          \x20   let config = match ServerConfig::from_process_env() {{\n\
@@ -346,26 +426,48 @@ fn app_main_rs(name: &str) -> String {
          \x20   // `Arc<dyn seiva_http::Authenticator>` (see `seiva-identity`) to admit\n\
          \x20   // callers. `None` leaves public routes serving.\n\
          \x20   let auth = None;\n\
-         \x20   // Merge each module's generated router here, BEFORE the framework\n\
-         \x20   // layers wrap them — `router_with_modules` merges then layers, so\n\
-         \x20   // authn, security headers and the rate limit apply to module routes\n\
-         \x20   // too (a plain `.merge()` after layering would leave them uncovered).\n\
-         \x20   // For each module you add, pick its adapters and merge its router:\n\
-         \x20   //   let modules = Router::new().merge(notes_interface::notes_router(\n\
-         \x20   //       notes_interface::NotesController::new(\n\
-         \x20   //           notes_infrastructure::InMemoryRecordRepository::new(),\n\
-         \x20   //           notes_infrastructure::CounterIdGenerator::default(),\n\
-         \x20   //       ),\n\
-         \x20   //   ));\n\
+         \x20   // Module routers are merged here, BEFORE the framework layers wrap them —\n\
+         \x20   // `router_with_modules` merges then layers, so authn, security headers\n\
+         \x20   // and the rate limit apply to module routes too. `seiva module new`\n\
+         \x20   // inserts each module's merge at the anchor below.\n\
          \x20   let modules = Router::new();\n\
-         \x20   // The framework application (/health, /openapi.json, /docs) plus the\n\
-         \x20   // modules, all under the framework layers.\n\
+         \x20   {MODULE_MERGES_ANCHOR}\n\
          \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
          \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
          \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
          \x20       Ok(()) => ExitCode::SUCCESS,\n\
          \x20       Err(error) => {{\n\
          \x20           tracing::error!(%error, \"serve failed\");\n\
+         \x20           ExitCode::FAILURE\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n\n\
+         /// Emits this project's generated contract from the facades linked into this\n\
+         /// binary (the modules merged above), then exits. Driven by `seiva openapi`.\n\
+         fn emit_contract(kind: &str) -> ExitCode {{\n\
+         \x20   let facades = delonix_seiva::contract::registered_facades();\n\
+         \x20   match kind {{\n\
+         \x20       \"openapi\" => {{\n\
+         \x20           let doc = seiva_openapi::openapi_document(\n\
+         \x20               seiva_openapi::ApiInfo {{\n\
+         \x20                   title: \"{name} API\".to_string(),\n\
+         \x20                   version: \"0.1.0\".to_string(),\n\
+         \x20               }},\n\
+         \x20               &facades,\n\
+         \x20           );\n\
+         \x20           match serde_json::to_string_pretty(&doc) {{\n\
+         \x20               Ok(json) => {{\n\
+         \x20                   println!(\"{{json}}\");\n\
+         \x20                   ExitCode::SUCCESS\n\
+         \x20               }}\n\
+         \x20               Err(error) => {{\n\
+         \x20                   eprintln!(\"seiva: {{error}}\");\n\
+         \x20                   ExitCode::FAILURE\n\
+         \x20               }}\n\
+         \x20           }}\n\
+         \x20       }}\n\
+         \x20       other => {{\n\
+         \x20           eprintln!(\"seiva: unknown SEIVA_EMIT value `{{other}}` (expected `openapi`)\");\n\
          \x20           ExitCode::FAILURE\n\
          \x20       }}\n\
          \x20   }}\n\
@@ -850,7 +952,14 @@ mod tests {
             "app must log structured"
         );
         assert!(main.contains("Health::starting"), "app must expose health");
-        assert!(!main.contains("println!"), "the stub must be gone");
+        // The old hello-world stub is gone: this is a real serve loop, not a
+        // greeting. (`println!` legitimately appears now, in the SEIVA_EMIT path
+        // that prints the OpenAPI document.)
+        assert!(!main.contains("Hello"), "the hello-world stub must be gone");
+        assert!(
+            main.contains("serve_router") && main.contains("router_with_modules"),
+            "the composition root runs the real serve loop"
+        );
 
         // The composition root merges modules BEFORE the framework layers wrap
         // them, via `router_with_modules` — so authn/security/rate-limit apply to
@@ -1219,6 +1328,103 @@ mod tests {
         assert!(out.contains("\"modules/notes/interface\","));
         // Idempotence guard: a second insert of the same module is refused.
         assert!(add_members_to_workspace(&out, "notes").is_err());
+    }
+
+    #[test]
+    fn app_manifest_wiring_inserts_module_deps() {
+        let cargo = bin_cargo_toml("shop-api");
+        let out = add_module_to_app_manifest(&cargo, "notes").unwrap();
+        assert!(out.contains("notes-interface = { path = \"../../modules/notes/interface\" }"));
+        assert!(out
+            .contains("notes-infrastructure = { path = \"../../modules/notes/infrastructure\" }"));
+        // The deps land before the managed anchor, which survives for the next module.
+        assert!(out.contains(APP_MODULE_DEPS_ANCHOR));
+        // Idempotence: a second insert of the same module is refused.
+        assert!(add_module_to_app_manifest(&out, "notes").is_err());
+    }
+
+    #[test]
+    fn main_wiring_inserts_router_merge() {
+        let main = app_main_rs("shop");
+        let out = wire_module_in_main(&main, "order_items").unwrap();
+        // The merge uses the module's generated router + controller + in-memory
+        // adapters, and the PascalCase controller name.
+        assert!(out.contains("order_items_interface::order_items_router("));
+        assert!(out.contains("order_items_interface::OrderItemsController::new("));
+        assert!(out.contains("order_items_infrastructure::InMemoryRecordRepository::new()"));
+        // The anchor remains for the next module, and `modules` is shadowed (merged).
+        assert!(out.contains(MODULE_MERGES_ANCHOR));
+        assert!(out.contains("let modules = modules.merge("));
+        assert!(wire_module_in_main(&out, "order_items").is_err());
+    }
+
+    /// Fitness for P0-3 (runtime facade discovery): a scaffolded project, with a
+    /// module auto-wired into its composition root exactly as `seiva module new`
+    /// does, emits **its own** OpenAPI document — the module's route, resolved
+    /// from the facade the binary links at run time (`SEIVA_EMIT=openapi`), not
+    /// the CLI's built-in demo. Proves the whole discovery path by running it.
+    #[test]
+    fn generated_project_emits_its_own_openapi() {
+        let root = framework_root();
+        let work =
+            std::env::temp_dir().join(format!("seiva-scaffold-openapi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).expect("create work dir");
+
+        // A distinctly named module so its route could only come from the project.
+        let module = "widgets";
+        let mut project = project_files("shop").expect("project files");
+        let modules = module_files(module).expect("module files");
+
+        // Apply every edit `seiva module new` performs: workspace members + the
+        // interim patch, the app crate's module deps, and the main.rs merge.
+        let edit = |files: &mut Vec<GeneratedFile>, path: &str, f: &dyn Fn(&str) -> String| {
+            let file = files.iter_mut().find(|g| g.path == path).expect(path);
+            file.contents = f(&file.contents);
+        };
+        edit(&mut project, "Cargo.toml", &|s| {
+            let members = add_members_to_workspace(s, module).expect("register module");
+            format!(
+                "{members}{}",
+                workspace_patch_section(&root.to_string_lossy())
+            )
+        });
+        edit(&mut project, "apps/shop-api/Cargo.toml", &|s| {
+            add_module_to_app_manifest(s, module).expect("app manifest wiring")
+        });
+        edit(&mut project, "apps/shop-api/src/main.rs", &|s| {
+            wire_module_in_main(s, module).expect("main wiring")
+        });
+
+        write_all(&work, &project);
+        write_all(&work, &modules);
+
+        let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+        let target_dir = std::env::temp_dir().join("seiva-scaffold-fitness-target");
+        let output = std::process::Command::new(cargo_bin)
+            .args(["run", "--quiet", "--bin", "shop-api"])
+            .current_dir(&work)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("SEIVA_EMIT", "openapi")
+            .output()
+            .expect("run the generated binary with SEIVA_EMIT=openapi");
+
+        let _ = std::fs::remove_dir_all(&work);
+        assert!(
+            output.status.success(),
+            "the generated binary must emit its OpenAPI (rc {:?}); stderr:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let doc: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("the emitted document is JSON");
+        assert!(
+            doc["paths"]["/v1/widgets"].is_object(),
+            "the project's own module route must be documented; got paths: {:?}",
+            doc["paths"]
+                .as_object()
+                .map(|m| m.keys().collect::<Vec<_>>())
+        );
     }
 
     #[test]
