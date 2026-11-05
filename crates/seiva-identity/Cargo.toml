@@ -1,0 +1,31 @@
+# seiva-identity — the caller (`Principal`) and how a transport authenticates it
+# (`Authenticator`). Transport-free: it holds no axum/HTTP type, so both
+# `seiva-http` and `seiva-mcp` build the same identity model on it (ADR 0006).
+# DORM-free and data-layer-free.
+[package]
+name = "seiva-identity"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+description = "Identity for Delonix Seiva: one verified Principal and an Authenticator trait, with a deny-by-default OIDC/JWT (JWKS) authenticator. Transport-free and DORM-free."
+readme = "README.md"
+keywords = ["authentication", "jwt", "jwks", "oidc", "identity"]
+categories = ["authentication"]
+
+[dependencies]
+# The caller's claims and the JWKS are JSON; the permission set and tenant are
+# pulled from a decoded claims object.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The audited JWT library (on `ring`): JWKS parsing, RS256/ES256 verification and
+# `exp`/`aud`/`iss` validation. We never hand-roll token crypto (ADR 0006).
+jsonwebtoken = "9"
+
+[dev-dependencies]
+# Tests sign tokens with a locally generated RSA key (fixture) and verify them
+# against the matching JWKS — real crypto, no network.
+serde_json = "1"

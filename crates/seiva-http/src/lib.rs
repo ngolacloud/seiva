@@ -1,30 +1,27 @@
-//! Delonix Seiva — HTTP transport (first cut).
+//! Delonix Seiva — the HTTP transport.
 //!
-//! This crate serves a module's facades over HTTP with axum/tower. It is the
-//! foundation the per-facade controllers (a later `#[controller]` macro) build
-//! on; this first cut provides the pieces and wires **one** facade method by hand
-//! to prove them end to end:
+//! This crate provides the transport-level pieces a module's generated
+//! controller builds on. It is **demo-free and DORM-free**: it links no example
+//! module and no data layer, so it is a publishable building block. A module's
+//! `#[seiva::controller]` router and the composition root (`seiva-server` or a
+//! project's `apps/<name>-api`) merge the module routes into [`router`].
 //!
 //! - [`problem`] — RFC 9457 `application/problem+json` errors ([`Problem`]).
 //! - [`valid`] — a typed, validated JSON body extractor ([`Valid`], [`Validate`]).
-//! - [`guard`] — a permission guard driven by a facade
-//!   [`MethodDescriptor`](delonix_seiva::contract::MethodDescriptor)
-//!   ([`permission_guard`], [`Principal`], [`RequiredPermission`]).
+//! - [`guard`] — a descriptor-driven permission guard ([`permission_guard`],
+//!   [`Principal`], [`RequiredPermission`]) plus tenant-ownership checks.
+//! - [`security`] — secure-by-default response headers and configurable CORS.
+//! - [`mod@rate_limit`] — a per-client request rate limiter.
 //! - [`health`] — `/health/live` and `/health/ready` over a
 //!   `Starting -> Ready -> Draining` lifecycle ([`Health`]).
+//! - [`docs`] — an interactive `/docs` API reference over `/openapi.json`.
 //! - [`mod@request_id`] — per-request correlation ([`RequestId`]).
 //!
-//! It is **DORM-free**: it depends only on the contract crate (with the data
-//! layer off) and the trait-only ports. `/openapi.json` is generated from the
-//! mounted facade descriptors by `seiva-openapi` ([`openapi_document`]).
-//!
-//! # The demonstration
-//!
-//! [`router`] mounts the `Notes` facade's `create` method as
-//! `POST /{version}/notes`, where both the path version and the permission the
-//! route enforces are read from
-//! [`NotesFacade::DESCRIPTOR`](notes_facade::NotesFacade) — not hard-coded. See
-//! [`notes_router`].
+//! [`router`] assembles the framework surface — health, `/openapi.json`
+//! (generated from every facade linked into the binary) and `/docs` — wrapped in
+//! the security headers, optional CORS, the body-size limit, the rate limiter and
+//! the request-id middleware. It mounts no module route itself; the composition
+//! root merges those in.
 
 #![forbid(unsafe_code)]
 // `Problem` is a rich RFC 9457 payload (several owned strings) and handlers
@@ -32,118 +29,59 @@
 // box away, so the large-Err lint is allowed crate-wide.
 #![allow(clippy::result_large_err)]
 
+pub mod admin;
+pub mod authn;
+pub mod docs;
 pub mod guard;
 pub mod health;
 pub mod problem;
+pub mod rate_limit;
 pub mod request_id;
+pub mod security;
 pub mod valid;
 
+use std::sync::Arc;
+
 use axum::extract::DefaultBodyLimit;
-use axum::http::StatusCode;
 use axum::middleware::{from_fn, from_fn_with_state};
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
 
-use delonix_seiva::contract::Facade;
-use notes_facade::NotesFacade;
-
-pub use guard::{permission_guard, Principal, RequiredPermission};
+pub use admin::{admin_handler, ADMIN_HTML};
+pub use authn::authn;
+pub use docs::{docs_handler, DOCS_HTML};
+pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
 pub use health::{health_router, Health, HealthState};
 pub use problem::{Problem, PROBLEM_JSON};
+pub use rate_limit::{rate_limit, RateLimit, RateLimiter};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};
+pub use security::{cors_layer, security_headers, HttpSecurity};
 pub use valid::{Valid, Validate, ValidationError};
+// The identity model is owned by `seiva-identity` (transport-free, shared with
+// MCP); re-exported here so a `seiva_http::Principal` import keeps working.
+pub use seiva_identity::{
+    AuthError, Authenticator, JwtAuthenticator, Principal, TokenAuthenticator,
+};
 
 /// The default maximum request body size (1 MiB). Oversized bodies are rejected
 /// before a handler runs. Mounted as [`DefaultBodyLimit`] in [`router`].
 pub const DEFAULT_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
-/// The wire body for `POST /{version}/notes`: the interface layer owns this
-/// shape, decoupled from the facade's `CreateNote` DTO (which carries no serde
-/// derives). [`Validate`] enforces a non-empty, bounded title.
-#[derive(Debug, Clone, Deserialize)]
-pub struct CreateNoteBody {
-    /// The note's title.
-    pub title: String,
-}
-
-impl Validate for CreateNoteBody {
-    fn validate(&self) -> Result<(), ValidationError> {
-        let title = self.title.trim();
-        if title.is_empty() {
-            return Err(ValidationError::new("title must not be empty"));
-        }
-        if title.chars().count() > 200 {
-            return Err(ValidationError::new("title must be at most 200 characters"));
-        }
-        Ok(())
-    }
-}
-
-/// The wire response for a created note, mirroring the facade's `NoteDto`.
-#[derive(Debug, Clone, Serialize)]
-pub struct NoteResponse {
-    /// The new note's identifier.
-    pub id: u128,
-    /// The note's title.
-    pub title: String,
-}
-
-/// Handler for `create`: validates the body, crosses into the facade's DTOs to
-/// prove the wiring, and returns the created note as `201` JSON.
-///
-/// No application/infrastructure is linked in this transport-only crate, so the
-/// result is synthesised rather than produced by the real use case. A later
-/// phase injects the facade implementation; the transport shape stays the same.
-async fn create_note(Valid(body): Valid<CreateNoteBody>) -> Result<Response, Problem> {
-    // Cross into the real facade DTOs: this is the mapping a generated controller
-    // will perform, proving the transport depends on the facade contract.
-    let command = notes_facade::CreateNote { title: body.title };
-    let dto = notes_facade::NoteDto {
-        id: 1,
-        title: command.title,
-    };
-
-    let response = NoteResponse {
-        id: dto.id,
-        title: dto.title,
-    };
-    Ok((StatusCode::CREATED, Json(response)).into_response())
-}
-
-/// Builds the `Notes` sub-router, reading the route **version** and the
-/// **required permission** from
-/// [`NotesFacade::DESCRIPTOR`](notes_facade::NotesFacade). Nothing here names
-/// `"v1"` or `"notes.create"` literally: change the facade and the route follows.
-pub fn notes_router() -> Router {
-    let descriptor = NotesFacade::DESCRIPTOR;
-    let create = descriptor
-        .method("create")
-        .expect("the Notes facade declares a `create` method");
-
-    let path = format!("/{}/notes", descriptor.version);
-
-    Router::new()
-        .route(&path, post(create_note))
-        .layer(from_fn_with_state(
-            RequiredPermission(create.requires),
-            permission_guard,
-        ))
-}
-
-/// Builds the service's OpenAPI 3.1 document from the mounted facade
-/// descriptors with [`seiva_openapi`]. Nothing here is hand-written: the paths,
-/// operations, permissions and schemas follow the descriptors, so adding a
-/// facade adds its operations. The service mounts the `Notes` facade, so its
-/// descriptor is the single input today.
+/// Builds the service's OpenAPI 3.1 document from **every facade linked into the
+/// binary**, discovered through [`delonix_seiva::contract::registered_facades`]
+/// (each `#[seiva::facade]` registers itself in a link-time inventory). Nothing
+/// here is hand-written and no central list is kept: a module mounted into the
+/// runtime contributes its operations automatically (OWASP API9). This crate
+/// links no facade of its own, so a plain `seiva-http` binary documents nothing;
+/// the full runtime (see `seiva-server`) documents every mounted module.
 pub fn openapi_document() -> serde_json::Value {
+    let facades = delonix_seiva::contract::registered_facades();
     seiva_openapi::openapi_document(
         seiva_openapi::ApiInfo {
             title: "Delonix Seiva service".to_string(),
             version: delonix_seiva::VERSION.to_string(),
         },
-        &[NotesFacade::DESCRIPTOR],
+        &facades,
     )
 }
 
@@ -152,15 +90,114 @@ async fn openapi_handler() -> Json<serde_json::Value> {
     Json(openapi_document())
 }
 
-/// Builds the full application router: the `Notes` demonstration, the health
-/// endpoints and the OpenAPI stub, wrapped with a body-size limit and the
-/// [`request_id()`] middleware (outermost, so every response — problems included —
-/// carries a correlation id).
+/// Builds the framework router with the **default** security posture
+/// ([`HttpSecurity::default`]: secure response headers on, same-origin only — no
+/// CORS). Equivalent to [`router_with_security`] with the default configuration;
+/// the zero-config entrypoint.
 pub fn router(health: Health) -> Router {
+    router_with_security(health, &HttpSecurity::default())
+}
+
+/// Builds the framework router — the health endpoints, `/openapi.json` and
+/// `/docs`. Request flows through the layers outermost-first:
+/// [`request_id()`] → [`security_headers`] → the rate limiter → the optional CORS
+/// layer → the body-size limit → the route.
+///
+/// `security_headers` and `request_id` are the **outermost** layers on purpose:
+/// every response carries them even when an outer layer short-circuits before the
+/// route runs — a rate-limiter `429` or a CORS preflight included. (With the
+/// headers mounted inside the rate limiter, a `429` went out naked — no CSP, no
+/// `nosniff`, no HSTS — measured end-to-end.)
+///
+/// It mounts no module route; the composition root merges each module's generated
+/// controller router into the result. `security` controls the transport-level
+/// API8 defences: the response headers are always applied, and CORS is mounted
+/// only when [`HttpSecurity::cors_allowed_origins`] is non-empty (otherwise the
+/// browser enforces same-origin).
+pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
+    router_with_auth(health, security, None)
+}
+
+/// Builds the framework router under `security` and an optional authentication
+/// layer: when `authenticator` is `Some`, every request is authenticated (ADR
+/// 0006) ahead of any route's [`permission_guard`] — a missing bearer becomes
+/// [`Principal::anonymous`] (public routes still serve, guarded routes `403`),
+/// a present-but-invalid one is a `401`. `None` mounts no authn layer (no caller
+/// is ever authenticated, so guarded routes answer `403`): the composition root
+/// supplies an [`Authenticator`] to actually admit callers.
+///
+/// Layer order, outermost-first: [`request_id()`] → [`security_headers`] →
+/// [`authn()`] → the rate limiter → CORS → the body-size limit → the route.
+/// `authn` sits inside the header layers (so a `401` still carries them) but
+/// outside the routes (so it runs before each route's guard).
+pub fn router_with_auth(
+    health: Health,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+) -> Router {
+    apply_framework_layers(framework_routes(health), security, authenticator)
+}
+
+/// Builds the full application router: the framework routes **plus the caller's
+/// `modules`**, wrapped in the framework layers — the composition a real
+/// `apps/<name>-api` needs.
+///
+/// Why this exists: axum's [`Router::layer`](axum::Router::layer) wraps only the
+/// routes already present, so `router_with_auth(..).merge(modules)` would leave
+/// the module routes **outside** every middleware — no authn, no security
+/// headers, no rate limit. Merging the modules *before* layering (what this does)
+/// is the only order that applies the framework's guarantees to module routes.
+/// Mount each module's generated controller router into `modules` and pass it here.
+pub fn router_with_modules(
+    health: Health,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+    modules: Router,
+) -> Router {
+    apply_framework_layers(
+        framework_routes(health).merge(modules),
+        security,
+        authenticator,
+    )
+}
+
+/// The framework's own routes, unlayered: health, `/openapi.json`, `/docs`, and
+/// the generated `/admin` console.
+fn framework_routes(health: Health) -> Router {
     Router::new()
-        .merge(notes_router())
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
-        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES))
+        .route("/docs", get(docs::docs_handler))
+        .route("/admin", get(admin::admin_handler))
+}
+
+/// Wraps `app` (framework routes, and any merged module routes) in the transport
+/// middleware. Layer order, outermost-first: [`request_id()`] →
+/// [`security_headers`] → [`authn()`] → the rate limiter → CORS → the body-size
+/// limit → the route. `authn` sits inside the header layers (so a `401` still
+/// carries them) but outside the routes (so it runs before each route's guard).
+fn apply_framework_layers(
+    app: Router,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+) -> Router {
+    let mut app = app.layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
+
+    if let Some(cors) = cors_layer(security) {
+        app = app.layer(cors);
+    }
+
+    if let Some(limit) = security.rate_limit {
+        let limiter = RateLimiter::new(limit).trusting_forwarded_for(security.trust_forwarded_for);
+        app = app.layer(from_fn_with_state(limiter, rate_limit));
+    }
+
+    if let Some(auth) = authenticator {
+        app = app.layer(from_fn_with_state(auth, authn));
+    }
+
+    // Outermost: so a short-circuited response (a 429, a 401, a CORS preflight)
+    // still leaves through the security headers and gets a correlation id.
+    app.layer(from_fn(security_headers))
         .layer(from_fn(request_id))
 }

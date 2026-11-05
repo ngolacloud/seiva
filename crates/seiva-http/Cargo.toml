@@ -27,18 +27,23 @@ description = "Delonix Seiva — HTTP transport (axum/tower): RFC 9457 problems,
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
 # The trait-only ports: we map their opaque `BoxError` into an RFC 9457 problem.
 seiva-ports = { path = "../seiva-ports" }
-# The OpenAPI 3.1 generator: `/openapi.json` is generated from the mounted
-# facade descriptors, not hand-written. Data-layer-free like this crate.
+# The verified caller: `Principal` and the `Authenticator` the authn middleware
+# runs. Transport-free, so the same identity model serves HTTP and MCP (ADR 0006).
+seiva-identity = { path = "../seiva-identity" }
+# The OpenAPI 3.1 generator: `/openapi.json` is generated from the facades
+# linked into the binary, not hand-written. Data-layer-free like this crate.
 seiva-openapi = { path = "../seiva-openapi" }
-# The demonstration subject: one facade mounted as a route, guarded by its
-# descriptor. Brought in as a normal dependency so `router` can serve it.
-notes-facade = { path = "../../examples/notes/facade" }
 
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# CORS enforcement: the battle-tested tower layer rather than a hand-rolled
+# preflight. Only the `cors` feature; the secure default mounts no layer at all.
+tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt", "macros"] }
+# A controllable `Clock` so the rate-limiter's window is tested without sleeping.
+seiva-testing = { path = "../seiva-testing" }

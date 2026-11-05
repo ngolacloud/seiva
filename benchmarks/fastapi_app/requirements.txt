@@ -1,0 +1,6 @@
+# Pinned to the versions this harness was authored against. `run.sh` installs
+# these into benchmarks/.venv (shared with the Django app).
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+gunicorn==23.*
+pydantic>=2

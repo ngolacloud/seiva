@@ -1,0 +1,63 @@
+# cargo-deny configuration — the CVE/KEV and supply-chain gate for Seiva.
+#
+# `cargo deny check` runs in CI (see .github/workflows/ci.yml) over the public
+# workspace. It fails the build on a known RUSTSEC advisory, a yanked crate, a
+# disallowed licence, a wildcard dependency or an unknown source registry.
+#
+# EXCEPTIONS POLICY: an advisory may only be silenced by adding its RUSTSEC id to
+# `advisories.ignore` below WITH a dated, justified comment (why it does not
+# affect Seiva, and the date it was reviewed). Remove the entry as soon as a
+# fixed version is available. An undated or unexplained ignore is a review-blocker.
+
+[advisories]
+version = 2
+# A yanked dependency is treated as hard a failure as a vulnerable one.
+yanked = "deny"
+# Both gates (default AND --all-features) are clean and need NO exception. The
+# optional broker backends of seiva-messaging (nats/amqp/kafka) were bumped
+# (async-nats 0.51, lapin 4, rskafka 0.6) so their TLS/compression stacks no
+# longer carry advisories.
+#
+# Format for a genuine exception, when one is ever unavoidable:
+#   # RUSTSEC-YYYY-NNNN — <crate>: <why it does not affect Seiva>. Reviewed
+#   # YYYY-MM-DD; remove once <fixed-version> is reachable.
+ignore = []
+
+[licenses]
+version = 2
+# Permissive licences compatible with Seiva's own "MIT OR Apache-2.0".
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    # The Mozilla CA root bundle (`webpki-root-certs`, pulled by the TLS stack of
+    # the optional broker backends) ships its certificate DATA under this
+    # permissive Community Data License. Data, not code; safe to allow.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# A duplicate version is a warning (noise to watch), not a build break.
+multiple-versions = "warn"
+# A wildcard (`*`) on a crates.io dependency is a supply-chain risk, but every
+# wildcard in this workspace today is an internal `{ path = "..." }` dependency
+# between the 5-layer module crates (a local wildcard with no such risk).
+# `allow-wildcard-paths` exempts path deps on *private* crates but not on the
+# publishable ones (seiva-cli, seiva-cqrs, ...), so wildcards are a WARNING here:
+# still surfaced, but not failing the gate on an internal-only pattern. A real
+# registry `*` would stand out in the warning and must be fixed before publish.
+wildcards = "warn"
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io by default. The DORM-git-coupled crates are EXCLUDED from the
+# public workspace, so no git source should appear here; a new one is a mistake.
+unknown-registry = "deny"
+unknown-git = "deny"

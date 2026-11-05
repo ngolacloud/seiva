@@ -1,0 +1,6 @@
+# Generated / heavy artifacts — the harness recreates these.
+.venv/
+results/
+scratch/
+notesbench/target/
+__pycache__/

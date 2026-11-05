@@ -17,7 +17,7 @@
 #![forbid(unsafe_code)]
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::facade;
+use delonix_seiva::{facade, WireSchema};
 use seiva_http::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 /// Carries the plaintext `password` inbound only. It is hashed in the
 /// application layer (Argon2id) and never stored or echoed back; nothing
 /// returned from this facade exposes it.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]
 pub struct CreateUser {
     /// The desired, unique username.
     pub username: String,
@@ -57,7 +57,7 @@ impl Validate for CreateUser {
 /// implemented for `String` (the orphan rule), so a bare-`String` parameter
 /// could not be mounted as an HTTP route. See the module docs on the generated
 /// routes for the resulting path shape.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]
 pub struct GetUser {
     /// The username to look up.
     pub username: String,
@@ -75,7 +75,7 @@ impl Validate for GetUser {
 /// Response DTO: what `create_user`/`get_user` return. Never a domain type, and
 /// deliberately **without** any password or hash field — a secret cannot leak
 /// through this type because it has nowhere to sit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, WireSchema)]
 pub struct UserDto {
     /// The account's stable identifier.
     pub id: u128,

@@ -10,44 +10,23 @@
 
 use std::process::ExitCode;
 
-use seiva_server::{run_workers, serve, ServerConfig};
-
-/// Resolves once the process is asked to shut down: Ctrl-C (SIGINT) on every
-/// platform, or `SIGTERM` on unix (the signal an orchestrator sends to stop a
-/// container). Each caller builds its own future, so the server and the worker
-/// host can each await shutdown independently without sharing a channel.
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let mut term = signal(SignalKind::terminate()).expect("install a SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = term.recv() => {}
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
+use seiva_server::{observability, run_workers, serve, shutdown_signal, ServerConfig};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
+    // Structured JSON logs to stdout before anything else, so even a config error
+    // is one parseable line for the platform to collect.
+    observability::init();
+
     let config = match ServerConfig::from_process_env() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("seiva-server: {error}");
+            tracing::error!(%error, "invalid configuration");
             return ExitCode::FAILURE;
         }
     };
 
-    eprintln!(
-        "seiva-server: starting (env={}, http={})",
-        config.env, config.http_addr
-    );
+    tracing::info!(env = %config.env, http = %config.http_addr, "starting");
 
     // Serve and the worker host run concurrently, each with its own shutdown
     // future over the same OS signals.
@@ -57,19 +36,21 @@ async fn main() -> ExitCode {
     );
 
     for report in &reports {
-        eprintln!(
-            "seiva-server: worker stopped (passes={}, processed={}, errors={})",
-            report.passes, report.processed, report.errors
+        tracing::info!(
+            passes = report.passes,
+            processed = report.processed,
+            errors = report.errors,
+            "worker stopped"
         );
     }
 
     match served {
         Ok(()) => {
-            eprintln!("seiva-server: stopped cleanly");
+            tracing::info!("stopped cleanly");
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("seiva-server: {error}");
+            tracing::error!(%error, "serve failed");
             ExitCode::FAILURE
         }
     }

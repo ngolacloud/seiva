@@ -53,6 +53,13 @@ impl Problem {
         }
     }
 
+    /// A `401 Unauthorized` problem (the caller presented a bearer credential
+    /// that did not authenticate). The caller is expected to add the
+    /// `WWW-Authenticate` response header separately.
+    pub fn unauthorized(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "Unauthorized").with_detail(detail)
+    }
+
     /// A `403 Forbidden` problem (the permission guard denied the caller).
     pub fn forbidden(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, "Forbidden").with_detail(detail)
@@ -67,6 +74,12 @@ impl Problem {
     /// validate).
     pub fn unprocessable_entity(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::UNPROCESSABLE_ENTITY, "Unprocessable Entity").with_detail(detail)
+    }
+
+    /// A `429 Too Many Requests` problem (the caller exceeded a rate limit). The
+    /// caller is expected to add a `Retry-After` response header separately.
+    pub fn too_many_requests(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests").with_detail(detail)
     }
 
     /// A `500 Internal Server Error` problem.

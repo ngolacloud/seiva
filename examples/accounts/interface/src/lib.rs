@@ -3,24 +3,27 @@
 //! LAYERING DECISION: the `#[seiva::controller]` lives HERE, not in
 //! `application`, so the application layer stays transport-free (it depends only
 //! on `domain`, `facade` and `seiva-ports`, like `examples/notes`). The
-//! controller is applied to the CONCRETE [`AccountsController`] adapter, which
-//! delegates to the module's default in-memory service wired here. A concrete
-//! self type is required: `#[seiva::controller]` dispatches through the facade
-//! trait, whose `async fn` methods are only known to return `Send` futures (as
-//! axum's router demands) for a concrete type — a generic service would leave the
-//! trait's return-position future unbounded.
+//! controller [`AccountsController<R>`] is GENERIC over the repository port `R`,
+//! so this layer depends only on `application` (for the service and the
+//! `CredentialRepository` port) and never on the `infrastructure` crate — the
+//! layering rule forbids `interface -> infrastructure`. A concrete self type is
+//! still what `#[seiva::controller]` dispatches through (the trait's `async fn`
+//! methods are only known to return `Send` futures for a concrete type), but
+//! `AccountsController<R>` is concrete once `R` is chosen, and the macro
+//! propagates the generic + its `where` bound onto the generated router.
 //!
 //! The macro generates an `accounts_router(service)` builder whose route version
 //! and per-route permission come from the `AccountsFacade` descriptor at run
-//! time. [`router`] composes the default service and returns that router, ready
-//! to merge into a server application.
+//! time. The COMPOSITION ROOT (e.g. `seiva-server`) picks the concrete repository
+//! — `AccountsController::new(InMemoryCredentialRepository::new())` — and merges
+//! `accounts_router(controller)` into its application.
 //!
 //! # DORM-free
 //!
-//! The default service is in-memory: `AccountsService` over
-//! `InMemoryCredentialRepository` and the in-process ports. No `dorm-*` crate is linked; a
-//! DORM-backed repository and the transactional ports arrive through the
-//! framework's `dorm` feature later.
+//! The in-process ports (`SystemIds`, `DirectUnitOfWork`, `NoopEventPublisher`)
+//! are defined inline; the repository is injected by the composition root. No
+//! `dorm-*` crate is linked; a DORM-backed repository and the transactional ports
+//! arrive through the framework's `dorm` feature later.
 //!
 //! # Generated routes (first cut)
 //!
@@ -50,9 +53,8 @@ use std::sync::Arc;
 
 use delonix_seiva::controller;
 
-use accounts_application::AccountsService;
+use accounts_application::{AccountsService, CredentialRepository};
 use accounts_facade::{Accounts, AccountsFacade, CreateUser, GetUser, UserDto, UserError};
-use accounts_infrastructure::InMemoryCredentialRepository;
 
 use runtime::{DirectUnitOfWork, NoopEventPublisher, SystemIds};
 
@@ -112,25 +114,37 @@ mod runtime {
     }
 }
 
-/// The module's default, in-memory `Accounts` service: the application service
-/// over the in-memory repository and the in-process `runtime` ports. Swap
-/// these ports (e.g. a DORM-backed repository) in a production composition root.
-pub type DefaultService =
-    AccountsService<InMemoryCredentialRepository, SystemIds, DirectUnitOfWork, NoopEventPublisher>;
+/// The concrete `Accounts` service this controller wraps: the application
+/// service over a caller-supplied repository `R` and the in-process `runtime`
+/// ports. Named here WITHOUT the infrastructure crate, so the interface layer
+/// depends only on `application` — the layering rule forbids
+/// `interface -> infrastructure`. The composition root supplies the concrete
+/// repository (in-memory, or a DORM-backed one).
+type Service<R> = AccountsService<R, SystemIds, DirectUnitOfWork, NoopEventPublisher>;
 
-/// Transport adapter: a concrete `Accounts` service exposed over HTTP.
+/// Transport adapter: a concrete `Accounts` service exposed over HTTP, generic
+/// over the repository port `R`.
 ///
-/// It holds the default service behind an [`Arc`] so it is `Clone + Send + Sync +
+/// It holds the service behind an [`Arc`] so it is `Clone + Send + Sync +
 /// 'static` — the bound the generated `accounts_router` places on its axum state —
 /// without requiring the service or its ports to be `Clone`.
-#[derive(Clone)]
-pub struct AccountsController(Arc<DefaultService>);
+pub struct AccountsController<R>(Arc<Service<R>>);
 
-impl AccountsController {
-    /// Builds the controller over the default in-memory service.
-    pub fn new() -> Self {
+// Manual `Clone` (not derived): the controller is `Clone` for ANY `R` because it
+// only holds an `Arc`; the derive would wrongly demand `R: Clone`.
+impl<R> Clone for AccountsController<R> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<R: CredentialRepository> AccountsController<R> {
+    /// Builds the controller over `repository` and the in-process ports. The
+    /// composition root chooses the repository; the interface never names a
+    /// concrete one.
+    pub fn new(repository: R) -> Self {
         AccountsController(Arc::new(AccountsService {
-            repository: InMemoryCredentialRepository::new(),
+            repository,
             ids: SystemIds,
             uow: DirectUnitOfWork,
             events: NoopEventPublisher,
@@ -138,14 +152,11 @@ impl AccountsController {
     }
 }
 
-impl Default for AccountsController {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[controller]
-impl Accounts for AccountsController {
+impl<R> Accounts for AccountsController<R>
+where
+    R: CredentialRepository + Send + Sync + 'static,
+{
     // `UnitOfWork::transaction` returns a `Send` future (RPITIT with a `+ Send`
     // bound in `seiva-ports`), so the use-case future is `Send` in this axum
     // handler and is awaited directly — no boxing or `spawn_blocking`. (Argon2id
@@ -158,14 +169,6 @@ impl Accounts for AccountsController {
     async fn get_user(&self, query: GetUser) -> Result<UserDto, UserError> {
         self.0.get_user(query).await
     }
-}
-
-/// Builds the `accounts` module's HTTP router, wired to the default in-memory
-/// service. Merge it into a server application in the composition root; a request
-/// to an accounts route then hits the real module use case (validation, Argon2id
-/// hashing and the `accounts.user_created` event).
-pub fn router() -> axum::Router {
-    accounts_router(AccountsController::new())
 }
 
 /// Wraps an `Accounts` implementation and exposes a plain-Rust handler surface.
@@ -221,6 +224,14 @@ mod tests {
     async fn json_body(body: Body) -> Value {
         let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// The composition the real `apps/` root performs: the generated
+    /// `accounts_router` over a controller wired to the in-memory repository.
+    /// `InMemoryCredentialRepository` is a dev-dependency — the interface's
+    /// production code never names the infrastructure crate.
+    fn demo_router() -> axum::Router {
+        accounts_router(AccountsController::new(InMemoryCredentialRepository::new()))
     }
 
     // --- The composed in-memory service, driven as plain Rust via AccountsApi --
@@ -284,7 +295,7 @@ mod tests {
             .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
             .unwrap();
 
-        let response = router().oneshot(request).await.unwrap();
+        let response = demo_router().oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(response.headers()["content-type"], PROBLEM_JSON);
@@ -303,7 +314,7 @@ mod tests {
             .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
             .unwrap();
 
-        let response = router().oneshot(request).await.unwrap();
+        let response = demo_router().oneshot(request).await.unwrap();
 
         // `create_user` is not the exact name `create`, so it is the generic
         // write branch: `200 OK`, not `201 Created`.
@@ -331,7 +342,7 @@ mod tests {
             .body(Body::from(r#"{"username":"   ","password":"hunter2"}"#))
             .unwrap();
 
-        let response = router().oneshot(request).await.unwrap();
+        let response = demo_router().oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(response.headers()["content-type"], PROBLEM_JSON);
@@ -343,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn create_then_get_round_trips_through_the_real_use_case() {
         // One router instance so both requests share the in-memory repository.
-        let app = accounts_router(AccountsController::new());
+        let app = demo_router();
 
         let create = Request::builder()
             .method("POST")

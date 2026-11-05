@@ -251,9 +251,11 @@ dependencies = [
 name = "delonix-seiva"
 version = "0.1.0"
 dependencies = [
+ "inventory",
  "seiva-macros",
  "seiva-ports",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "toml",
@@ -298,7 +300,6 @@ dependencies = [
 [[package]]
 name = "dorm-core"
 version = "0.6.0"
-source = "git+https://github.com/ngolacloud/dorm?rev=f43d8738e37e054669a9a6ac8971c0af57717191#f43d8738e37e054669a9a6ac8971c0af57717191"
 dependencies = [
  "base64",
  "chrono",
@@ -325,7 +326,6 @@ dependencies = [
 [[package]]
 name = "dorm-outbox"
 version = "0.1.0"
-source = "git+https://github.com/ngolacloud/dorm?rev=f43d8738e37e054669a9a6ac8971c0af57717191#f43d8738e37e054669a9a6ac8971c0af57717191"
 dependencies = [
  "dorm-core",
  "serde_json",
@@ -1247,13 +1247,12 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres-rustls"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27d684bad428a0f2481f42241f821db42c54e2dc81d8c00db8536c506b0a0144"
+checksum = "4c2ad44aa0ae96db89c4742212ed41645b2f597311ff6e1945542a4d9fadc2fb"
 dependencies = [
- "const-oid 0.9.6",
- "ring",
  "rustls",
+ "sha2",
  "tokio",
  "tokio-postgres",
  "tokio-rustls",

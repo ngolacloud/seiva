@@ -23,8 +23,9 @@
 //!   arrives via the `dorm` feature); depends on `application` + `domain` +
 //!   `seiva-ports`.
 //! - `interface` — the transport. It holds the `#[seiva::controller]` adapter
-//!   that yields `<trait>_router`, and generates the module's OpenAPI and proto
-//!   documents from the facade descriptor via `seiva-openapi`/`seiva-grpc`.
+//!   that yields `<trait>_router`, and generates the module's OpenAPI document
+//!   from the facade descriptor via `seiva-openapi`. (Proto generation is a CLI
+//!   tool, not a per-module dependency, so the module crate stays gRPC-free.)
 //!
 //! The controller is placed in `interface` (not `application`) by deliberate
 //! layering choice, so the application layer stays transport-free; the decision
@@ -54,6 +55,15 @@ pub enum ScaffoldError {
 /// The marker line in the workspace `Cargo.toml` members array before which new
 /// module crate members are inserted.
 const MEMBERS_ANCHOR: &str = "# seiva:module-members (managed by the seiva CLI)";
+
+/// The marker line in the composition root's `main.rs` before which `seiva module
+/// new` inserts each module's router merge (so the facades link into the binary
+/// and `seiva openapi` documents them).
+const MODULE_MERGES_ANCHOR: &str = "// seiva:module-merges (managed by the seiva CLI)";
+
+/// The marker line in the app crate's `Cargo.toml` `[dependencies]` before which
+/// `seiva module new` inserts the module's `interface`/`infrastructure` path deps.
+const APP_MODULE_DEPS_ANCHOR: &str = "# seiva:module-deps (managed by the seiva CLI)";
 
 /// Validates a project or module name: lowercase ASCII, starts with a letter,
 /// then letters/digits/underscores, no trailing or doubled underscore.
@@ -101,6 +111,19 @@ pub fn module_member_paths(module: &str) -> Vec<String> {
     .collect()
 }
 
+/// The project name read from a `seiva.toml` manifest's `[project].name`, or
+/// `None` when the manifest is unparseable or lacks it. Pure, so the CLI's
+/// `start` can resolve the app crate (`<name>-api`) deterministically.
+#[must_use]
+pub fn project_name(manifest: &str) -> Option<String> {
+    let value: toml::Value = toml::from_str(manifest).ok()?;
+    value
+        .get("project")?
+        .get("name")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
 /// Files for a new project `name`. Paths are relative to the new `name/` dir.
 pub fn project_files(name: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
     validate_name(name)?;
@@ -114,17 +137,17 @@ pub fn project_files(name: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
         file("seiva.toml", seiva_toml(name)),
         file("Cargo.toml", workspace_cargo_toml(&app)),
         file(".gitignore", "/target\n**/*.rs.bk\n.env\n".to_owned()),
-        file("README.md", format!("# {name}\n\nA Delonix Seiva project. Add modules with `seiva module new <name>`.\n")),
+        file("README.md", format!("# {name}\n\nA Delonix Seiva project. Add modules with `seiva module new <name>`.\n\nRun locally with `seiva start`; build a distroless image with `delonix stack up` (see the `Delonixfile` and `compose.yaml`).\n")),
         file(&format!("schema/{name}.schema"), project_schema()),
         file("modules/.keep", String::new()),
         // apps/<name>-api: the composition root — wires modules, holds no logic.
         file(&format!("apps/{app}/Cargo.toml"), bin_cargo_toml(&app)),
-        file(
-            &format!("apps/{app}/src/main.rs"),
-            format!(
-                "//! Composition root for `{name}`: wire modules here, no business logic.\n\nfn main() {{\n    println!(\"{name} api — composition root (modules are wired here).\");\n}}\n"
-            ),
-        ),
+        file(&format!("apps/{app}/src/main.rs"), app_main_rs(name)),
+        // Cloud-native packaging: a distroless multi-stage image and a compose
+        // file that `delonix stack up` (or `docker compose`) runs.
+        file("Delonixfile", delonixfile(&app)),
+        file("compose.yaml", compose_yaml(name)),
+        file(".dockerignore", dockerignore()),
         // shared/kernel: shared value types, no business rules.
         file("shared/kernel/Cargo.toml", lib_cargo_toml("kernel", &[])),
         file(
@@ -227,6 +250,62 @@ pub fn add_members_to_workspace(cargo: &str, module: &str) -> Result<String, Sca
     Ok(cargo.replacen(anchor_line, &format!("{additions}{anchor_line}"), 1))
 }
 
+/// Inserts the module's `interface`/`infrastructure` path dependencies into the
+/// app crate's `Cargo.toml`, before the managed anchor — so the composition root
+/// links the module (and its facade registers for `seiva openapi`). Pure.
+pub fn add_module_to_app_manifest(cargo: &str, module: &str) -> Result<String, ScaffoldError> {
+    let anchor_line = cargo
+        .lines()
+        .find(|line| line.trim() == APP_MODULE_DEPS_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: APP_MODULE_DEPS_ANCHOR.to_owned(),
+            what: "apps/<name>-api/Cargo.toml".to_owned(),
+        })?;
+    if cargo.contains(&format!("{module}-interface = {{ path")) {
+        return Err(ScaffoldError::AlreadyPresent(format!("module `{module}`")));
+    }
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let additions = format!(
+        "{indent}{module}-interface = {{ path = \"../../modules/{module}/interface\" }}\n\
+         {indent}{module}-infrastructure = {{ path = \"../../modules/{module}/infrastructure\" }}\n"
+    );
+    Ok(cargo.replacen(anchor_line, &format!("{additions}{anchor_line}"), 1))
+}
+
+/// Inserts the module's router merge into the composition root's `main.rs`, before
+/// the managed anchor, picking the in-memory adapters. Shadows `modules` so each
+/// merge composes. Pure; the controller/router/adapter names follow the generated
+/// module's shape (`<m>_router`, `<Pascal>Controller`, the in-memory adapters).
+pub fn wire_module_in_main(main_rs: &str, module: &str) -> Result<String, ScaffoldError> {
+    let anchor_line = main_rs
+        .lines()
+        .find(|line| line.trim() == MODULE_MERGES_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: MODULE_MERGES_ANCHOR.to_owned(),
+            what: "apps/<name>-api/src/main.rs".to_owned(),
+        })?;
+    if main_rs.contains(&format!("{module}_interface::{module}_router(")) {
+        return Err(ScaffoldError::AlreadyPresent(format!("module `{module}`")));
+    }
+    let pascal = to_pascal_case(module);
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let merge = format!(
+        "{indent}let modules = modules.merge({module}_interface::{module}_router(\n\
+         {indent}    {module}_interface::{pascal}Controller::new(\n\
+         {indent}        {module}_infrastructure::InMemoryRecordRepository::new(),\n\
+         {indent}        {module}_infrastructure::CounterIdGenerator::default(),\n\
+         {indent}    ),\n\
+         {indent}));\n"
+    );
+    Ok(main_rs.replacen(anchor_line, &format!("{merge}{anchor_line}"), 1))
+}
+
 /// Registers a module in `seiva.toml` by appending a `[modules.<name>]` section.
 /// Pure.
 pub fn register_module_in_seiva_toml(seiva: &str, module: &str) -> Result<String, ScaffoldError> {
@@ -252,6 +331,44 @@ pub fn append_namespace_block(schema: &str, module: &str) -> Result<String, Scaf
     Ok(format!(
         "{schema}{sep}\nnamespace {module} {{\n  // Models owned by the `{module}` module. Only identifiers cross module\n  // boundaries: no relation to another namespace's models.\n  model Record {{\n    id      Uuid   @id\n    title   String\n    version Int    @version\n  }}\n}}\n"
     ))
+}
+
+/// Adapts the Seiva project schema (`schema/<project>.schema`) into a schema the
+/// DORM data layer migrates from (`data/dorm.schema`). The two share a DSL — DORM
+/// supports `namespace` blocks natively (that is how it imposes the module
+/// boundary) — so the module `namespace`s and their models pass through verbatim.
+/// Two adjustments make it a valid DORM schema:
+///
+/// 1. **The datasource URL.** DORM's migrate reads the DSN from the datasource's
+///    `url`; the project schema omits it (the DSN is environment-supplied), so a
+///    `url = env("DELONIX_ORM_DSN")` is injected when absent.
+/// 2. **`@version`.** The scaffold marks the optimistic-concurrency column with
+///    `@version`, which this DORM's schema parser does not accept yet; it is
+///    dropped so the schema parses. The `version` column itself stays — only the
+///    attribute is removed (the concurrency enforcement is a runtime concern).
+/// 3. **The datasource provider.** Set to `provider` (`"postgresql"`, `"mysql"`,
+///    `"sqlite"`) so DORM compiles the right dialect for the chosen backend.
+///
+/// Pure, so `seiva db init`/`dev` can write the result and the transform is tested
+/// without a database.
+#[must_use]
+pub fn dorm_schema_from_project(project_schema: &str, provider: &str) -> String {
+    // The project schema is authored for `postgresql`; retarget the datasource.
+    let mut out = project_schema.replace(
+        "provider = \"postgresql\"",
+        &format!("provider = \"{provider}\""),
+    );
+    let anchor = "datasource db {\n";
+    if !out.contains("url ") && !out.contains("url=") {
+        if let Some(pos) = out.find(anchor) {
+            out.insert_str(
+                pos + anchor.len(),
+                "  url      = env(\"DELONIX_ORM_DSN\")\n",
+            );
+        }
+    }
+    out = out.replace("@version", "");
+    out
 }
 
 // --- templates ---------------------------------------------------------------
@@ -284,8 +401,184 @@ fn workspace_cargo_toml(app: &str) -> String {
 
 fn bin_cargo_toml(app: &str) -> String {
     format!(
-        "[package]\nname = \"{app}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n"
+        "[package]\nname = \"{app}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n\
+         # The service runtime: the serve loop, 12-factor config, structured\n\
+         # logging and the shutdown signal. The composition root reuses it instead\n\
+         # of writing its own `main`.\n\
+         seiva-server = \"{FRAMEWORK_VERSION}\"\n\
+         # The HTTP application builder (`router_with_modules` + health +\n\
+         # /openapi.json + /docs); merge your modules' routers through it below.\n\
+         seiva-http = \"{FRAMEWORK_VERSION}\"\n\
+         # The composition root holds the merged module routes as an `axum::Router`.\n\
+         axum = \"0.8\"\n\
+         # Emitting THIS project's contract (`seiva openapi`/`proto`, via SEIVA_EMIT):\n\
+         # the facade registry and the OpenAPI/proto generators, driven by the\n\
+         # linked modules.\n\
+         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-grpc = \"{FRAMEWORK_VERSION}\"\n\
+         serde_json = \"1\"\n\
+         tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
+         tracing = \"0.1\"\n\
+         # Module crates `seiva module new` wires into the composition root:\n\
+         {APP_MODULE_DEPS_ANCHOR}\n"
     )
+}
+
+/// The composition root `main.rs`: a real Seiva server over the runtime's serve
+/// loop. It reads 12-factor config, installs JSON logging, builds the HTTP
+/// application (health, `/openapi.json`, `/docs`) and drains gracefully on
+/// SIGTERM. A new module's router is merged into `app` at the marked line.
+fn app_main_rs(name: &str) -> String {
+    let app = format!("{name}-api");
+    format!(
+        "//! Composition root for `{name}`: the service's `main`. `seiva module new`\n\
+         //! wires each module's router in at the managed anchor below; keep business\n\
+         //! logic out.\n\n\
+         use axum::Router;\n\
+         use seiva_http::{{router_with_modules, Health, HttpSecurity}};\n\
+         use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
+         use std::process::ExitCode;\n\n\
+         #[tokio::main(flavor = \"multi_thread\")]\n\
+         async fn main() -> ExitCode {{\n\
+         \x20   // `seiva openapi` / `seiva proto` run this binary with SEIVA_EMIT set to\n\
+         \x20   // print THIS project's generated contract — from the facades its modules\n\
+         \x20   // register at link time — and exit, instead of serving. Done before\n\
+         \x20   // logging so stdout carries only the document.\n\
+         \x20   if let Ok(kind) = std::env::var(\"SEIVA_EMIT\") {{\n\
+         \x20       return emit_contract(&kind);\n\
+         \x20   }}\n\n\
+         \x20   // Structured JSON logs to stdout before anything else.\n\
+         \x20   observability::init();\n\n\
+         \x20   let config = match ServerConfig::from_process_env() {{\n\
+         \x20       Ok(config) => config,\n\
+         \x20       Err(error) => {{\n\
+         \x20           tracing::error!(%error, \"invalid configuration\");\n\
+         \x20           return ExitCode::FAILURE;\n\
+         \x20       }}\n\
+         \x20   }};\n\n\
+         \x20   let health = Health::starting();\n\
+         \x20   // Transport security posture: secure response headers on, same-origin\n\
+         \x20   // only (no CORS) until you add allowed origins.\n\
+         \x20   let security = HttpSecurity::default();\n\
+         \x20   // No authenticator wired yet, so guarded routes answer 403; supply an\n\
+         \x20   // `Arc<dyn seiva_http::Authenticator>` (see `seiva-identity`) to admit\n\
+         \x20   // callers. `None` leaves public routes serving.\n\
+         \x20   let auth = None;\n\
+         \x20   // Module routers are merged here, BEFORE the framework layers wrap them —\n\
+         \x20   // `router_with_modules` merges then layers, so authn, security headers\n\
+         \x20   // and the rate limit apply to module routes too. `seiva module new`\n\
+         \x20   // inserts each module's merge at the anchor below.\n\
+         \x20   let modules = Router::new();\n\
+         \x20   {MODULE_MERGES_ANCHOR}\n\
+         \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
+         \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
+         \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
+         \x20       Ok(()) => ExitCode::SUCCESS,\n\
+         \x20       Err(error) => {{\n\
+         \x20           tracing::error!(%error, \"serve failed\");\n\
+         \x20           ExitCode::FAILURE\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n\n\
+         /// Emits this project's generated contract from the facades linked into this\n\
+         /// binary (the modules merged above), then exits. Driven by `seiva openapi`.\n\
+         fn emit_contract(kind: &str) -> ExitCode {{\n\
+         \x20   let facades = delonix_seiva::contract::registered_facades();\n\
+         \x20   match kind {{\n\
+         \x20       \"openapi\" => {{\n\
+         \x20           let doc = seiva_openapi::openapi_document(\n\
+         \x20               seiva_openapi::ApiInfo {{\n\
+         \x20                   title: \"{name} API\".to_string(),\n\
+         \x20                   version: \"0.1.0\".to_string(),\n\
+         \x20               }},\n\
+         \x20               &facades,\n\
+         \x20           );\n\
+         \x20           match serde_json::to_string_pretty(&doc) {{\n\
+         \x20               Ok(json) => {{\n\
+         \x20                   println!(\"{{json}}\");\n\
+         \x20                   ExitCode::SUCCESS\n\
+         \x20               }}\n\
+         \x20               Err(error) => {{\n\
+         \x20                   eprintln!(\"seiva: {{error}}\");\n\
+         \x20                   ExitCode::FAILURE\n\
+         \x20               }}\n\
+         \x20           }}\n\
+         \x20       }}\n\
+         \x20       \"proto\" => {{\n\
+         \x20           for facade in &facades {{\n\
+         \x20               println!(\"{{}}\", seiva_grpc::proto_document(facade));\n\
+         \x20           }}\n\
+         \x20           ExitCode::SUCCESS\n\
+         \x20       }}\n\
+         \x20       other => {{\n\
+         \x20           eprintln!(\"seiva: unknown SEIVA_EMIT value `{{other}}` (expected `openapi` or `proto`)\");\n\
+         \x20           ExitCode::FAILURE\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n"
+    )
+}
+
+/// A distroless, multi-stage build recipe for the app binary. The final image
+/// carries only the binary and its runtime libraries — no shell, no package
+/// manager — and runs as a non-root user. Dockerfile-compatible, so `delonix`,
+/// `docker` or `podman` all build it.
+fn delonixfile(app: &str) -> String {
+    format!(
+        "# syntax=docker/dockerfile:1\n\
+         # Multi-stage build producing a distroless, non-root image for `{app}`.\n\n\
+         FROM rust:1-slim AS builder\n\
+         WORKDIR /build\n\
+         COPY . .\n\
+         RUN cargo build --release --bin {app}\n\n\
+         # Distroless: only the binary and its runtime libs; no shell, no apt.\n\
+         FROM gcr.io/distroless/cc-debian12:nonroot AS runtime\n\
+         WORKDIR /app\n\
+         COPY --from=builder /build/target/release/{app} /app/{app}\n\
+         # Bind on all interfaces inside the container; the platform maps the port.\n\
+         ENV SEIVA_HTTP_ADDR=0.0.0.0:8080\n\
+         ENV APP_ENV=production\n\
+         EXPOSE 8080\n\
+         # `:nonroot` already runs as uid 65532. Distroless has no shell for a CMD\n\
+         # healthcheck; Kubernetes uses an httpGet readiness probe on /health/ready.\n\
+         USER nonroot\n\
+         ENTRYPOINT [\"/app/{app}\"]\n"
+    )
+}
+
+/// A `compose.yaml` that builds and runs the service with `delonix stack up`
+/// (or `docker compose up`). Optional backing services (brokers, identity) live
+/// in `compose/*.yaml` and are opted in explicitly, never on by default.
+fn compose_yaml(name: &str) -> String {
+    format!(
+        "# Run with `delonix stack up` (or `docker compose up`).\n\
+         # Optional backing services live in `compose/*.yaml`; opt in explicitly,\n\
+         # e.g. `delonix stack up -f compose.yaml -f compose/postgres.yaml`.\n\
+         services:\n\
+         \x20 {name}:\n\
+         \x20   build:\n\
+         \x20     context: .\n\
+         \x20     dockerfile: Delonixfile\n\
+         \x20   image: {name}:dev\n\
+         \x20   ports:\n\
+         \x20     - \"8080:8080\"\n\
+         \x20   environment:\n\
+         \x20     APP_ENV: production\n\
+         \x20     SEIVA_HTTP_ADDR: 0.0.0.0:8080\n\
+         \x20   # Distroless carries no shell for a CMD healthcheck; readiness is an\n\
+         \x20   # httpGet on /health/ready (Kubernetes) — see docs/first-day.md.\n\
+         \x20   restart: unless-stopped\n\
+         # Placeholder for opt-in backing services; nothing is enabled by default.\n\
+         # To add one: create compose/<service>.yaml and pass it with -f.\n"
+    )
+}
+
+/// The build-context excludes: never ship build output, VCS or secrets into the
+/// image layer.
+fn dockerignore() -> String {
+    "/target\n**/*.rs.bk\n.git\n.env\n".to_owned()
 }
 
 /// A library crate manifest with path dependencies `(package_name, rel_path)`.
@@ -309,12 +602,58 @@ fn module_toml(module: &str) -> String {
     )
 }
 
-/// The relative path, from a module layer crate's directory
-/// (`modules/<module>/<layer>/`), to the framework's `crates/` directory. It
-/// assumes the project is generated next to a framework checkout; a published
-/// project uses version dependencies (`delonix-seiva = "0.1"`) instead, as the
-/// generated manifests note.
-const FRAMEWORK_CRATES: &str = "../../../../crates";
+/// The crates.io version requirement a generated project uses for the framework
+/// crates (`delonix-seiva = "0.1"`, …). Generated manifests depend on the
+/// framework by version, so a project compiles standalone once the crates are
+/// published; it is not tied to a local framework checkout.
+const FRAMEWORK_VERSION: &str = "0.1";
+
+/// The framework crates a generated project names as crates.io dependencies
+/// (`delonix-seiva = "0.1"`, …). Every other framework crate they pull in is
+/// reached transitively, through these crates' own `path`/`workspace`
+/// dependencies, so redirecting just these to a local checkout resolves the
+/// whole graph (see [`workspace_patch_section`]).
+pub const FRAMEWORK_CRATES: [&str; 6] = [
+    "delonix-seiva",
+    "seiva-http",
+    "seiva-ports",
+    "seiva-openapi",
+    "seiva-grpc",
+    "seiva-server",
+];
+
+/// A `[patch.crates-io]` section redirecting every [`FRAMEWORK_CRATES`] entry to
+/// its directory under `<framework_root>/crates`, so a generated project compiles
+/// against a local framework checkout *before* the crates are published to
+/// crates.io. This is the interim that unblocks a standalone `cargo build`: the
+/// manifests keep the published contract (`delonix-seiva = "0.1"`), and this one
+/// section — deletable in a single edit once the crates are on crates.io —
+/// points those versions at the checkout.
+///
+/// `framework_root` is written verbatim into the manifest; pass an absolute path
+/// (forward slashes, which Cargo accepts on every platform) so the project builds
+/// regardless of where it is generated. The CLI resolves it; a fitness test
+/// resolves its own. Pure: the caller appends the returned text to the generated
+/// workspace `Cargo.toml`.
+#[must_use]
+pub fn workspace_patch_section(framework_root: &str) -> String {
+    let root = framework_root.replace('\\', "/");
+    let mut out = String::from(
+        "\n\
+         # INTERIM — remove once the framework crates are published to crates.io.\n\
+         # The manifests above depend on the framework by version (`= \"0.1\"`); until\n\
+         # those versions exist on crates.io, this redirects them to a local\n\
+         # framework checkout so `cargo build` resolves standalone. Regenerate with\n\
+         # `SEIVA_FRAMEWORK_DIR=/path/to/seiva` to point elsewhere.\n\
+         [patch.crates-io]\n",
+    );
+    for krate in FRAMEWORK_CRATES {
+        out.push_str(&format!(
+            "{krate} = {{ path = \"{root}/crates/{krate}\" }}\n"
+        ));
+    }
+    out
+}
 
 /// Converts a validated snake_case name to PascalCase for the facade trait and
 /// its generated descriptor/router names (`order_items` → `OrderItems`).
@@ -360,17 +699,18 @@ fn facade_lib(module: &str, pascal: &str) -> String {
          //! RFC 9457 `Problem` here — the module owns its wire contract. Hence this\n\
          //! layer depends on `delonix-seiva`, `serde` and `seiva-http`.\n\
          #![allow(async_fn_in_trait)]\n\n\
-         use delonix_seiva::facade;\n\
+         use delonix_seiva::{{facade, WireSchema}};\n\
          use seiva_http::{{Problem, Validate, ValidationError}};\n\
          use serde::{{Deserialize, Serialize}};\n\n\
          /// Command DTO: the JSON body of `create`, validated by the controller's\n\
          /// `Valid<T>` extractor. Rename `Record`/`title` to the real shape.\n\
-         #[derive(Debug, Clone, Deserialize, Serialize)]\n\
+         /// `WireSchema` publishes its real fields to the OpenAPI document.\n\
+         #[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]\n\
          pub struct CreateRecord {{\n    /// The record's title; must be non-empty after trimming.\n    pub title: String,\n}}\n\n\
          impl Validate for CreateRecord {{\n    fn validate(&self) -> Result<(), ValidationError> {{\n        if self.title.trim().is_empty() {{\n            return Err(ValidationError::new(\"title must not be empty\"));\n        }}\n        Ok(())\n    }}\n}}\n\n\
          /// Response DTO: what `create` returns. Never a domain type — the\n\
          /// application layer maps the domain entity to this at the boundary.\n\
-         #[derive(Debug, Clone, PartialEq, Eq, Serialize)]\n\
+         #[derive(Debug, Clone, PartialEq, Eq, Serialize, WireSchema)]\n\
          pub struct RecordDto {{\n    /// The record's identifier.\n    pub id: u128,\n    /// The record's title.\n    pub title: String,\n}}\n\n\
          /// The facade's error type. The controller maps it to an RFC 9457 problem\n\
          /// via this `Into<Problem>`, so the module owns how failures surface.\n\
@@ -475,51 +815,51 @@ fn interface_lib(snake: &str, pascal: &str) -> String {
          //! to the real framework transports.\n\
          //!\n\
          //! LAYERING DECISION: the `#[seiva::controller]` lives HERE, not in\n\
-         //! `application`, so the application layer stays transport-free (it depends\n\
-         //! only on `domain`, `facade` and `seiva-ports`, like the canonical\n\
-         //! example). The controller is applied to the CONCRETE [`{pascal}Controller`]\n\
-         //! adapter, which delegates to the module's default service wired here.\n\
-         //! A concrete self type is required: `#[seiva::controller]` dispatches\n\
-         //! through the facade trait, whose `async fn` methods are only known to\n\
-         //! return `Send` futures (as axum's router demands) for a concrete type —\n\
-         //! a generic service would leave the trait's return-position future\n\
-         //! unbounded. The composition root in `apps/` can build its own router over\n\
-         //! a different service by wrapping it the same way.\n\
+         //! `application`, so the application layer stays transport-free. The\n\
+         //! controller [`{pascal}Controller<R, G>`] is GENERIC over the repository\n\
+         //! and id-generator ports, so this layer depends only on `application` (the\n\
+         //! service and the `RecordRepository` port) and NEVER on `infrastructure` —\n\
+         //! the layering rule forbids `interface -> infrastructure`. A concrete self\n\
+         //! type is still what `#[seiva::controller]` dispatches through, but\n\
+         //! `{pascal}Controller<R, G>` is concrete once the ports are chosen, and the\n\
+         //! macro propagates the generics + their bounds onto the generated router.\n\
          //!\n\
          //! The macro generates a `{snake}_router(service)` builder whose route\n\
          //! version and per-route permission come from the facade descriptor at run\n\
-         //! time. The same descriptor drives this module's OpenAPI and proto\n\
-         //! documents ([`openapi`] and [`proto`]), so the wire contract is\n\
-         //! generated, never hand-maintained.\n\
+         //! time. The COMPOSITION ROOT in `apps/` picks the concrete adapters and\n\
+         //! calls `{snake}_router({pascal}Controller::new(repo, ids))`. The same\n\
+         //! descriptor drives this module's OpenAPI document ([`openapi`]), so the\n\
+         //! wire contract is generated, never hand-maintained.\n\
          //!\n\
          //! The generated handlers return `Result<_, seiva_http::Problem>`, a large\n\
          //! value, so the large-`Err` lint is allowed crate-wide (as `seiva-http`\n\
          //! itself does).\n\
          #![allow(clippy::result_large_err)]\n\n\
+         use std::sync::Arc;\n\n\
          use delonix_seiva::contract::Facade;\n\
          use delonix_seiva::controller;\n\
-         use {snake}_application::RecordService;\n\
-         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\
-         use {snake}_infrastructure::{{CounterIdGenerator, InMemoryRecordRepository}};\n\n\
-         /// The module's default, in-memory `{pascal}` service: the application\n\
-         /// service over the in-memory repository and counter id generator. Swap\n\
-         /// these ports (e.g. a DORM-backed repository) in the composition root.\n\
-         pub type DefaultService = RecordService<InMemoryRecordRepository, CounterIdGenerator>;\n\n\
-         /// Transport adapter: a concrete `{pascal}` service exposed over HTTP. It is\n\
-         /// `Clone` so the generated `{snake}_router` can hold it as axum state.\n\
-         #[derive(Clone)]\n\
-         pub struct {pascal}Controller(pub DefaultService);\n\n\
-         impl {pascal}Controller {{\n    /// Builds the controller over the default in-memory service.\n    pub fn new() -> Self {{\n        {pascal}Controller(RecordService {{\n            repository: InMemoryRecordRepository::new(),\n            ids: CounterIdGenerator::default(),\n        }})\n    }}\n}}\n\n\
-         impl Default for {pascal}Controller {{\n    fn default() -> Self {{\n        Self::new()\n    }}\n}}\n\n\
+         use seiva_ports::IdGenerator;\n\
+         use {snake}_application::{{RecordRepository, RecordService}};\n\
+         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\n\
+         /// Transport adapter: a concrete `{pascal}` service exposed over HTTP,\n\
+         /// generic over the repository port `R` and the id-generator port `G`.\n\
+         /// Held behind an [`Arc`] so it is `Clone + Send + Sync + 'static` — the\n\
+         /// bound the generated `{snake}_router` places on its axum state — without\n\
+         /// requiring the service or its ports to be `Clone`.\n\
+         pub struct {pascal}Controller<R, G>(Arc<RecordService<R, G>>);\n\n\
+         // Manual `Clone` (not derived): the controller is `Clone` for ANY `R`/`G`\n\
+         // because it only holds an `Arc`; the derive would wrongly demand both be\n\
+         // `Clone`.\n\
+         impl<R, G> Clone for {pascal}Controller<R, G> {{\n    fn clone(&self) -> Self {{\n        Self(Arc::clone(&self.0))\n    }}\n}}\n\n\
+         impl<R: RecordRepository, G: IdGenerator> {pascal}Controller<R, G> {{\n    /// Builds the controller over the given ports. The composition root in\n    /// `apps/` chooses them (the in-memory adapters, or DORM-backed ones); the\n    /// interface never names a concrete adapter.\n    pub fn new(repository: R, ids: G) -> Self {{\n        {pascal}Controller(Arc::new(RecordService {{ repository, ids }}))\n    }}\n}}\n\n\
          #[controller]\n\
-         impl {pascal} for {pascal}Controller {{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n}}\n\n\
-         /// Builds the module's HTTP router, wired to the default in-memory service.\n\
-         /// Merge it into the application router in the composition root.\n\
-         pub fn router() -> ::axum::Router {{\n    {snake}_router({pascal}Controller::new())\n}}\n\n\
+         impl<R, G> {pascal} for {pascal}Controller<R, G>\n\
+         where\n    R: RecordRepository + Send + Sync + 'static,\n    G: IdGenerator + Send + Sync + 'static,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n}}\n\n\
          /// The module's OpenAPI 3.1 document, generated from the facade descriptor.\n\
-         pub fn openapi() -> serde_json::Value {{\n    seiva_openapi::openapi_document(\n        seiva_openapi::ApiInfo {{\n            title: \"{snake} API\".to_string(),\n            version: {pascal}Facade::DESCRIPTOR.version.to_string(),\n        }},\n        &[{pascal}Facade::DESCRIPTOR],\n    )\n}}\n\n\
-         /// The module's proto3 service document, generated from the facade descriptor.\n\
-         pub fn proto() -> String {{\n    seiva_grpc::proto_document(&{pascal}Facade::DESCRIPTOR)\n}}\n"
+         /// (A proto3 document is available from the same descriptor via\n\
+         /// `seiva proto`; it is not generated per-module to keep this crate free\n\
+         /// of the gRPC generator.)\n\
+         pub fn openapi() -> serde_json::Value {{\n    seiva_openapi::openapi_document(\n        seiva_openapi::ApiInfo {{\n            title: \"{snake} API\".to_string(),\n            version: {pascal}Facade::DESCRIPTOR.version.to_string(),\n        }},\n        &[{pascal}Facade::DESCRIPTOR],\n    )\n}}\n"
     )
 }
 
@@ -529,14 +869,14 @@ fn facade_cargo_toml(module: &str) -> String {
     format!(
         "[package]\nname = \"{module}-facade\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
          [dependencies]\n\
-         # The framework macros (`#[facade]`) and contract descriptor. A published\n\
-         # project uses a version dependency (`delonix-seiva = \"0.1\"`); this scaffold\n\
-         # uses a path so it builds against a local framework checkout. The data\n\
-         # layer is off here — the facade needs none.\n\
-         delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
+         # The framework macros (`#[facade]`) and contract descriptor. The project\n\
+         # depends on the framework by version (`delonix-seiva = \"0.1\"`); until those\n\
+         # crates are published, the workspace root's `[patch.crates-io]` redirects\n\
+         # them to a local checkout. The data layer is off here — the facade needs none.\n\
+         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          # The controller uses the facade's own DTOs as wire types, so the write DTO\n\
          # implements `seiva_http::Validate` and the error maps to `seiva_http::Problem`.\n\
-         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
+         seiva-http = \"{FRAMEWORK_VERSION}\"\n\
          serde = {{ version = \"1\", features = [\"derive\"] }}\n"
     )
 }
@@ -559,7 +899,7 @@ fn application_cargo_toml(module: &str) -> String {
          # The trait-only cross-cutting ports. The application codes against these,\n\
          # NEVER against `delonix-seiva`, `seiva-http` or DORM — that is what keeps\n\
          # it transport- and data-layer-independent.\n\
-         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\n\
+         seiva-ports = \"{FRAMEWORK_VERSION}\"\n\n\
          [dev-dependencies]\n\
          tokio = {{ version = \"1\", features = [\"rt\", \"macros\"] }}\n"
     )
@@ -571,7 +911,7 @@ fn infrastructure_cargo_toml(module: &str) -> String {
          [dependencies]\n\
          {module}-application = {{ path = \"../application\" }}\n\
          {module}-domain = {{ path = \"../domain\" }}\n\
-         seiva-ports = {{ path = \"{FRAMEWORK_CRATES}/seiva-ports\" }}\n\
+         seiva-ports = \"{FRAMEWORK_VERSION}\"\n\
          # A DORM-backed repository arrives through the `seiva-data-dorm` gateway\n\
          # behind a `dorm` feature; the default in-memory adapter pulls in no ORM.\n"
     )
@@ -582,17 +922,18 @@ fn interface_cargo_toml(module: &str) -> String {
         "[package]\nname = \"{module}-interface\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
          [dependencies]\n\
          {module}-facade = {{ path = \"../facade\" }}\n\
-         # The transport wires a default concrete service (application over the\n\
-         # in-memory infrastructure adapters) so the module ships a runnable router.\n\
-         # A production composition root in `apps/` can wrap a different service.\n\
+         # The controller is generic over the repository and id-generator ports, so\n\
+         # the interface depends on `application` (the service + the repository\n\
+         # port) but NEVER on `infrastructure` — the layering rule forbids\n\
+         # `interface -> infrastructure`. The composition root in `apps/` injects\n\
+         # the concrete adapters.\n\
          {module}-application = {{ path = \"../application\" }}\n\
-         {module}-infrastructure = {{ path = \"../infrastructure\" }}\n\
          # The controller macro + contract, the HTTP primitives it emits, and the\n\
-         # OpenAPI/proto generators — all driven by the facade descriptor.\n\
-         delonix-seiva = {{ path = \"{FRAMEWORK_CRATES}/delonix-seiva\", default-features = false }}\n\
-         seiva-http = {{ path = \"{FRAMEWORK_CRATES}/seiva-http\" }}\n\
-         seiva-grpc = {{ path = \"{FRAMEWORK_CRATES}/seiva-grpc\" }}\n\
-         seiva-openapi = {{ path = \"{FRAMEWORK_CRATES}/seiva-openapi\" }}\n\
+         # OpenAPI generator — all driven by the facade descriptor.\n\
+         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva-http = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-ports = \"{FRAMEWORK_VERSION}\"\n\
          axum = \"0.8\"\n\
          serde_json = \"1\"\n"
     )
@@ -629,6 +970,157 @@ mod tests {
         assert!(paths.contains(&"schema/shop.schema"));
         assert!(paths.contains(&"apps/shop-api/Cargo.toml"));
         assert!(paths.contains(&"shared/kernel/src/lib.rs"));
+        // Cloud-native packaging is part of the skeleton.
+        assert!(paths.contains(&"Delonixfile"));
+        assert!(paths.contains(&"compose.yaml"));
+        assert!(paths.contains(&".dockerignore"));
+    }
+
+    /// The generated project is cloud-native-ready: the composition root is a
+    /// real server (not a stub), and the image recipe is a distroless,
+    /// multi-stage, non-root build. This is the fitness function for Part D.
+    #[test]
+    fn project_is_cloud_native_ready() {
+        let files = project_files("shop").unwrap();
+        let get = |path: &str| {
+            files
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap_or_else(|| panic!("missing {path}"))
+                .contents
+                .as_str()
+        };
+
+        // The app is a real Seiva server, not the old println! stub.
+        let main = get("apps/shop-api/src/main.rs");
+        assert!(main.contains("serve_router"), "app must run the serve loop");
+        assert!(
+            main.contains("observability::init"),
+            "app must log structured"
+        );
+        assert!(main.contains("Health::starting"), "app must expose health");
+        // The old hello-world stub is gone: this is a real serve loop, not a
+        // greeting. (`println!` legitimately appears now, in the SEIVA_EMIT path
+        // that prints the OpenAPI document.)
+        assert!(!main.contains("Hello"), "the hello-world stub must be gone");
+        assert!(
+            main.contains("serve_router") && main.contains("router_with_modules"),
+            "the composition root runs the real serve loop"
+        );
+
+        // The composition root merges modules BEFORE the framework layers wrap
+        // them, via `router_with_modules` — so authn/security/rate-limit apply to
+        // module routes. The `router(health).merge(..)` shape (merge AFTER
+        // layering, leaving module routes uncovered) must not appear, not even in
+        // a comment that a developer would copy.
+        assert!(
+            main.contains("router_with_modules(health.clone(), &security, auth, modules)"),
+            "app must compose through router_with_modules"
+        );
+        assert!(
+            !main.contains("router(health).merge("),
+            "the merge-after-layering shape must be gone"
+        );
+
+        // The Delonixfile is distroless, multi-stage and non-root.
+        let dockerfile = get("Delonixfile");
+        assert!(dockerfile.contains("AS builder"), "multi-stage");
+        assert!(
+            dockerfile.contains("distroless"),
+            "final image must be distroless"
+        );
+        assert!(dockerfile.contains("USER nonroot"), "must not run as root");
+        assert!(dockerfile.contains("cargo build --release --bin shop-api"));
+
+        // Compose builds from the Delonixfile and maps the port.
+        let compose = get("compose.yaml");
+        assert!(compose.contains("dockerfile: Delonixfile"));
+        assert!(compose.contains("8080:8080"));
+    }
+
+    /// The framework workspace root, resolved from this crate's manifest dir
+    /// (`<root>/crates/delonix-seiva`). The fitness build points the generated
+    /// project's `[patch.crates-io]` here.
+    fn framework_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("manifest dir is <root>/crates/delonix-seiva")
+            .to_path_buf()
+    }
+
+    /// Writes `files` (paths relative to `root`), creating parent directories.
+    fn write_all(root: &std::path::Path, files: &[GeneratedFile]) {
+        for file in files {
+            let full = root.join(&file.path);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).expect("create parent dir");
+            }
+            std::fs::write(&full, &file.contents).expect("write generated file");
+        }
+    }
+
+    /// The fitness function for the standalone-compile blocker: generate a
+    /// project AND a module, redirect the framework crates to this checkout with
+    /// the same `[patch.crates-io]` the CLI emits, and actually run `cargo build`.
+    ///
+    /// This COMPILES the generated code — it is not a string assertion on the
+    /// manifests — so it catches drift between the templates and the real
+    /// framework API (a renamed `router_with_modules`, a changed controller
+    /// macro, a moved `seiva-ports` item) that a manifest-text check cannot. It
+    /// exercises both the app composition root and all five module layers.
+    ///
+    /// A persistent `CARGO_TARGET_DIR` keeps reruns fast; the project tree itself
+    /// is a fresh temp dir removed on the way in and out.
+    #[test]
+    fn generated_project_compiles_standalone() {
+        let root = framework_root();
+        let work =
+            std::env::temp_dir().join(format!("seiva-scaffold-fitness-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).expect("create work dir");
+
+        // Project skeleton, then a module, then the workspace registration edit
+        // the CLI performs so the module crates are built too.
+        let mut project = project_files("demo").expect("project files");
+        let modules = module_files("notes").expect("module files");
+        let cargo = project
+            .iter()
+            .find(|f| f.path == "Cargo.toml")
+            .expect("workspace manifest")
+            .contents
+            .clone();
+        let registered = add_members_to_workspace(&cargo, "notes").expect("register module");
+        // The interim patch redirecting `= "0.1"` to this checkout — exactly what
+        // `seiva project new` appends.
+        let with_patch = format!(
+            "{registered}{}",
+            workspace_patch_section(&root.to_string_lossy())
+        );
+        project
+            .iter_mut()
+            .find(|f| f.path == "Cargo.toml")
+            .expect("workspace manifest")
+            .contents = with_patch;
+
+        write_all(&work, &project);
+        write_all(&work, &modules);
+
+        let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+        let target_dir = std::env::temp_dir().join("seiva-scaffold-fitness-target");
+        let status = std::process::Command::new(cargo_bin)
+            .arg("build")
+            .current_dir(&work)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .status()
+            .expect("run cargo build on the generated project");
+
+        let _ = std::fs::remove_dir_all(&work);
+        assert!(
+            status.success(),
+            "the generated project must compile standalone (rc {:?})",
+            status.code()
+        );
     }
 
     /// Looks up a generated file's contents by its exact path.
@@ -681,6 +1173,29 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "modules/notes/module.toml"));
     }
 
+    /// Fitness: the generated `interface` layer must NOT declare a production
+    /// dependency on the module's `infrastructure` crate — the layering rule
+    /// (`interface -> infrastructure` forbidden) that `seiva lint` enforces. The
+    /// controller is generic over the ports, so `interface` names only
+    /// `application`; the composition root injects the concrete adapters.
+    #[test]
+    fn generated_interface_does_not_depend_on_infrastructure() {
+        let files = module_files("notes").unwrap();
+        let cargo = contents(&files, "modules/notes/interface/Cargo.toml");
+        let deps = cargo
+            .split("[dev-dependencies]")
+            .next()
+            .expect("the [dependencies] section precedes any dev-dependencies");
+        assert!(
+            !deps.contains("notes-infrastructure"),
+            "generated interface must not depend on infrastructure in production:\n{deps}"
+        );
+        assert!(
+            deps.contains("notes-application"),
+            "generated interface depends on application (allowed):\n{deps}"
+        );
+    }
+
     #[test]
     fn every_generated_lib_has_balanced_brackets() {
         let files = module_files("order_items").unwrap();
@@ -704,7 +1219,7 @@ mod tests {
         let files = module_files("notes").unwrap();
         let facade = contents(&files, "modules/notes/facade/src/lib.rs");
         // The macro is imported and applied with an explicit version.
-        assert!(facade.contains("use delonix_seiva::facade;"));
+        assert!(facade.contains("use delonix_seiva::{facade, WireSchema};"));
         assert!(facade.contains("#[facade(version = \"v1\")]"));
         // At least one method carries a `#[requires(..)]`, keyed to the module.
         assert!(facade.contains("#[requires(\"notes.create\")]"));
@@ -714,8 +1229,9 @@ mod tests {
             "async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError>;"
         ));
         // Wire DTOs: serde + Validate on the write DTO, Serialize on the response,
-        // error → Problem mapping. This is the controller-test shape.
-        assert!(facade.contains("#[derive(Debug, Clone, Deserialize, Serialize)]"));
+        // WireSchema so the OpenAPI document carries the real fields, error →
+        // Problem mapping. This is the controller-test shape.
+        assert!(facade.contains("#[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]"));
         assert!(facade.contains("impl Validate for CreateRecord"));
         assert!(facade.contains("impl From<RecordError> for Problem"));
     }
@@ -758,25 +1274,25 @@ mod tests {
     fn generated_interface_holds_controller_and_transport_generation() {
         let files = module_files("notes").unwrap();
         let interface = contents(&files, "modules/notes/interface/src/lib.rs");
-        // The controller macro is imported and applied to a concrete adapter impl
-        // (a concrete self type is required for the generated router to be Send).
+        // The controller macro is imported and applied to a GENERIC adapter impl:
+        // generic over the repository/id-generator ports, so the interface never
+        // names the infrastructure crate (the layering rule).
         assert!(interface.contains("use delonix_seiva::controller;"));
         assert!(interface.contains("#[controller]"));
-        assert!(interface.contains("pub struct NotesController(pub DefaultService);"));
-        assert!(interface.contains("impl Notes for NotesController {"));
-        // The default service is composed from the application + infrastructure.
-        assert!(interface.contains(
-            "pub type DefaultService = RecordService<InMemoryRecordRepository, CounterIdGenerator>;"
-        ));
-        assert!(interface.contains("use notes_application::RecordService;"));
-        assert!(interface
-            .contains("use notes_infrastructure::{CounterIdGenerator, InMemoryRecordRepository};"));
-        // A runnable router builder that calls the macro-generated `notes_router`.
-        assert!(interface.contains("pub fn router() -> ::axum::Router {"));
-        assert!(interface.contains("notes_router(NotesController::new())"));
-        // Transport generation from the facade descriptor.
+        assert!(interface.contains("pub struct NotesController<R, G>(Arc<RecordService<R, G>>);"));
+        assert!(interface.contains("impl<R, G> Notes for NotesController<R, G>"));
+        // It depends on application (allowed), NOT infrastructure.
+        assert!(interface.contains("use notes_application::{RecordRepository, RecordService};"));
+        assert!(!interface.contains("notes_infrastructure"));
+        // The ports are injected via `new(repository, ids)`; there is no no-arg
+        // `router()` default that would need to name a concrete adapter.
+        assert!(interface.contains("pub fn new(repository: R, ids: G) -> Self {"));
+        assert!(!interface.contains("pub fn router()"));
+        // OpenAPI generation from the facade descriptor. Proto generation is NOT
+        // per-module (it would pull the gRPC generator into every module crate);
+        // it is available from the same descriptor via the `seiva proto` CLI.
         assert!(interface.contains("seiva_openapi::openapi_document("));
-        assert!(interface.contains("seiva_grpc::proto_document(&NotesFacade::DESCRIPTOR)"));
+        assert!(!interface.contains("seiva_grpc"));
         assert!(interface.contains("NotesFacade::DESCRIPTOR"));
         // The large-Err lint allowance the generated handlers need.
         assert!(interface.contains("#![allow(clippy::result_large_err)]"));
@@ -786,16 +1302,19 @@ mod tests {
     fn module_manifests_depend_on_the_right_framework_crates() {
         let files = module_files("notes").unwrap();
 
+        // The framework crates are depended on by crates.io VERSION (so a
+        // generated project compiles standalone once they are published); the
+        // intra-project layer crates stay `path`.
         let facade = contents(&files, "modules/notes/facade/Cargo.toml");
-        assert!(facade.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\", default-features = false }"));
-        assert!(facade.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
+        assert!(facade.contains("delonix-seiva = { version = \"0.1\", default-features = false }"));
+        assert!(facade.contains("seiva-http = \"0.1\""));
         assert!(facade.contains("serde = { version = \"1\", features = [\"derive\"] }"));
 
         // The application depends on the ports, never on the transport/framework.
         let app = contents(&files, "modules/notes/application/Cargo.toml");
         assert!(app.contains("notes-domain = { path = \"../domain\" }"));
         assert!(app.contains("notes-facade = { path = \"../facade\" }"));
-        assert!(app.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
+        assert!(app.contains("seiva-ports = \"0.1\""));
         // No transport/framework DEPENDENCY entries (the prose may name them).
         assert!(
             !app.contains("seiva-http = {"),
@@ -808,19 +1327,23 @@ mod tests {
 
         let infra = contents(&files, "modules/notes/infrastructure/Cargo.toml");
         assert!(infra.contains("notes-application = { path = \"../application\" }"));
-        assert!(infra.contains("seiva-ports = { path = \"../../../../crates/seiva-ports\" }"));
+        assert!(infra.contains("seiva-ports = \"0.1\""));
 
-        // The interface carries the transport crates + the layers it composes.
+        // The interface carries the transport crates + `application` (allowed),
+        // but NOT `infrastructure` (the layering rule forbids it).
         let interface = contents(&files, "modules/notes/interface/Cargo.toml");
         assert!(interface.contains("notes-facade = { path = \"../facade\" }"));
         assert!(interface.contains("notes-application = { path = \"../application\" }"));
-        assert!(interface.contains("notes-infrastructure = { path = \"../infrastructure\" }"));
-        assert!(interface.contains("delonix-seiva = { path = \"../../../../crates/delonix-seiva\""));
-        assert!(interface.contains("seiva-http = { path = \"../../../../crates/seiva-http\" }"));
-        assert!(interface.contains("seiva-grpc = { path = \"../../../../crates/seiva-grpc\" }"));
         assert!(
-            interface.contains("seiva-openapi = { path = \"../../../../crates/seiva-openapi\" }")
+            !interface.contains("notes-infrastructure = {"),
+            "interface must not depend on infrastructure (layering rule)"
         );
+        assert!(interface.contains("seiva-ports = \"0.1\""));
+        assert!(interface.contains("delonix-seiva = { version = \"0.1\""));
+        assert!(interface.contains("seiva-http = \"0.1\""));
+        // No seiva-grpc: proto generation is not per-module (it is a CLI tool).
+        assert!(!interface.contains("seiva-grpc"));
+        assert!(interface.contains("seiva-openapi = \"0.1\""));
         assert!(interface.contains("axum = \"0.8\""));
         assert!(interface.contains("serde_json = \"1\""));
     }
@@ -855,6 +1378,127 @@ mod tests {
     }
 
     #[test]
+    fn app_manifest_wiring_inserts_module_deps() {
+        let cargo = bin_cargo_toml("shop-api");
+        let out = add_module_to_app_manifest(&cargo, "notes").unwrap();
+        assert!(out.contains("notes-interface = { path = \"../../modules/notes/interface\" }"));
+        assert!(out
+            .contains("notes-infrastructure = { path = \"../../modules/notes/infrastructure\" }"));
+        // The deps land before the managed anchor, which survives for the next module.
+        assert!(out.contains(APP_MODULE_DEPS_ANCHOR));
+        // Idempotence: a second insert of the same module is refused.
+        assert!(add_module_to_app_manifest(&out, "notes").is_err());
+    }
+
+    #[test]
+    fn main_wiring_inserts_router_merge() {
+        let main = app_main_rs("shop");
+        let out = wire_module_in_main(&main, "order_items").unwrap();
+        // The merge uses the module's generated router + controller + in-memory
+        // adapters, and the PascalCase controller name.
+        assert!(out.contains("order_items_interface::order_items_router("));
+        assert!(out.contains("order_items_interface::OrderItemsController::new("));
+        assert!(out.contains("order_items_infrastructure::InMemoryRecordRepository::new()"));
+        // The anchor remains for the next module, and `modules` is shadowed (merged).
+        assert!(out.contains(MODULE_MERGES_ANCHOR));
+        assert!(out.contains("let modules = modules.merge("));
+        assert!(wire_module_in_main(&out, "order_items").is_err());
+    }
+
+    /// Fitness for P0-3 (runtime facade discovery): a scaffolded project, with a
+    /// module auto-wired into its composition root exactly as `seiva module new`
+    /// does, emits **its own** OpenAPI document — the module's route, resolved
+    /// from the facade the binary links at run time (`SEIVA_EMIT=openapi`), not
+    /// the CLI's built-in demo. Proves the whole discovery path by running it.
+    #[test]
+    fn generated_project_emits_its_own_openapi() {
+        let root = framework_root();
+        let work =
+            std::env::temp_dir().join(format!("seiva-scaffold-openapi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).expect("create work dir");
+
+        // A distinctly named module so its route could only come from the project.
+        let module = "widgets";
+        let mut project = project_files("shop").expect("project files");
+        let modules = module_files(module).expect("module files");
+
+        // Apply every edit `seiva module new` performs: workspace members + the
+        // interim patch, the app crate's module deps, and the main.rs merge.
+        let edit = |files: &mut Vec<GeneratedFile>, path: &str, f: &dyn Fn(&str) -> String| {
+            let file = files.iter_mut().find(|g| g.path == path).expect(path);
+            file.contents = f(&file.contents);
+        };
+        edit(&mut project, "Cargo.toml", &|s| {
+            let members = add_members_to_workspace(s, module).expect("register module");
+            format!(
+                "{members}{}",
+                workspace_patch_section(&root.to_string_lossy())
+            )
+        });
+        edit(&mut project, "apps/shop-api/Cargo.toml", &|s| {
+            add_module_to_app_manifest(s, module).expect("app manifest wiring")
+        });
+        edit(&mut project, "apps/shop-api/src/main.rs", &|s| {
+            wire_module_in_main(s, module).expect("main wiring")
+        });
+
+        write_all(&work, &project);
+        write_all(&work, &modules);
+
+        let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+        let target_dir = std::env::temp_dir().join("seiva-scaffold-fitness-target");
+        let output = std::process::Command::new(cargo_bin)
+            .args(["run", "--quiet", "--bin", "shop-api"])
+            .current_dir(&work)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("SEIVA_EMIT", "openapi")
+            .output()
+            .expect("run the generated binary with SEIVA_EMIT=openapi");
+
+        assert!(
+            output.status.success(),
+            "the generated binary must emit its OpenAPI (rc {:?}); stderr:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let doc: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("the emitted document is JSON");
+        assert!(
+            doc["paths"]["/v1/widgets"].is_object(),
+            "the project's own module route must be documented; got paths: {:?}",
+            doc["paths"]
+                .as_object()
+                .map(|m| m.keys().collect::<Vec<_>>())
+        );
+
+        // The same binary also emits the project's proto3 (SEIVA_EMIT=proto),
+        // from the same linked facade — the generated-contracts symmetry (P2-12).
+        let proto = std::process::Command::new(
+            std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned()),
+        )
+        .args(["run", "--quiet", "--bin", "shop-api"])
+        .current_dir(&work)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("SEIVA_EMIT", "proto")
+        .output()
+        .expect("run the generated binary with SEIVA_EMIT=proto");
+
+        let _ = std::fs::remove_dir_all(&work);
+        assert!(
+            proto.status.success(),
+            "the generated binary must emit its proto (rc {:?}); stderr:\n{}",
+            proto.status.code(),
+            String::from_utf8_lossy(&proto.stderr)
+        );
+        let proto = String::from_utf8_lossy(&proto.stdout);
+        assert!(
+            proto.contains("service Widgets {") && proto.contains("syntax = \"proto3\";"),
+            "the project's own module must be a proto service; got:\n{proto}"
+        );
+    }
+
+    #[test]
     fn seiva_toml_registration_appends_section() {
         let seiva = seiva_toml("shop");
         let out = register_module_in_seiva_toml(&seiva, "notes").unwrap();
@@ -863,10 +1507,41 @@ mod tests {
     }
 
     #[test]
+    fn project_name_reads_the_manifest() {
+        assert_eq!(project_name(&seiva_toml("shop")).as_deref(), Some("shop"));
+        assert_eq!(project_name("not = valid").as_deref(), None);
+        assert_eq!(project_name("[other]\nname = \"x\"").as_deref(), None);
+    }
+
+    #[test]
     fn namespace_block_is_appended_once() {
         let schema = project_schema();
         let out = append_namespace_block(&schema, "notes").unwrap();
         assert!(out.contains("namespace notes {"));
         assert!(append_namespace_block(&out, "notes").is_err());
+    }
+
+    #[test]
+    fn dorm_schema_adapts_the_project_schema() {
+        // A project schema with a module namespace (and the scaffold's `@version`).
+        let project = append_namespace_block(&project_schema(), "notes").unwrap();
+        let dorm = dorm_schema_from_project(&project, "postgresql");
+        // The datasource gains the env-driven URL DORM's migrate needs.
+        assert!(dorm.contains("url      = env(\"DELONIX_ORM_DSN\")"));
+        // The module namespace and its model pass through (shared DSL).
+        assert!(dorm.contains("namespace notes {"));
+        assert!(dorm.contains("model Record {"));
+        assert!(dorm.contains("id      Uuid   @id"));
+        // `@version` is dropped (DORM's parser rejects it); the column remains.
+        assert!(!dorm.contains("@version"));
+        assert!(dorm.contains("version Int"));
+        // Idempotent on the URL: running it again does not add a second one.
+        let twice = dorm_schema_from_project(&dorm, "postgresql");
+        assert_eq!(twice.matches("DELONIX_ORM_DSN").count(), 1);
+
+        // A non-PG backend retargets the datasource provider.
+        let my = dorm_schema_from_project(&project, "mysql");
+        assert!(my.contains("provider = \"mysql\""));
+        assert!(!my.contains("provider = \"postgresql\""));
     }
 }

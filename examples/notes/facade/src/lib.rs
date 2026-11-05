@@ -5,16 +5,16 @@
 
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::facade;
+use delonix_seiva::{facade, WireSchema};
 
 /// Command DTO: the input to `create`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, WireSchema)]
 pub struct CreateNote {
     pub title: String,
 }
 
 /// Response DTO: what `create`/`get` return. Never a domain type.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, WireSchema)]
 pub struct NoteDto {
     pub id: u128,
     pub title: String,

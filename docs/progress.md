@@ -326,3 +326,206 @@
 Para o Seiva avançar além do núcleo precisa de: API de biblioteca do DORM
 (DORM-B4), namespaces (DORM-B2), primitivas transaccionais (DORM-B3) e a saída
 do `dorm-messaging` → `seiva-messaging` (DORM-A). Ver `../DORM/docs/progress-dorm-seiva.md`.
+
+## Auditoria de segurança S1 (2026-11-04) — OWASP API Top 10 + gate CVE
+
+Fase S1 da auditoria de segurança. Controlos acrescentados ao transporte e ao CI:
+
+- **API8** — `seiva-http::security`: headers de segurança por omissão (CSP, HSTS,
+  nosniff, X-Frame-Options, Referrer-Policy) + CORS por allowlist explícita.
+- **API4** — `seiva-http::rate_limit`: rate limiting por IP, janela fixa, relógio
+  injetado; `seiva-server` serve com `ConnectInfo` para a chave ser o IP real.
+- **API1/BOLA** — `seiva-http::guard::Principal` ganha `tenant` + `owns`/
+  `require_owns` (verificação de posse object-level onde o recurso é conhecido).
+- **API2** — `seiva-auth::LoginThrottle`: lockout/throttling de tentativas.
+- **Gate CVE/KEV** — `deny.toml` + job `audit` no CI (cargo-deny). Gate duro sobre
+  features por omissão (limpo hoje); passo informativo `--all-features`.
+
+### Dívida rastreada — advisories dos backends de broker opcionais de `seiva-messaging`
+
+O gate `--all-features` expõe 8 advisories RUSTSEC, **todos** em backends opcionais
+(features `nats`/`amqp`/`kafka`, `default = []`; um build Seiva por omissão não os
+puxa). O fix real é subir os majors dos clientes de broker (trabalho separado,
+precisa de validação da crate `seiva-messaging`):
+
+- `async-nats 0.45` → `rustls-webpki 0.102.8`: **5 vulnerabilidades** de verificação
+  de certificados — RUSTSEC-2026-0049, -0098, -0099, -0104, -0382. Subir `async-nats`.
+- `lapin 2.5` → `instant` (RUSTSEC-2024-0384) e `rustls-pemfile` (RUSTSEC-2025-0134),
+  ambos *unmaintained*. Subir `lapin`/`tcp-stream`.
+- `rskafka 0.5` → `zstd-safe 6` (RUSTSEC-2026-0403). Subir `rskafka`.
+
+**Decisão do dono pendente:** (a) manter o gate duro sobre default + fix dos brokers
+numa sessão dedicada [recomendado]; ou (b) gate `--all-features` com as 8 exceções
+datadas em `deny.toml` até ao bump. Hoje está em (a).
+
+## S3 — Cloud native real (2026-11-04)
+
+- **App gerado = servidor real**: `apps/<name>-api/main.rs` usa `serve_router` +
+  `observability::init` + `Health` + graceful shutdown (fim do stub `println!`).
+- **Observabilidade**: `seiva_server::observability::init()` instala subscriber
+  `tracing` JSON para stdout (12-factor; fecha a lacuna do S0).
+- **Packaging**: o scaffold emite `Delonixfile` (multi-stage, distroless
+  `cc-debian12:nonroot`, não-root), `compose.yaml` e `.dockerignore`.
+- **`seiva start`**: corre o app em dev; hot-reload via `cargo watch` se presente.
+- **Fitness**: teste `project_is_cloud_native_ready` (app real + Delonixfile
+  distroless/multi-stage/não-root + compose mapeia porta).
+
+### Prova (docker, 2026-11-04)
+A receita do Delonixfile aplicada ao `seiva-server` real:
+- imagem **28.2 MB**, **sem `/bin/sh`** (distroless), **`User=nonroot`**;
+- contentor responde `/health/ready` **200**, `/health/live` **200**, `/docs` **200**;
+- `/openapi.json` descobre `/v1/accounts/*` + `/v1/notes` (API9 em runtime);
+- logs **JSON** em stdout: `{"timestamp":...,"level":"INFO","fields":{"message":"starting",...}}`.
+
+### Dívida / pendente de S3
+- **Projeto gerado não compila standalone**: `FRAMEWORK_CRATES` é path placeholder
+  (profundidades app vs módulo inconsistentes). Resolve quando os crates do
+  framework publicarem (crates.io/git). A prova acima usa o `seiva-server` real.
+- **`seiva-server` arrasta a demo `accounts`**: os pedaços de runtime
+  (`serve_router`/`observability`/`shutdown_signal`/`ServerConfig`) deviam viver
+  num crate demo-free `seiva-runtime`; `seiva-server` = `seiva-runtime` + demo.
+- **Verbos CLI em falta**: `stack up/down`, `cluster on/off`, `logs -f` (açúcar
+  sobre `delonix`/compose; o `compose.yaml` gerado já funciona com `delonix stack
+  up`/`docker compose up` diretamente).
+
+## S4 — Limpeza do anti-pattern da Parte C (2026-11-04)
+
+Único anti-pattern real da Parte C: `interface -> infrastructure` em produção
+(scaffold + accounts), contra a regra do `seiva lint`, não apanhado porque o
+`lint_project` só varre `modules/` (os exemplos não têm `module.toml`).
+
+**Decisão do dono: MANTER a regra.** Controller passou a genérico sobre os ports
+(`interface` depende só de `application`); a infra é injetada pela raiz de
+composição (`seiva-server`); nos exemplos a infra foi para `[dev-dependencies]`.
+Scaffold gera módulos lint-clean. Fitness nova
+(`generated_interface_does_not_depend_on_infrastructure`) guarda o gerador.
+Regra do lint inalterada. (Os exemplos continuam fora do scan do lint por não
+terem `module.toml` — a fitness do gerador cobre o artefacto que importa.)
+
+## S5 — Skills e agents (Parte G) + caminho para referência da comunidade (2026-11-04)
+
+Instalados em `.claude/` (versionados via exceção no `.gitignore`; o resto de
+`.claude/` fica local): 5 skills (`seiva-security-review`, `seiva-pattern-fitness`,
+`seiva-cloud-native-check`, `seiva-dx-parity`, `seiva-community-adr`) + 5 agents
+(`security-reviewer`, `rust-framework-architect`, `cloud-native-validator`,
+`dx-advocate`, `community-maintainer`). Ver `.claude/README.md`. A auditoria passa
+a gate permanente: uma sessão nova usa-os sem reler o prompt original.
+
+### Framework padrão da comunidade — fase futura (fora do âmbito desta auditoria)
+Falta, para o Seiva ser referência pública ao nível de axum/loco.rs/shuttle:
+- **Getting-started de 5 minutos** executável (quando os crates do framework
+  publicarem e um projeto gerado compilar standalone — ver dívida de S3).
+- **Site de documentação próprio** (mdBook/rustdoc publicado; hoje há `docs/` + Pages de API).
+- **Canal de anúncio de breaking changes** (RFCs/discussions + política de SemVer).
+- **`CHANGELOG.md`** seguindo *Keep a Changelog* (hoje ausente).
+- **Publicação dos crates** (crates.io ou git tag) — desbloqueia o getting-started
+  e o `seiva start` ponta-a-ponta num projeto gerado.
+
+## Brokers: advisories RESOLVIDOS (2026-11-04)
+
+Decisão de S1 fechada na opção (a). Subidos os clientes de broker opcionais de
+`seiva-messaging`: `async-nats` 0.45→0.51, `lapin` 2.5→4 (um ajuste de API:
+`basic_publish` passou a receber `ShortString`), `rskafka` 0.5→0.6. Os 8
+advisories RUSTSEC desapareceram (incl. as 5 vulnerabilidades de verificação de
+certificados do `rustls-webpki` 0.102 via `async-nats`). Novo license transitivo
+`CDLA-Permissive-2.0` (bundle de certificados CA `webpki-root-certs`, dados)
+adicionado à allowlist. O passo `--all-features` do CI passou a **gate duro**
+(fim do `continue-on-error`); `deny.toml` sem exceções. Workspace verde com
+`cargo test --workspace --all-features`.
+
+## Autorização object-level / BOLA fail-closed (2026-11-04, ADR 0005)
+
+`permission_guard` só cobre API5 (function-level). Para API1/BOLA havia
+`Principal::require_owns`, mas era **consultivo**: um handler que o esquecesse
+servia dados de outro tenant em silêncio. ADR 0005 fecha a porta por tipo:
+`Scoped<T>` (em `seiva-http::guard`) embrulha um recurso com o seu tenant e só
+deixa ler o valor via `owned_by(&Principal) -> Result<T, Problem>` — sem
+`into_inner`/campo público/`Deref`, logo esquecer a verificação é **erro de
+compilação**, não fuga em runtime. `require_owns` fica como escotilha explícita
+(ex.: lista já filtrada por `WHERE tenant = $1`).
+
+Dívida aceite: adoção é por-módulo e opt-in; e o primitivo vive em `seiva-http`
+(construído na costura do interface), por isso a `application` ainda não devolve
+`Scoped<T>` diretamente — mover o primitivo para um crate sem transporte é o
+refactor que o primeiro módulo multi-tenant real vai forçar.
+
+## Identidade / autenticação (bloqueador #1 do audit) — ADR 0006 (2026-11-04)
+
+Novo crate transport-free `seiva-identity`: um `Principal` único (subject, tenant,
+permissions), o trait `Authenticator` (deny-by-default), `TokenAuthenticator`
+(dev/test) e `JwtAuthenticator` (verificação OIDC/JWT contra JWKS injetado —
+RS256/ES256 só, nunca HS*/`none`; valida iss/aud/exp/nbf; mapeia claims→Principal
+com claims de tenant/permissões configuráveis e fallback `scope`). `seiva-http`
+passou a importar o `Principal` daqui (re-exportado; `require_owns` virou o trait
+`PrincipalExt`) e ganhou o middleware `authn` + `router_with_auth`: sem bearer →
+anónimo (rotas públicas servem, guardadas dão 403); bearer inválido → 401 com
+`WWW-Authenticate`; bearer válido → `Principal` dos claims verificados, à frente
+do `permission_guard`. Provado por crypto real (fixtures RSA+JWKS) e integração
+401/403/200.
+
+**Dívida/ressalvas (datadas 2026-11-04):**
+- **Fetch/rotação de JWKS e allowlist de emissor (SSRF, API7) ficam de fora** — o
+  `JwtAuthenticator` consome um `JwkSet` estático; um porto de refresh vem depois.
+  Emissão de tokens é do IdP, não do Seiva.
+- **Composição `merge`-depois-`layer`**: em axum, `router(health).merge(módulo)`
+  NÃO aplica as camadas do framework (authn/security/request-id) às rotas do
+  módulo mescladas depois. Para a autenticação ser efetiva nas rotas reais, a
+  composition root tem de mesclar os módulos ANTES de aplicar as camadas (ou usar
+  um helper do framework). Fica como follow-up prioritário (toca o scaffold e o
+  `serve_router`), relacionado com o bloqueador #7.
+- **Unificação do `seiva-mcp`** sobre o `seiva-identity` (o seu `Principal` tem
+  `can_write`, não `permissions`, e está acoplado ao DORM) fica como follow-up
+  deste mesmo tema; o crate partilhado já existe para o efeito.
+
+### Identidade efetiva ponta-a-ponta (atualização 2026-11-04)
+
+Resolvida a ressalva da composição `merge`-depois-`layer`: `seiva-http` ganhou
+`router_with_modules(health, security, auth, modules)`, que mescla as rotas dos
+módulos ANTES de aplicar as camadas — a única ordem que faz a authn/headers/limite
+valerem nas rotas de módulos (provado por teste: rota de módulo mesclada → bad
+bearer dá 401, não é contornada). O `seiva-server` passou a ler o OIDC do ambiente
+(`SEIVA_OIDC_JWKS_FILE`/`_ISSUER`/`_AUDIENCE` [+ claims]; trio parcial falha o
+boot) e constrói um `JwtAuthenticator` a partir do ficheiro JWKS, montando o
+`authn` via `router_with_auth`. Provado AO VIVO: servidor real com JWKS, sem token
+→ 200 (anónimo), bad bearer → 401 + `WWW-Authenticate`, JWT RS256 válido assinado
+com a chave da fixture → 200.
+
+Pendente (não bloqueia este tema): adotar `router_with_modules` no `main` gerado
+pelo scaffold (ligado ao bloqueador #2, publicação+compilação do projeto gerado);
+unificação do `seiva-mcp`.
+
+## Fidelidade do contrato OpenAPI (bloqueador #3) — ADR 0007 (2026-11-05)
+
+O descriptor do facade carrega os tipos como *nomes* (string), por isso o gerador
+OpenAPI produzia um contrato infiel de duas formas: (1) o corpo de um write era
+embrulhado como objeto chaveado pelo nome do parâmetro (`{"cmd":…}`), quando o
+`#[controller]` desserializa o corpo diretamente como o DTO (`Valid<CreateNote>`,
+e proíbe >1 param de corpo) — um cliente que seguisse o doc era rejeitado; (2) o
+schema de qualquer DTO era `{"type":"string","x-seiva-rust-type":"…"}`, afirmando
+*string* onde o fio leva um objeto.
+
+Resolvido com `WireSchema` (ADR 0007), sem reflexão: um DTO descreve-se via
+`#[derive(WireSchema)]` (trait `delonix_seiva::schema::WireSchema` + impls dos
+escalares/`Vec`/`Option`/`&T`), que implementa o schema (objeto composto campo-a-
+campo; `Option` fora de `required`) E regista o tipo por nome num inventário
+link-time — o mesmo mecanismo que o `#[facade]` já usa para descobrir facades. O
+gerador resolve o nome via `registered_schema` ANTES do placeholder (tipo sem
+derive degrada graciosamente). **Aditivo**: o descriptor não muda (`ty: &str`
+mantém-se), por isso o gerador gRPC e os checks de contrato ficam intocados. O
+corpo de um write passa a ser o schema do DTO diretamente (sem envelope). Exemplos
+(notes/accounts) e o template do scaffold derivam `WireSchema`.
+
+Provado por efeito: `seiva openapi` documenta o create de `notes` com corpo
+`{title}` e resposta `{id,title}`, **0** `x-seiva-rust-type` no documento real.
+Testes: gerador 11/11 (corpo-direto, resposta-do-inventário, placeholder p/ tipo
+não registado), schema 4/4, fitness que COMPILA o projeto gerado (DTOs com derive)
+a passar, workspace inteiro verde.
+
+**Ressalvas (datadas 2026-11-05):**
+
+- **gRPC/proto continua com placeholder** (lê `ty`, mapeamento próprio) — enriquecer
+  a mensagem proto a partir do `WireSchema` fica como follow-up.
+- **`Vec<u8>`** compõe como array de inteiros (não o `format:"byte"` do mapeador por
+  string) quando chega por campo composto — divergência menor, documentada.
+- **Colisão de nomes curtos** entre DTOs de crates diferentes (first-match) — herdada
+  dos descriptors chaveados por nome curto.

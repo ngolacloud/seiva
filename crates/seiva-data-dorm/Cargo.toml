@@ -2,13 +2,19 @@
 #
 # ALL coupling to DORM lives in this one crate (the Gateway pattern): the rest of
 # Seiva knows only `seiva-ports`. Switching the DORM data layer off is not
-# compiling this crate. It depends on DORM by a pinned git revision (the brief's
-# rule until DORM publishes the library API), never by local path.
+# compiling this crate.
 #
-# Deliberately NOT a member of the Seiva workspace yet: building it needs access
-# to the private DORM repo, which the public CI does not have without a token.
-# It is built on its own to prove the boundary crossing until the framework's
-# `dorm` feature wires it in (owner decision: CI token + build coupling).
+# Dependency on DORM is by **published crate version** (owner decision, roadmap
+# P0-1): the manifest expresses the published contract (`dorm-core = "0.6"`,
+# `dorm-outbox = "0.1"`). Until those crates are on crates.io, the
+# `[patch.crates-io]` section below redirects them to a local DORM checkout
+# (sibling `../../../DORM`), so the gateway builds and its tests run offline —
+# the same interim pattern the generated projects use. Delete the patch once DORM
+# publishes.
+#
+# Deliberately NOT a member of the Seiva workspace: the public CI builds the
+# framework without DORM. The gateway is built on its own (it carries its own
+# `[patch]`), and the framework's `dorm` feature wires it in.
 [package]
 name = "seiva-data-dorm"
 version = "0.1.0"
@@ -21,11 +27,23 @@ seiva-ports = { path = "../seiva-ports" }
 # The outbox stores CloudEvents (the shape the relay reconstructs), so the
 # gateway wraps the application's event data in a CloudEvent envelope here.
 seiva-messaging = { path = "../seiva-messaging" }
-# DORM by pinned git revision (main @ the merged DORM-C + B1 + B2 campaign).
-dorm-core = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
+# DORM as published crates (depend by version; see the header and the patch below).
+dorm-core = "0.6"
 # The transactional outbox: EventPublisher writes the event here in the same
 # transaction as the business change (dorm-outbox stays in DORM — the data layer).
-dorm-outbox = { git = "https://github.com/ngolacloud/dorm", rev = "f43d8738e37e054669a9a6ac8971c0af57717191" }
+dorm-outbox = "0.1"
 uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
 async-trait = "0.1"
+
+[dev-dependencies]
+# The live round-trip test drives a real transaction on a running PostgreSQL; it
+# is gated on `SEIVA_DORM_TEST_DSN` and skips cleanly when it is unset.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# INTERIM — remove once dorm-core/dorm-outbox are published to crates.io. Redirect
+# the `= "0.6"` / `= "0.1"` dependencies above to the local DORM checkout so the
+# gateway builds and tests offline. DORM lives beside Seiva under `projects/`.
+[patch.crates-io]
+dorm-core = { path = "../../../DORM/crates/dorm-core" }
+dorm-outbox = { path = "../../../DORM/crates/dorm-outbox" }

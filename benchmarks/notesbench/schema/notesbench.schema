@@ -1,0 +1,15 @@
+// Project schema: one `namespace` block per in-process module, added by
+// `seiva module new`. Generated blocks are edited by their module owners only.
+datasource db {
+  provider = "postgresql"
+}
+
+namespace notes {
+  // Models owned by the `notes` module. Only identifiers cross module
+  // boundaries: no relation to another namespace's models.
+  model Record {
+    id      Uuid   @id
+    title   String
+    version Int    @version
+  }
+}

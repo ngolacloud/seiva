@@ -1,0 +1,28 @@
+[package]
+name = "notesbench-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The service runtime: the serve loop, 12-factor config, structured
+# logging and the shutdown signal. The composition root reuses it instead
+# of writing its own `main`.
+seiva-server = "0.1"
+# The HTTP application builder (`router_with_modules` + health +
+# /openapi.json + /docs); merge your modules' routers through it below.
+seiva-http = "0.1"
+# The composition root holds the merged module routes as an `axum::Router`.
+axum = "0.8"
+# Emitting THIS project's contract (`seiva openapi`/`proto`, via SEIVA_EMIT):
+# the facade registry and the OpenAPI/proto generators, driven by the
+# linked modules.
+delonix-seiva = { version = "0.1", default-features = false }
+seiva-openapi = "0.1"
+seiva-grpc = "0.1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
+# Module crates `seiva module new` wires into the composition root:
+notes-interface = { path = "../../modules/notes/interface" }
+notes-infrastructure = { path = "../../modules/notes/infrastructure" }
+# seiva:module-deps (managed by the seiva CLI)

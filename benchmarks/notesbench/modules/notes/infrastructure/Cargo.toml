@@ -1,0 +1,11 @@
+[package]
+name = "notes-infrastructure"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+notes-application = { path = "../application" }
+notes-domain = { path = "../domain" }
+seiva-ports = "0.1"
+# A DORM-backed repository arrives through the `seiva-data-dorm` gateway
+# behind a `dorm` feature; the default in-memory adapter pulls in no ORM.

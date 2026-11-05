@@ -44,6 +44,8 @@ members = [
     "crates/seiva-http",
     # Password/credential primitives (Argon2id PHC) — accounts out of DORM's CLI.
     "crates/seiva-auth",
+    # Identity: one verified Principal + Authenticator (OIDC/JWT via JWKS). Transport-free.
+    "crates/seiva-identity",
     # Typed 12-factor configuration + an AppEnv production-safety guard.
     "crates/seiva-config",
     # Standard Webhooks signing/verification (HMAC-SHA256, replay window).

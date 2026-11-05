@@ -5,14 +5,12 @@
 //! DORM's old `dorm-api`. It does four things, each delegated to a focused
 //! framework crate so nothing is re-implemented here:
 //!
-//! - **Mounts the HTTP application** — the facade-driven controllers, the
-//!   `/health/{live,ready}` endpoints and a `/openapi.json` composed from **every**
-//!   mounted facade. It composes the pieces [`seiva_http::router`] offers (its
-//!   `notes` and health routers, the body-limit and request-id layers) with the
-//!   `accounts` module's controller router ([`accounts_interface::router`]) so a
-//!   request to an accounts route hits the real module use case — and serves its
-//!   own broader [`openapi_document`] rather than inheriting `seiva-http`'s
-//!   notes-only one. See [`serve`].
+//! - **Mounts the framework HTTP surface** — `/openapi.json` and the
+//!   `/health/{live,ready}` endpoints — through [`seiva_http::router`]. It is
+//!   **demo-free**: it mounts no example module, so it is publishable. A real
+//!   service's `apps/<name>-api` composition root merges its modules' generated
+//!   controllers and calls [`serve_router`]; the `accounts` composition is
+//!   exercised in this crate's tests. See [`serve`].
 //! - **Runs a background worker host** on the framework's worker runtime
 //!   ([`delonix_seiva::worker::run_worker`]). See [`run_workers`].
 //! - **Reads 12-factor configuration** from the environment with [`seiva_config`],
@@ -57,22 +55,40 @@ use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use axum::extract::DefaultBodyLimit;
-use axum::middleware::from_fn;
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::Router;
 use delonix_seiva::ports::PortResult;
 use delonix_seiva::worker::{run_worker, WorkerConfig};
-use seiva_config::{EnvReader, FromEnv};
-use seiva_http::{health_router, notes_router, request_id, Health, DEFAULT_BODY_LIMIT_BYTES};
-use tokio::net::TcpListener;
+use std::sync::Arc;
 
-use accounts_facade::AccountsFacade;
-use delonix_seiva::contract::Facade;
-use notes_facade::NotesFacade;
+use seiva_config::{EnvReader, FromEnv};
+use seiva_http::{
+    router_with_auth, Authenticator, Health, HttpSecurity, JwtAuthenticator, RateLimit,
+};
+use tokio::net::TcpListener;
 
 pub use delonix_seiva::worker::WorkerReport;
 pub use seiva_config::{AppEnv, ConfigError};
+
+/// Structured logging for a Seiva service (12-factor: logs are an event stream
+/// written to stdout, for the platform to collect).
+pub mod observability {
+    use tracing_subscriber::{fmt, EnvFilter};
+
+    /// Installs the global JSON tracing subscriber, writing one JSON object per
+    /// event to **stdout**. The level filter comes from `RUST_LOG` (e.g.
+    /// `RUST_LOG=info,seiva_server=debug`), defaulting to `info`.
+    ///
+    /// Idempotent and panic-free: a second call (or a test that already set a
+    /// subscriber) is a no-op, so binaries and tests can both call it.
+    pub fn init() {
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let _ = fmt()
+            .json()
+            .with_current_span(false)
+            .with_env_filter(filter)
+            .try_init();
+    }
+}
 
 /// The environment variable holding the full HTTP bind address (`host:port`).
 /// Highest precedence; see [`ServerConfig`].
@@ -90,6 +106,38 @@ pub const EXPOSE_ERROR_DETAILS_VAR: &str = "SEIVA_EXPOSE_ERROR_DETAILS";
 /// The default HTTP bind address when neither [`HTTP_ADDR_VAR`] nor [`PORT_VAR`]
 /// is set: loopback only, so an unconfigured service is not exposed off-box.
 pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:8080";
+
+/// Comma-separated allowlist of cross-origin (CORS) origins, e.g.
+/// `https://app.example.com,https://admin.example.com`. Unset or empty means
+/// same-origin only (no CORS layer). See [`HttpSecurity::cors_allowed_origins`].
+pub const CORS_ALLOWED_ORIGINS_VAR: &str = "SEIVA_CORS_ALLOWED_ORIGINS";
+
+/// Whether the rate limiter keys on the trusted `X-Forwarded-For` client IP
+/// instead of the raw TCP peer. Set to `true` **only** behind a single trusted
+/// reverse proxy; defaults to `false`. See [`HttpSecurity::trust_forwarded_for`].
+pub const TRUST_FORWARDED_FOR_VAR: &str = "SEIVA_TRUST_FORWARDED_FOR";
+
+/// The per-client rate-limit budget per window. Defaults to
+/// [`RateLimit::DEFAULT_MAX_REQUESTS`]; `0` disables rate limiting entirely.
+pub const RATE_LIMIT_MAX_REQUESTS_VAR: &str = "SEIVA_RATE_LIMIT_MAX_REQUESTS";
+
+/// The rate-limit window length in seconds. Defaults to
+/// [`RateLimit::DEFAULT_WINDOW`] (60s); a `0` is clamped to 1s.
+pub const RATE_LIMIT_WINDOW_SECS_VAR: &str = "SEIVA_RATE_LIMIT_WINDOW_SECS";
+
+/// Path to a JWKS (JSON Web Key Set) file whose keys verify inbound bearer JWTs.
+/// Setting it (with the issuer and audience below) turns on the authentication
+/// layer; leaving all three unset means no authn layer (every caller anonymous).
+pub const OIDC_JWKS_FILE_VAR: &str = "SEIVA_OIDC_JWKS_FILE";
+/// The expected JWT `iss` (issuer). Required when [`OIDC_JWKS_FILE_VAR`] is set.
+pub const OIDC_ISSUER_VAR: &str = "SEIVA_OIDC_ISSUER";
+/// The expected JWT `aud` (audience). Required when [`OIDC_JWKS_FILE_VAR`] is set.
+pub const OIDC_AUDIENCE_VAR: &str = "SEIVA_OIDC_AUDIENCE";
+/// The claim carrying the caller's tenant (default `tenant`). Optional.
+pub const OIDC_TENANT_CLAIM_VAR: &str = "SEIVA_OIDC_TENANT_CLAIM";
+/// The claim carrying the caller's permissions (default `permissions`, `scope`
+/// fallback). Optional.
+pub const OIDC_PERMISSION_CLAIM_VAR: &str = "SEIVA_OIDC_PERMISSION_CLAIM";
 
 /// The runtime configuration of a Seiva service, read from the environment.
 ///
@@ -124,6 +172,58 @@ pub struct ServerConfig {
     /// Whether internal error details are exposed to clients. A development-only
     /// shortcut, refused in production by the guard.
     pub expose_error_details: bool,
+    /// The transport-level security posture ([`HttpSecurity`]) read from the
+    /// environment: the CORS allowlist, the trusted-proxy switch and the rate
+    /// limit. [`Default`](HttpSecurity::default) (same-origin only, rate limiting
+    /// on) when none of the variables are set.
+    pub security: HttpSecurity,
+    /// The OIDC/JWT authentication configuration, or `None` when the
+    /// `SEIVA_OIDC_*` variables are unset (no authn layer — every caller
+    /// anonymous). Built into a `JwtAuthenticator` at [`serve`] time.
+    pub oidc: Option<OidcConfig>,
+}
+
+/// The inbound-JWT verification configuration read from the environment. Present
+/// only when [`OIDC_JWKS_FILE_VAR`], [`OIDC_ISSUER_VAR`] and [`OIDC_AUDIENCE_VAR`]
+/// are all set; a partial set fails the boot.
+#[derive(Debug, Clone)]
+pub struct OidcConfig {
+    /// Path to the JWKS file whose keys verify bearer tokens.
+    pub jwks_file: String,
+    /// The expected `iss`.
+    pub issuer: String,
+    /// The expected `aud`.
+    pub audience: String,
+    /// The claim carrying the tenant (default `tenant`).
+    pub tenant_claim: Option<String>,
+    /// The claim carrying the permissions (default `permissions`, `scope` fallback).
+    pub permission_claim: Option<String>,
+}
+
+/// Reads the OIDC configuration: `None` when the `SEIVA_OIDC_*` trio is unset
+/// (no authn). If any of the three is set, all three are required — a partial
+/// configuration records a problem and fails the boot, so a typo cannot silently
+/// leave the service unauthenticated.
+fn resolve_oidc(reader: &mut EnvReader) -> Option<Option<OidcConfig>> {
+    let present = reader.optional_var(OIDC_JWKS_FILE_VAR).is_some()
+        || reader.optional_var(OIDC_ISSUER_VAR).is_some()
+        || reader.optional_var(OIDC_AUDIENCE_VAR).is_some();
+    if !present {
+        return Some(None);
+    }
+    // require_var records a "missing" problem for any of the three left unset.
+    let jwks_file = reader.require_var(OIDC_JWKS_FILE_VAR);
+    let issuer = reader.require_var(OIDC_ISSUER_VAR);
+    let audience = reader.require_var(OIDC_AUDIENCE_VAR);
+    let tenant_claim = reader.optional_var(OIDC_TENANT_CLAIM_VAR);
+    let permission_claim = reader.optional_var(OIDC_PERMISSION_CLAIM_VAR);
+    Some(Some(OidcConfig {
+        jwks_file: jwks_file?,
+        issuer: issuer?,
+        audience: audience?,
+        tenant_claim,
+        permission_claim,
+    }))
 }
 
 impl ServerConfig {
@@ -162,6 +262,43 @@ fn resolve_http_addr(reader: &mut EnvReader) -> Option<SocketAddr> {
     }
 }
 
+/// Builds the [`HttpSecurity`] posture from the environment, honouring the
+/// secure-by-default baseline: an unset variable leaves [`HttpSecurity::default`]
+/// (same-origin only, rate limiting on). A present-but-unparseable numeric or
+/// boolean records a problem (and yields `None`) so a typo fails the boot.
+fn resolve_security(reader: &mut EnvReader) -> Option<HttpSecurity> {
+    let cors_allowed_origins = reader
+        .optional_var(CORS_ALLOWED_ORIGINS_VAR)
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let trust_forwarded_for = reader.optional_bool(TRUST_FORWARDED_FOR_VAR, false)?;
+    let max_requests = reader
+        .optional_parsed::<u32>(RATE_LIMIT_MAX_REQUESTS_VAR, RateLimit::DEFAULT_MAX_REQUESTS)?;
+    let window_secs = reader.optional_parsed::<u64>(
+        RATE_LIMIT_WINDOW_SECS_VAR,
+        RateLimit::DEFAULT_WINDOW.as_secs(),
+    )?;
+
+    // `0 requests` is the explicit off switch; otherwise the window is clamped to
+    // at least a second so a `0` can never degenerate into an always-exhausted budget.
+    let rate_limit = (max_requests > 0).then(|| RateLimit {
+        max_requests,
+        window: Duration::from_secs(window_secs.max(1)),
+    });
+
+    Some(HttpSecurity {
+        cors_allowed_origins,
+        rate_limit,
+        trust_forwarded_for,
+    })
+}
+
 impl FromEnv for ServerConfig {
     fn from_env(reader: &mut EnvReader) -> Option<Self> {
         // Read every field up front so each problem is collected, not just the
@@ -169,11 +306,15 @@ impl FromEnv for ServerConfig {
         let env = reader.app_env();
         let http_addr = resolve_http_addr(reader);
         let expose_error_details = reader.optional_bool(EXPOSE_ERROR_DETAILS_VAR, false);
+        let security = resolve_security(reader);
+        let oidc = resolve_oidc(reader);
 
         let config = Self {
             env,
             http_addr: http_addr?,
             expose_error_details: expose_error_details?,
+            security: security?,
+            oidc: oidc?,
         };
 
         reader.guard(
@@ -198,6 +339,10 @@ pub enum ServeError {
     Bind(std::io::Error),
     /// The server itself failed while accepting or draining connections.
     Serve(std::io::Error),
+    /// The configured OIDC identity could not be built (the JWKS file is missing
+    /// or is not a valid key set). A startup error — the service refuses to boot
+    /// claiming to authenticate when it cannot.
+    Identity(String),
 }
 
 impl fmt::Display for ServeError {
@@ -205,6 +350,7 @@ impl fmt::Display for ServeError {
         match self {
             ServeError::Bind(e) => write!(f, "failed to bind the HTTP listener: {e}"),
             ServeError::Serve(e) => write!(f, "the HTTP server failed: {e}"),
+            ServeError::Identity(m) => write!(f, "failed to build the OIDC authenticator: {m}"),
         }
     }
 }
@@ -213,84 +359,57 @@ impl std::error::Error for ServeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ServeError::Bind(e) | ServeError::Serve(e) => Some(e),
+            ServeError::Identity(_) => None,
         }
     }
 }
 
-/// The service's OpenAPI 3.1 document, composed from **both** mounted facades.
-///
-/// [`seiva_http::openapi_document`] only knows the facade `seiva-http` mounts
-/// (`Notes`), so its document never covers `accounts`. This crate owns the full
-/// mounted surface, so it composes its own document from
-/// `[NotesFacade::DESCRIPTOR, AccountsFacade::DESCRIPTOR]` through the same
-/// generator ([`seiva_openapi::openapi_document`]). Adding a facade to the
-/// application is therefore one more descriptor here — the paths, operations,
-/// permissions and schemas all follow from the descriptors.
-#[must_use]
-pub fn openapi_document() -> serde_json::Value {
-    seiva_openapi::openapi_document(
-        seiva_openapi::ApiInfo {
-            title: "Delonix Seiva service".to_string(),
-            version: delonix_seiva::VERSION.to_string(),
-        },
-        &[NotesFacade::DESCRIPTOR, AccountsFacade::DESCRIPTOR],
-    )
+/// Builds the inbound-JWT authenticator from [`ServerConfig::oidc`], or `None`
+/// when no OIDC configuration is set (every caller then anonymous). The JWKS file
+/// is read once at startup — a missing or malformed key set fails the boot rather
+/// than leaving the service silently unauthenticated.
+fn build_authenticator(
+    config: &ServerConfig,
+) -> Result<Option<Arc<dyn Authenticator>>, ServeError> {
+    let Some(oidc) = &config.oidc else {
+        return Ok(None);
+    };
+    let jwks_json = std::fs::read_to_string(&oidc.jwks_file)
+        .map_err(|e| ServeError::Identity(format!("reading JWKS file {}: {e}", oidc.jwks_file)))?;
+    let mut auth = JwtAuthenticator::from_jwks_json(&jwks_json, &oidc.issuer, &oidc.audience)
+        .map_err(|e| ServeError::Identity(format!("parsing JWKS {}: {e}", oidc.jwks_file)))?;
+    if let Some(claim) = &oidc.tenant_claim {
+        auth = auth.with_tenant_claim(claim);
+    }
+    if let Some(claim) = &oidc.permission_claim {
+        auth = auth.with_permission_claim(claim);
+    }
+    Ok(Some(Arc::new(auth)))
 }
 
-/// `GET /openapi.json` — serves the [`openapi_document`] composed from every
-/// mounted facade.
-async fn openapi_handler() -> Json<serde_json::Value> {
-    Json(openapi_document())
-}
-
-/// Builds the full HTTP application: the demo `notes` controller, the health
-/// endpoints, the `accounts` module's controller router
-/// ([`accounts_interface::router`]) and the composed `/openapi.json`, wrapped in
-/// the body-size limit and request-id layers.
+/// Serves the framework HTTP surface until `shutdown` resolves, then drains.
 ///
-/// `/openapi.json` is served **here**, from [`openapi_document`] (which covers
-/// both `notes` and `accounts`), rather than inherited from
-/// [`seiva_http::router`]. `seiva_http::router` registers its own, notes-only
-/// `/openapi.json`; mounting that alongside this crate's route would register the
-/// same path twice and panic axum at startup. So this crate composes the pieces
-/// `seiva_http::router` would (its [`notes_router`] and [`health_router`], the
-/// same [`DEFAULT_BODY_LIMIT_BYTES`] and [`request_id`](fn@seiva_http::request_id)
-/// layers — `request_id` names both a module and the middleware function in
-/// `seiva_http`, so the link disambiguates to the function) and serves the broader
-/// document itself — never routing through `seiva_http::router`.
-///
-/// The accounts routes live on distinct paths (`/v1/accounts/...`), so the merge
-/// adds them without conflict, and a request to one hits the real module use case
-/// over its in-memory service. Because the layers wrap the merged router, the
-/// accounts surface now sits inside the body-limit and request-id middleware too.
-fn application(health: Health) -> Router {
-    Router::new()
-        .merge(notes_router())
-        .merge(health_router(health))
-        .merge(accounts_interface::router())
-        .route("/openapi.json", get(openapi_handler))
-        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES))
-        .layer(from_fn(request_id))
-}
-
-/// Serves the Seiva HTTP application until `shutdown` resolves, then drains.
+/// It serves the module-free framework router (health, `/openapi.json`, `/docs`)
+/// under the [`HttpSecurity`] posture read from the environment into
+/// [`ServerConfig::security`] (CORS allowlist, trusted-proxy switch, rate limit),
+/// and — when [`ServerConfig::oidc`] is set — the OIDC/JWT authentication layer.
+/// A real service does not call this — its `apps/<name>-api` composition root
+/// builds its own router (merging its modules' generated controllers) and calls
+/// [`serve_router`] directly. This entrypoint is the module-free skeleton the
+/// binary runs; the example composition (`accounts`) lives in this crate's tests.
 ///
 /// The lifecycle, in order:
 ///
-/// 1. Builds the application (the framework router merged with the `accounts`
-///    controller router; see the private `application` builder) over a fresh
-///    [`Health`] handle in the
-///    [`Starting`](seiva_http::HealthState::Starting) state, so
+/// 1. A fresh [`Health`] in [`Starting`](seiva_http::HealthState::Starting), so
 ///    `/health/ready` answers `503` until the socket is live.
 /// 2. Binds a [`TcpListener`] to [`ServerConfig::http_addr`]; a bind failure is
-///    returned as [`ServeError::Bind`].
-/// 3. Flips `Health` [`Starting -> Ready`](seiva_http::Health::set_ready) now the
-///    socket is listening, so load balancers may route traffic.
-/// 4. Serves with [`axum::serve()`] and a graceful-shutdown future that, once
-///    `shutdown` resolves, flips `Health` to
-///    [`Draining`](seiva_http::Health::set_draining) *before* the server stops
-///    accepting — so `/health/ready` returns `503` and the process leaves
-///    rotation while in-flight requests finish.
+///    [`ServeError::Bind`].
+/// 3. Flips `Health` [`Starting -> Ready`](seiva_http::Health::set_ready) once the
+///    socket is listening.
+/// 4. Serves with a graceful-shutdown future that, once `shutdown` resolves, flips
+///    `Health` to [`Draining`](seiva_http::Health::set_draining) *before* the
+///    server stops accepting, so the process leaves rotation while in-flight
+///    requests finish.
 ///
 /// # Errors
 ///
@@ -303,11 +422,37 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
     let health = Health::starting();
-    let app = application(health.clone());
+    let authenticator = build_authenticator(&config)?;
+    let app = router_with_auth(health.clone(), &config.security, authenticator);
+    serve_router(config.http_addr, app, health, shutdown).await
+}
 
-    let listener = TcpListener::bind(config.http_addr)
-        .await
-        .map_err(ServeError::Bind)?;
+/// Serves an arbitrary application `router` on `addr` with the framework's
+/// lifecycle: bind, flip `health` [`Starting -> Ready`](seiva_http::Health::set_ready)
+/// once the socket is live, and on `shutdown` flip to
+/// [`Draining`](seiva_http::Health::set_draining) *before* the server stops
+/// accepting so `/health/ready` goes `503` while in-flight requests finish.
+///
+/// This is the loop a generated project's `apps/<name>-api` composition root
+/// calls: it builds its own router (`seiva_http::router(health.clone())` merged
+/// with its modules' routers) and hands it here, instead of writing its own
+/// `main`. The demo [`serve`] is exactly this over the built-in application.
+///
+/// The peer `SocketAddr` is installed as a request extension
+/// (`into_make_service_with_connect_info`), so `seiva_http`'s rate limiter keys
+/// on the real client IP.
+///
+/// # Errors
+///
+/// Returns [`ServeError::Bind`] if the listener cannot bind, or
+/// [`ServeError::Serve`] if serving fails.
+pub async fn serve_router(
+    addr: SocketAddr,
+    router: Router,
+    health: Health,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), ServeError> {
+    let listener = TcpListener::bind(addr).await.map_err(ServeError::Bind)?;
 
     // The socket is live: Starting -> Ready, so /health/ready passes.
     health.set_ready();
@@ -316,18 +461,42 @@ pub async fn serve(
         let health = health.clone();
         async move {
             shutdown.await;
-            // Draining BEFORE the server stops accepting: /health/ready goes 503
-            // and a load balancer takes us out of rotation while we drain.
             health.set_draining();
         }
     };
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(draining)
-        .await
-        .map_err(ServeError::Serve)?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(draining)
+    .await
+    .map_err(ServeError::Serve)?;
 
     Ok(())
+}
+
+/// Resolves once the process is asked to shut down: Ctrl-C (SIGINT) on every
+/// platform, or `SIGTERM` on unix (the signal an orchestrator sends to stop a
+/// container). A generated `apps/<name>-api` feeds this to
+/// [`serve_router`] so its service drains gracefully on `delonix`/Kubernetes
+/// termination without reimplementing signal handling.
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut term = signal(SignalKind::terminate()).expect("install a SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// The default interval between background worker passes. A pass that drains a
@@ -375,6 +544,18 @@ mod tests {
     use seiva_config::load_from;
     use std::collections::HashMap;
     use tower::ServiceExt; // for `oneshot`
+
+    /// The composition a real `apps/<name>-api` performs, exercised here with the
+    /// `accounts` example (a dev-dependency, so it never enters a release build or
+    /// blocks publishing): the framework router merged with the module's generated
+    /// controller router wired to the in-memory repository.
+    fn application(health: Health) -> Router {
+        let accounts =
+            accounts_interface::accounts_router(accounts_interface::AccountsController::new(
+                accounts_infrastructure::InMemoryCredentialRepository::new(),
+            ));
+        seiva_http::router(health).merge(accounts)
+    }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -436,6 +617,89 @@ mod tests {
         .expect("dev permits the shortcut");
         assert!(cfg.expose_error_details);
         assert!(cfg.env.is_development());
+    }
+
+    #[test]
+    fn security_defaults_to_the_secure_baseline() {
+        let cfg: ServerConfig = load_from(map(&[])).expect("empty env is valid");
+        assert!(cfg.security.cors_allowed_origins.is_empty());
+        assert!(!cfg.security.trust_forwarded_for);
+        assert_eq!(cfg.security.rate_limit, Some(RateLimit::default()));
+    }
+
+    #[test]
+    fn security_reads_cors_trust_proxy_and_rate_limit_from_env() {
+        let cfg: ServerConfig = load_from(map(&[
+            (
+                CORS_ALLOWED_ORIGINS_VAR,
+                " https://app.example.com , https://admin.example.com ,",
+            ),
+            (TRUST_FORWARDED_FOR_VAR, "true"),
+            (RATE_LIMIT_MAX_REQUESTS_VAR, "100"),
+            (RATE_LIMIT_WINDOW_SECS_VAR, "30"),
+        ]))
+        .expect("valid security config");
+
+        // Trimmed, and the trailing empty segment dropped.
+        assert_eq!(
+            cfg.security.cors_allowed_origins,
+            vec![
+                "https://app.example.com".to_string(),
+                "https://admin.example.com".to_string()
+            ]
+        );
+        assert!(cfg.security.trust_forwarded_for);
+        assert_eq!(
+            cfg.security.rate_limit,
+            Some(RateLimit {
+                max_requests: 100,
+                window: Duration::from_secs(30)
+            })
+        );
+    }
+
+    #[test]
+    fn oidc_is_absent_by_default_and_parsed_when_fully_set() {
+        let none: ServerConfig = load_from(map(&[])).expect("empty env");
+        assert!(none.oidc.is_none());
+
+        let cfg: ServerConfig = load_from(map(&[
+            (OIDC_JWKS_FILE_VAR, "/etc/seiva/jwks.json"),
+            (OIDC_ISSUER_VAR, "https://id.example.com/"),
+            (OIDC_AUDIENCE_VAR, "seiva-api"),
+            (OIDC_TENANT_CLAIM_VAR, "org_id"),
+        ]))
+        .expect("full oidc config");
+        let oidc = cfg.oidc.expect("present");
+        assert_eq!(oidc.jwks_file, "/etc/seiva/jwks.json");
+        assert_eq!(oidc.issuer, "https://id.example.com/");
+        assert_eq!(oidc.audience, "seiva-api");
+        assert_eq!(oidc.tenant_claim.as_deref(), Some("org_id"));
+        assert!(oidc.permission_claim.is_none());
+    }
+
+    #[test]
+    fn a_partial_oidc_config_fails_the_boot() {
+        // Only the issuer set: the service must not boot half-authenticated.
+        let err = load_from::<ServerConfig>(map(&[(OIDC_ISSUER_VAR, "https://id.example.com/")]))
+            .unwrap_err();
+        let problems = err.problems().join(" ");
+        assert!(problems.contains(OIDC_JWKS_FILE_VAR));
+        assert!(problems.contains(OIDC_AUDIENCE_VAR));
+    }
+
+    #[test]
+    fn rate_limit_is_disabled_by_a_zero_budget() {
+        let cfg: ServerConfig =
+            load_from(map(&[(RATE_LIMIT_MAX_REQUESTS_VAR, "0")])).expect("zero disables");
+        assert_eq!(cfg.security.rate_limit, None);
+    }
+
+    #[test]
+    fn config_rejects_unparseable_rate_limit() {
+        let err =
+            load_from::<ServerConfig>(map(&[(RATE_LIMIT_MAX_REQUESTS_VAR, "lots")])).unwrap_err();
+        assert!(err.problems()[0].contains(RATE_LIMIT_MAX_REQUESTS_VAR));
     }
 
     // --- HTTP surface: driven via the router, no live port -----------------
@@ -537,18 +801,16 @@ mod tests {
         );
     }
 
-    // --- OpenAPI: the served document covers BOTH mounted facades -----------
+    // --- facade discovery: /openapi.json lists every mounted module ---------
 
-    /// The `/openapi.json` the application serves is composed from both mounted
-    /// facades, not just `notes`: it carries the `accounts` create operation,
-    /// identified by its `x-seiva-requires` permission extension
-    /// (`accounts.create`). This proves `serve` publishes a document that
-    /// matches the routes it actually mounts, not the notes-only one
-    /// `seiva_http::router` would inherit.
+    /// The served `/openapi.json` documents the mounted `accounts` module,
+    /// proving link-time discovery (`registered_facades`) picks up every
+    /// `#[seiva::facade]` linked into the binary with no hand-maintained list
+    /// (OWASP API9). The runtime itself is demo-free, so `accounts` is the only
+    /// facade here (it comes from the test's dev-dependency composition).
     #[tokio::test]
-    async fn served_openapi_document_covers_the_accounts_facade() {
+    async fn openapi_discovers_the_mounted_facade() {
         let app = application(Health::starting());
-
         let res = app
             .oneshot(
                 Request::builder()
@@ -559,32 +821,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-
         let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
             .await
             .unwrap();
         let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-
-        // The notes surface is still present...
-        let paths = doc["paths"].as_object().expect("paths is an object");
+        let paths = doc["paths"].as_object().expect("paths object");
         assert!(
-            paths.contains_key("/v1/notes"),
-            "the notes paths must remain: {:?}",
+            paths.keys().any(|p| p.contains("/accounts")),
+            "the mounted accounts module must be discovered and documented: {:?}",
             paths.keys().collect::<Vec<_>>()
-        );
-
-        // ...and the accounts create operation is now covered, identified by its
-        // required-permission extension rather than by a hard-coded path.
-        let has_accounts_create = paths.values().any(|path_item| {
-            path_item.as_object().into_iter().flatten().any(|(_, op)| {
-                op.get("x-seiva-requires")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("accounts.create")
-            })
-        });
-        assert!(
-            has_accounts_create,
-            "the composed document must carry the accounts.create operation: {doc}"
         );
     }
 
@@ -598,6 +843,8 @@ mod tests {
             // races another on a fixed port.
             http_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             expose_error_details: false,
+            security: HttpSecurity::default(),
+            oidc: None,
         };
         // An already-resolved shutdown: serve binds, flips Ready, immediately
         // drains and returns Ok — no fixed port, no running clock.
