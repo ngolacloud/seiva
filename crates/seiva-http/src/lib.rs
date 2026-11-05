@@ -29,6 +29,7 @@
 // box away, so the large-Err lint is allowed crate-wide.
 #![allow(clippy::result_large_err)]
 
+pub mod admin;
 pub mod authn;
 pub mod docs;
 pub mod guard;
@@ -46,6 +47,7 @@ use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::get;
 use axum::{Json, Router};
 
+pub use admin::{admin_handler, ADMIN_HTML};
 pub use authn::authn;
 pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
@@ -159,12 +161,14 @@ pub fn router_with_modules(
     )
 }
 
-/// The framework's own routes, unlayered: health, `/openapi.json`, `/docs`.
+/// The framework's own routes, unlayered: health, `/openapi.json`, `/docs`, and
+/// the generated `/admin` console.
 fn framework_routes(health: Health) -> Router {
     Router::new()
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
         .route("/docs", get(docs::docs_handler))
+        .route("/admin", get(admin::admin_handler))
 }
 
 /// Wraps `app` (framework routes, and any merged module routes) in the transport
