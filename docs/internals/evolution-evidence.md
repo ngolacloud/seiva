@@ -36,9 +36,9 @@ New ADRs: **0008–0015** (+ the 0007 addendum). Later commits (0015 distributed
 | `/admin` → 404 with no extension; no admin in `cargo tree` | `seiva-http`, `seiva-server` | ✅ | base 404 test; tree = 0 occurrences |
 | Extension install is explicit, no hooks, needs recompile | `seiva ext add`, ADR 0010 | ✅ | live proof; declarative manifest, no build.rs |
 | Repeated install duplicates nothing | `add_extension_*`/`mount_*` | ✅ | idempotency tests |
-| Module `--admin` → listed/authorized registration | ADR 0009 | 🟡 | registration + authz-filtered registry done; a DORM-backed CRUD module (`apps/admin-data-e2e`, `Catalog`) proves all five operations live over PG; the console row-CRUD UI (list table + create + edit + delete) is built and proven in a browser (e2e/admin/catalog.mjs); tenant-scope + field-masking remain |
+| Module `--admin` → listed/authorized registration | ADR 0009 | 🟡 | registration + authz-filtered registry done; a DORM-backed CRUD module (`apps/admin-data-e2e`, `Catalog`) proves all five operations live over PG; the console row-CRUD UI (list table + create + edit + delete) is built and proven in a browser (e2e/admin/catalog.mjs); tenant-scoping + field masking are enforced server-side via the `&Ctx` seam (proved live) |
 | Module without registration not exposed | registry gate | ✅ | absent from registry → absent from console |
-| Other tenant / no permission → no access | registry filter + `Scoped<T>` (ADR 0005) | ✅ | registry hides unauthorized; BOLA guard on the API |
+| Other tenant / no permission → no access | registry filter + `Scoped<T>` (ADR 0005) + `Ctx` tenant-scope (ADR 0009) | ✅ | registry hides unauthorized; BOLA guard on the API; `Catalog` ops tenant-scoped + `cost` masked, proved live |
 | Repeated admin request → one effect across replicas | idempotency (ADR 0011) | ✅ | **live PG** 20-connection proof |
 | Core coherent after extraction | docs/tests | ✅ | base tests + docs aligned |
 | Security: audit of all lockfile variants + negative tests | ADR 0014, deny gates | 🟡 | advisories gate extended to excluded lockfiles; license/bans on excluded crates deferred |
@@ -58,14 +58,12 @@ New ADRs: **0008–0015** (+ the 0007 addendum). Later commits (0015 distributed
 
 - **F5 tail.** Distributed rate limiter — **done** (ADR 0015): `RateLimitStore`
   port + `rate_limit_with_store` + optional `seiva-ratelimit-redis`, proved live
-  against Redis 7 (50 concurrent clients share one budget). Console field-level
-  masking of data rows remains (the API path has `Scoped<T>`/BOLA; row-level
-  masking is module-handler work, tied to the console's model-row CRUD).
+  against Redis 7 (50 concurrent clients share one budget). Server-side tenant-scoping and field masking are done via a completed `&Ctx` seam (the controller injects the Principal): the `Catalog` ops scope by tenant and mask `cost` unless `catalog.cost.view` — proved live (tenant isolation + mask).
 - **F6 tail.** Browser E2E of the admin — **done** (Playwright on system Chrome): the admin flow (`e2e/admin/admin.mjs`) and the full row-CRUD loop over the live Catalog module (`e2e/admin/catalog.mjs`). The production load benchmark with auth + idempotency +
   multiple replicas (p50/p95/p99, throughput, errors, CPU, RSS) — needs that
   infra; the published microbenchmarks remain overhead-only and are labelled so.
 - **gRPC** is proto-generation only; no served round-trip is claimed, so none is
   asserted (ADR 0007 addendum).
-- **Admin console** now does registered, authorized **row CRUD** (list table + create + edit + delete) over a module's contract operations, proven in-browser against a live DORM-backed module (`Catalog`). Still a step short of full Django-admin: tenant-scoped reads, field masking and pagination/search/ordering controls remain.
+- **Admin console** now does registered, authorized **row CRUD** (list table + create + edit + delete) over a module's contract operations, proven in-browser against a live DORM-backed module (`Catalog`). It enforces tenant-scoped reads and field masking server-side (the `&Ctx` seam); a step short of full Django-admin on pagination/search/ordering controls and optimistic-concurrency.
 
 Nothing above is a silent gap: each is stated here and in the relevant ADR.

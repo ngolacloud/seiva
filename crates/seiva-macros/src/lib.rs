@@ -526,13 +526,37 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         // Derive the HTTP method, path, request extractor, call argument and the
-        // success status from the convention. `extractor`/`call_arg` are 0-or-1
+        // success status from the convention. `extractor` is a 0-or-1
         // element lists so the `#(, #x)*` splices add nothing for an empty one.
         let http_fn: proc_macro2::TokenStream;
         let path_expr: proc_macro2::TokenStream;
         let mut extractor: Vec<proc_macro2::TokenStream> = Vec::new();
-        let mut call_arg: Vec<proc_macro2::TokenStream> = Vec::new();
         let ok_status: proc_macro2::TokenStream;
+
+        // Call arguments in the method's DECLARED order: a `&Ctx`/`Ctx` parameter
+        // gets the injected request context (the authenticated `Principal`, so a
+        // handler can scope by tenant server-side); the single wire parameter gets
+        // the extracted value. The `Ctx` extractor is `FromRequestParts`, so it is
+        // pushed BEFORE the (body) wire extractor, which axum requires last.
+        let mut ordered_call: Vec<proc_macro2::TokenStream> = Vec::new();
+        let mut uses_ctx = false;
+        for input in &method.sig.inputs {
+            let FnArg::Typed(pat_type) = input else {
+                continue;
+            };
+            if is_ctx_type(&pat_type.ty) {
+                uses_ctx = true;
+                ordered_call.push(match pat_type.ty.as_ref() {
+                    Type::Reference(_) => quote!(&__ctx),
+                    _ => quote!(__ctx.clone()),
+                });
+            } else {
+                ordered_call.push(quote!(__arg));
+            }
+        }
+        if uses_ctx {
+            extractor.push(quote!(__ctx: ::seiva_http::Ctx));
+        }
 
         match method_name.as_str() {
             "get" => {
@@ -553,7 +577,6 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                     __resource
                 ));
                 extractor.push(quote!(::axum::extract::Path(__arg): ::axum::extract::Path<#ty>));
-                call_arg.push(quote!(__arg));
                 ok_status = quote!(::axum::http::StatusCode::OK);
             }
             "list" => {
@@ -571,7 +594,6 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                 if let Some(ty) = primary.first() {
                     extractor
                         .push(quote!(::axum::extract::Query(__arg): ::axum::extract::Query<#ty>));
-                    call_arg.push(quote!(__arg));
                 }
                 ok_status = quote!(::axum::http::StatusCode::OK);
             }
@@ -601,7 +623,6 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 if let Some(ty) = primary.first() {
                     extractor.push(quote!(::seiva_http::Valid(__arg): ::seiva_http::Valid<#ty>));
-                    call_arg.push(quote!(__arg));
                 }
             }
         }
@@ -621,7 +642,7 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                             #(, #extractor)*
                         | async move {
                             match <#self_ty as #trait_path>::#method_ident(
-                                &__service #(, #call_arg)*
+                                &__service #(, #ordered_call)*
                             ).await {
                                 ::core::result::Result::Ok(__value) =>
                                     ::core::result::Result::<

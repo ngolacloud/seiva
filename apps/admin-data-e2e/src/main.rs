@@ -47,13 +47,15 @@ async fn main() -> Result<(), BoxError> {
     health.set_ready();
     let auth: Arc<dyn Authenticator> = Arc::new(TokenAuthenticator::new().with_token(
         "clerk-token",
-        Principal::new(
+        Principal::in_tenant(
             "clerk",
+            "acme",
             [
                 "catalog.read",
                 "catalog.create",
                 "catalog.change",
                 "catalog.delete",
+                "catalog.cost.view",
             ],
         ),
     ));

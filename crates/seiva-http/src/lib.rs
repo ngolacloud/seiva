@@ -27,6 +27,7 @@
 
 pub mod audit;
 pub mod authn;
+pub mod ctx;
 pub mod docs;
 pub mod guard;
 pub mod health;
@@ -46,6 +47,7 @@ use axum::{Json, Router};
 
 pub use audit::audit;
 pub use authn::authn;
+pub use ctx::Ctx;
 pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
 pub use health::{

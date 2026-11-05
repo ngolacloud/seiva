@@ -16,17 +16,21 @@ use delonix_seiva::admin::{AdminPermissions, AdminResource};
 use delonix_seiva::{controller, facade, register_admin};
 use dorm_core::value::Value;
 use seiva_data_dorm::DormUnitOfWork;
-use seiva_http::{Problem, Validate, ValidationError};
+use seiva_http::{Ctx, Problem, Validate, ValidationError};
 use seiva_ports::{BoxError, PortResult, UnitOfWork};
 use serde::{Deserialize, Serialize};
 
-/// DDL for the demo table. `IF NOT EXISTS`, so a second run is a no-op.
+/// DDL for the demo table. `IF NOT EXISTS`, so a second run is a no-op. Every row
+/// carries a `tenant`; the operations scope by the caller's tenant (`&Ctx`), so a
+/// caller never sees or touches another tenant's rows (server-side, ADR 0006).
 #[must_use]
 pub fn catalog_table_ddl() -> &'static str {
     "CREATE TABLE IF NOT EXISTS catalog_items (\
        id bigserial PRIMARY KEY, \
+       tenant TEXT NOT NULL, \
        name TEXT NOT NULL, \
-       price BIGINT NOT NULL)"
+       price BIGINT NOT NULL, \
+       cost BIGINT NOT NULL DEFAULT 0)"
 }
 
 /// Create body.
@@ -36,6 +40,10 @@ pub struct CreateItem {
     pub name: String,
     /// The item's price, in minor units.
     pub price: i64,
+    /// The internal cost (a masked field): only returned to a caller holding
+    /// `catalog.cost.view`. Optional on create (defaults to 0).
+    #[serde(default)]
+    pub cost: Option<i64>,
 }
 
 impl Validate for CreateItem {
@@ -56,6 +64,9 @@ pub struct UpdateItem {
     pub name: String,
     /// The new price.
     pub price: i64,
+    /// The new internal cost (masked field); defaults to 0 if omitted.
+    #[serde(default)]
+    pub cost: Option<i64>,
 }
 
 impl Validate for UpdateItem {
@@ -89,6 +100,11 @@ pub struct ItemDto {
     pub name: String,
     /// The item's price.
     pub price: i64,
+    /// The internal cost — a **masked** field: `None` (omitted) unless the caller
+    /// holds `catalog.cost.view`. The mask is applied server-side from the `&Ctx`,
+    /// so an unauthorized caller never receives the value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<i64>,
 }
 
 /// The facade's error type. Mapped to an RFC 9457 problem by the controller.
@@ -104,25 +120,25 @@ impl From<CatalogError> for Problem {
 /// The `catalog` module's public contract: full CRUD over catalogue items.
 #[facade(version = "v1")]
 pub trait Catalog {
-    /// Create an item (`POST /v1/catalog`).
+    /// Create an item (`POST /v1/catalogs`), owned by the caller's tenant.
     #[requires("catalog.create")]
-    async fn create(&self, cmd: CreateItem) -> Result<ItemDto, CatalogError>;
+    async fn create(&self, ctx: &Ctx, cmd: CreateItem) -> Result<ItemDto, CatalogError>;
 
-    /// Fetch one item by id (`GET /v1/catalog/{id}`).
+    /// Fetch one of the caller's tenant's items by id (`GET /v1/catalogs/{id}`).
     #[requires("catalog.read")]
-    async fn get(&self, id: u64) -> Result<ItemDto, CatalogError>;
+    async fn get(&self, ctx: &Ctx, id: u64) -> Result<ItemDto, CatalogError>;
 
-    /// List items (`GET /v1/catalog`).
+    /// List the caller's tenant's items (`GET /v1/catalogs`).
     #[requires("catalog.read")]
-    async fn list(&self) -> Result<Vec<ItemDto>, CatalogError>;
+    async fn list(&self, ctx: &Ctx) -> Result<Vec<ItemDto>, CatalogError>;
 
-    /// Change an item (`POST /v1/catalog/update`).
+    /// Change one of the caller's tenant's items (`POST /v1/catalogs/update`).
     #[requires("catalog.change")]
-    async fn update(&self, cmd: UpdateItem) -> Result<ItemDto, CatalogError>;
+    async fn update(&self, ctx: &Ctx, cmd: UpdateItem) -> Result<ItemDto, CatalogError>;
 
-    /// Delete an item (`POST /v1/catalog/delete`).
+    /// Delete one of the caller's tenant's items (`POST /v1/catalogs/delete`).
     #[requires("catalog.delete")]
-    async fn delete(&self, cmd: DeleteItem) -> Result<(), CatalogError>;
+    async fn delete(&self, ctx: &Ctx, cmd: DeleteItem) -> Result<(), CatalogError>;
 }
 
 // Surface `catalog` in the admin console (ADR 0009): couples only to the
@@ -176,8 +192,9 @@ fn boxed(msg: &'static str) -> BoxError {
     msg.into()
 }
 
-/// Reads an [`ItemDto`] out of a row of `(id, name, price)`.
-fn row_to_item(row: &dorm_core::row::Row) -> PortResult<ItemDto> {
+/// Reads an [`ItemDto`] out of a row of `(id, name, price, cost)`, masking the
+/// `cost` to `None` unless `show_cost` (the caller holds `catalog.cost.view`).
+fn row_to_item(row: &dorm_core::row::Row, show_cost: bool) -> PortResult<ItemDto> {
     Ok(ItemDto {
         id: u64::try_from(row.try_get::<i64>(0).map_err(|e| Box::new(e) as BoxError)?)
             .map_err(|e| Box::new(e) as BoxError)?,
@@ -185,86 +202,135 @@ fn row_to_item(row: &dorm_core::row::Row) -> PortResult<ItemDto> {
             .try_get::<String>(1)
             .map_err(|e| Box::new(e) as BoxError)?,
         price: row.try_get::<i64>(2).map_err(|e| Box::new(e) as BoxError)?,
+        cost: if show_cost {
+            Some(row.try_get::<i64>(3).map_err(|e| Box::new(e) as BoxError)?)
+        } else {
+            None
+        },
     })
 }
 
+/// The caller's tenant, or an error — an untenanted/anonymous caller administers
+/// no tenant's rows.
+fn tenant_of(ctx: &Ctx) -> Result<String, CatalogError> {
+    ctx.tenant()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| CatalogError("caller has no tenant".to_owned()))
+}
+
+const COST_PERMISSION: &str = "catalog.cost.view";
+
 #[controller]
 impl Catalog for CatalogController {
-    async fn create(&self, cmd: CreateItem) -> Result<ItemDto, CatalogError> {
+    async fn create(&self, ctx: &Ctx, cmd: CreateItem) -> Result<ItemDto, CatalogError> {
+        let tenant = tenant_of(ctx)?;
+        let show_cost = ctx.has(COST_PERMISSION);
         self.uow
-            .transaction(|| async move {
+            .transaction(move || async move {
                 let rows = dorm_core::db::sql(
-                    "INSERT INTO catalog_items (name, price) VALUES ($1, $2) \
-                     RETURNING id, name, price",
-                    &[Value::Text(cmd.name), Value::I64(cmd.price)],
+                    "INSERT INTO catalog_items (tenant, name, price, cost) \
+                     VALUES ($1, $2, $3, $4) RETURNING id, name, price, cost",
+                    &[
+                        Value::Text(tenant),
+                        Value::Text(cmd.name),
+                        Value::I64(cmd.price),
+                        Value::I64(cmd.cost.unwrap_or(0)),
+                    ],
                 )
                 .await
                 .map_err(|e| Box::new(e) as BoxError)?;
                 row_to_item(
                     rows.first()
                         .ok_or_else(|| boxed("insert returned no row"))?,
+                    show_cost,
                 )
             })
             .await
             .map_err(err)
     }
 
-    async fn get(&self, id: u64) -> Result<ItemDto, CatalogError> {
+    async fn get(&self, ctx: &Ctx, id: u64) -> Result<ItemDto, CatalogError> {
         let id = i64::try_from(id).map_err(err)?;
+        let tenant = tenant_of(ctx)?;
+        let show_cost = ctx.has(COST_PERMISSION);
         self.uow
             .transaction(move || async move {
                 let rows = dorm_core::db::sql(
-                    "SELECT id, name, price FROM catalog_items WHERE id = $1",
-                    &[Value::I64(id)],
+                    "SELECT id, name, price, cost FROM catalog_items \
+                     WHERE id = $1 AND tenant = $2",
+                    &[Value::I64(id), Value::Text(tenant)],
                 )
                 .await
                 .map_err(|e| Box::new(e) as BoxError)?;
-                row_to_item(rows.first().ok_or_else(|| boxed("item not found"))?)
+                row_to_item(
+                    rows.first().ok_or_else(|| boxed("item not found"))?,
+                    show_cost,
+                )
             })
             .await
             .map_err(err)
     }
 
-    async fn list(&self) -> Result<Vec<ItemDto>, CatalogError> {
+    async fn list(&self, ctx: &Ctx) -> Result<Vec<ItemDto>, CatalogError> {
+        let tenant = tenant_of(ctx)?;
+        let show_cost = ctx.has(COST_PERMISSION);
         self.uow
-            .transaction(|| async {
+            .transaction(move || async move {
                 let rows = dorm_core::db::sql(
-                    "SELECT id, name, price FROM catalog_items ORDER BY id LIMIT 100",
-                    &[],
+                    "SELECT id, name, price, cost FROM catalog_items \
+                     WHERE tenant = $1 ORDER BY id LIMIT 100",
+                    &[Value::Text(tenant)],
                 )
                 .await
                 .map_err(|e| Box::new(e) as BoxError)?;
-                rows.iter().map(row_to_item).collect::<PortResult<Vec<_>>>()
+                rows.iter()
+                    .map(|row| row_to_item(row, show_cost))
+                    .collect::<PortResult<Vec<_>>>()
             })
             .await
             .map_err(err)
     }
 
-    async fn update(&self, cmd: UpdateItem) -> Result<ItemDto, CatalogError> {
+    async fn update(&self, ctx: &Ctx, cmd: UpdateItem) -> Result<ItemDto, CatalogError> {
         let id = i64::try_from(cmd.id).map_err(err)?;
+        let tenant = tenant_of(ctx)?;
+        let show_cost = ctx.has(COST_PERMISSION);
         self.uow
             .transaction(move || async move {
                 let rows = dorm_core::db::sql(
-                    "UPDATE catalog_items SET name = $2, price = $3 WHERE id = $1 \
-                     RETURNING id, name, price",
-                    &[Value::I64(id), Value::Text(cmd.name), Value::I64(cmd.price)],
+                    "UPDATE catalog_items SET name = $3, price = $4, cost = $5 \
+                     WHERE id = $1 AND tenant = $2 RETURNING id, name, price, cost",
+                    &[
+                        Value::I64(id),
+                        Value::Text(tenant),
+                        Value::Text(cmd.name),
+                        Value::I64(cmd.price),
+                        Value::I64(cmd.cost.unwrap_or(0)),
+                    ],
                 )
                 .await
                 .map_err(|e| Box::new(e) as BoxError)?;
-                row_to_item(rows.first().ok_or_else(|| boxed("item not found"))?)
+                row_to_item(
+                    rows.first().ok_or_else(|| boxed("item not found"))?,
+                    show_cost,
+                )
             })
             .await
             .map_err(err)
     }
 
-    async fn delete(&self, cmd: DeleteItem) -> Result<(), CatalogError> {
+    async fn delete(&self, ctx: &Ctx, cmd: DeleteItem) -> Result<(), CatalogError> {
         let id = i64::try_from(cmd.id).map_err(err)?;
+        let tenant = tenant_of(ctx)?;
         self.uow
             .transaction(move || async move {
-                dorm_core::db::run("DELETE FROM catalog_items WHERE id = $1", &[Value::I64(id)])
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| Box::new(e) as BoxError)
+                dorm_core::db::run(
+                    "DELETE FROM catalog_items WHERE id = $1 AND tenant = $2",
+                    &[Value::I64(id), Value::Text(tenant)],
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| Box::new(e) as BoxError)
             })
             .await
             .map_err(err)

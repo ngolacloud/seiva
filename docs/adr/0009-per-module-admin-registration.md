@@ -133,6 +133,14 @@ A browser E2E (`e2e/admin/catalog.mjs`) drives the full loop against the live
 the list → edit → delete → it is gone — and caught a real singular/plural
 resource-matching bug.
 
-Still pending: tenant-scoped row filtering and field masking (a `Ctx`/Principal
-seam into the module), and pagination/search/ordering controls wired from the
-registered allow-lists.
+**Tenant-scoping and field masking are done too**, server-side via a completed
+`&Ctx` seam: `#[seiva::controller]` now **injects** a `seiva_http::Ctx` (carrying
+the authenticated `Principal`) into any method taking `&Ctx`. The `Catalog`
+operations scope every query by `ctx.tenant()` (a caller never sees or touches
+another tenant's rows) and mask the internal `cost` field unless the caller holds
+`catalog.cost.view`. Proved live: two tenants are isolated (globex sees none of
+acme's rows and a cross-tenant delete is a no-op), and a caller without
+`cost.view` gets `cost = None` on the same row the owner sees in full.
+
+Still pending: pagination/search/ordering controls wired from the registered
+allow-lists; optimistic-concurrency (version/ETag) on edit.
