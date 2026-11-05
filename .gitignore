@@ -10,3 +10,9 @@ Cargo.lock.orig
 .claude/*
 !.claude/skills/
 !.claude/agents/
+
+# Node deps for the on-demand admin browser E2E (e2e/admin) — not vendored.
+e2e/admin/node_modules/
+
+# oha raw JSON from the production load benchmark
+benchmarks/production/results/

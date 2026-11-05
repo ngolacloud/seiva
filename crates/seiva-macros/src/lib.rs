@@ -222,28 +222,6 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
     let ident = &input.ident;
     let name_str = ident.to_string();
 
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => &named.named,
-            _ => {
-                return syn::Error::new_spanned(
-                    ident,
-                    "WireSchema supports a struct with named fields (a wire DTO)",
-                )
-                .to_compile_error()
-                .into();
-            }
-        },
-        _ => {
-            return syn::Error::new_spanned(
-                ident,
-                "WireSchema supports a struct with named fields, not an enum or union",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
     // A generic DTO would need its schema parameterised per instantiation; the
     // by-name registry keys on a single name, so reject generics explicitly
     // rather than emit a registration that cannot be resolved.
@@ -256,26 +234,67 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
         .into();
     }
 
-    let field_descs = fields.iter().map(|field| {
-        let field_name = field.ident.as_ref().expect("named field").to_string();
-        // An `Option<T>` field is not required and documents `T`'s schema.
-        let (schema_ty, required) = match option_inner(&field.ty) {
-            Some(inner) => (inner, false),
-            None => (field.ty.clone(), true),
-        };
-        quote! {
-            ::delonix_seiva::schema::Field {
-                name: #field_name,
-                schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
-                required: #required,
+    // The body of the generated `schema()`: an `object` for a struct with named
+    // fields, or a string-`enum` for a C-like (unit-variant) enum.
+    let schema_body = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(named) => {
+                let field_descs = named.named.iter().map(|field| {
+                    let field_name = field.ident.as_ref().expect("named field").to_string();
+                    // An `Option<T>` field is not required and documents `T`'s schema.
+                    let (schema_ty, required) = match option_inner(&field.ty) {
+                        Some(inner) => (inner, false),
+                        None => (field.ty.clone(), true),
+                    };
+                    quote! {
+                        ::delonix_seiva::schema::Field {
+                            name: #field_name,
+                            schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
+                            required: #required,
+                        }
+                    }
+                });
+                quote! { ::delonix_seiva::schema::object_schema(&[ #(#field_descs),* ]) }
             }
+            _ => {
+                return syn::Error::new_spanned(
+                    ident,
+                    "WireSchema supports a struct with named fields (a wire DTO)",
+                )
+                .to_compile_error()
+                .into();
+            }
+        },
+        Data::Enum(data) => {
+            // Only C-like enums (every variant a unit) map faithfully to a string
+            // enum. A data-carrying variant would need a `oneOf`, not yet supported.
+            if let Some(bad) = data
+                .variants
+                .iter()
+                .find(|v| !matches!(v.fields, Fields::Unit))
+            {
+                return syn::Error::new_spanned(
+                    bad,
+                    "WireSchema supports only unit-variant (C-like) enums; a data-carrying \
+                     variant would need a `oneOf`, which is not yet supported",
+                )
+                .to_compile_error()
+                .into();
+            }
+            let variant_names = data.variants.iter().map(|v| v.ident.to_string());
+            quote! { ::delonix_seiva::schema::enum_schema(&[ #(#variant_names),* ]) }
         }
-    });
+        Data::Union(_) => {
+            return syn::Error::new_spanned(ident, "WireSchema does not support a union")
+                .to_compile_error()
+                .into();
+        }
+    };
 
     quote! {
         impl ::delonix_seiva::schema::WireSchema for #ident {
             fn schema() -> ::delonix_seiva::serde_json::Value {
-                ::delonix_seiva::schema::object_schema(&[ #(#field_descs),* ])
+                #schema_body
             }
         }
 
@@ -411,9 +430,9 @@ fn is_ctx_type(ty: &Type) -> bool {
 ///   mapping to the wire; it leaves at most one *primary* parameter per method.
 /// - The service is injected as axum state, so its type must be
 ///   `Clone + Send + Sync + 'static`.
-/// - The generated handlers return `Result<_, Problem>` and `Problem` is a large
-///   value, so the consuming crate needs `#![allow(clippy::result_large_err)]`
-///   (as `seiva-http` itself does).
+/// - The generated handlers return `Result<_, Problem>`; `Problem` is kept small
+///   enough (its strings are `Box<str>`) that it never trips
+///   `clippy::result_large_err`, so the consuming crate needs no lint allowance.
 ///
 /// Anything outside these shapes is a **compile error**, never silently wrong
 /// code:
@@ -507,13 +526,37 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         // Derive the HTTP method, path, request extractor, call argument and the
-        // success status from the convention. `extractor`/`call_arg` are 0-or-1
+        // success status from the convention. `extractor` is a 0-or-1
         // element lists so the `#(, #x)*` splices add nothing for an empty one.
         let http_fn: proc_macro2::TokenStream;
         let path_expr: proc_macro2::TokenStream;
         let mut extractor: Vec<proc_macro2::TokenStream> = Vec::new();
-        let mut call_arg: Vec<proc_macro2::TokenStream> = Vec::new();
         let ok_status: proc_macro2::TokenStream;
+
+        // Call arguments in the method's DECLARED order: a `&Ctx`/`Ctx` parameter
+        // gets the injected request context (the authenticated `Principal`, so a
+        // handler can scope by tenant server-side); the single wire parameter gets
+        // the extracted value. The `Ctx` extractor is `FromRequestParts`, so it is
+        // pushed BEFORE the (body) wire extractor, which axum requires last.
+        let mut ordered_call: Vec<proc_macro2::TokenStream> = Vec::new();
+        let mut uses_ctx = false;
+        for input in &method.sig.inputs {
+            let FnArg::Typed(pat_type) = input else {
+                continue;
+            };
+            if is_ctx_type(&pat_type.ty) {
+                uses_ctx = true;
+                ordered_call.push(match pat_type.ty.as_ref() {
+                    Type::Reference(_) => quote!(&__ctx),
+                    _ => quote!(__ctx.clone()),
+                });
+            } else {
+                ordered_call.push(quote!(__arg));
+            }
+        }
+        if uses_ctx {
+            extractor.push(quote!(__ctx: ::seiva_http::Ctx));
+        }
 
         match method_name.as_str() {
             "get" => {
@@ -534,7 +577,6 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                     __resource
                 ));
                 extractor.push(quote!(::axum::extract::Path(__arg): ::axum::extract::Path<#ty>));
-                call_arg.push(quote!(__arg));
                 ok_status = quote!(::axum::http::StatusCode::OK);
             }
             "list" => {
@@ -552,7 +594,6 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                 if let Some(ty) = primary.first() {
                     extractor
                         .push(quote!(::axum::extract::Query(__arg): ::axum::extract::Query<#ty>));
-                    call_arg.push(quote!(__arg));
                 }
                 ok_status = quote!(::axum::http::StatusCode::OK);
             }
@@ -582,7 +623,6 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 if let Some(ty) = primary.first() {
                     extractor.push(quote!(::seiva_http::Valid(__arg): ::seiva_http::Valid<#ty>));
-                    call_arg.push(quote!(__arg));
                 }
             }
         }
@@ -602,7 +642,7 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                             #(, #extractor)*
                         | async move {
                             match <#self_ty as #trait_path>::#method_ident(
-                                &__service #(, #call_arg)*
+                                &__service #(, #ordered_call)*
                             ).await {
                                 ::core::result::Result::Ok(__value) =>
                                     ::core::result::Result::<

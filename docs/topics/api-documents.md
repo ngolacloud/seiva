@@ -26,12 +26,54 @@ composition root); outside a project it shows the built-in demo facade.
 `GET /docs` serves an interactive API reference (Scalar) over the service's own
 `/openapi.json` — the FastAPI `/docs` parity piece.
 
-## The admin console (`/admin`)
+## The admin console (`/admin`) — an optional extension
 
-`GET /admin` is a self-contained console (no CDN) that renders each module as a
-resource with its operations and a try-form per write operation built from the
-DTO's schema, with a bearer-token field. Add a module and it appears — see
-[the admin](authentication.md) story and `seiva db studio` for data browsing.
+The admin console is **not** part of the base framework (ADR 0008). A plain
+Seiva backend answers `404` for `/admin` and carries none of its assets. The
+console ships as a separate crate, `seiva-console-admin`, that a composition root
+opts into explicitly:
+
+```rust
+// in your apps/<name>-api composition root, merge into `modules` BEFORE the
+// framework layers wrap them (so /admin gets authn, headers and the rate limit):
+let modules = seiva_console_admin::mount(modules);
+let app = seiva_http::router_with_modules(health, &security, auth, modules);
+```
+
+`seiva ext add seiva-console-admin` inserts that line at the managed anchor for
+you (ADR 0010).
+
+Once mounted, `GET /admin` is a self-contained console (no CDN, strict
+hash-based CSP) that renders each **registered, authorized** resource with its
+operations and a try-form per write operation built from the DTO's schema, with
+a bearer-token field.
+
+A resource appears only when a module **registers** it with
+`delonix_seiva::register_admin!` *and* the caller holds its `view` permission —
+being in `/openapi.json` is never enough (ADR 0009). The console reads a
+server-filtered `GET /admin/registry.json`, so an unauthorized caller sees
+neither the resource nor its existence; write forms are hidden unless the caller
+holds the create/change permission (and the server guard enforces it regardless).
+A module that registers nothing stays private to the console.
+
+```rust
+// in the module's interface layer (e.g. examples/accounts/interface):
+use delonix_seiva::admin::{AdminPermissions, AdminResource};
+use delonix_seiva::register_admin;
+
+register_admin!(AdminResource {
+    namespace: "accounts", resource: "accounts", label: "Accounts",
+    facade: "Accounts", version: "v1",
+    list_fields: &["id", "username"], search_fields: &["username"],
+    filters: &[], ordering: &["username"], page_size: 25,
+    permissions: AdminPermissions {
+        view: "accounts.read", create: "accounts.create", change: "", delete: "",
+    },
+});
+```
+
+It drives the contract's *operations*; for browsing/editing data rows use
+`seiva db studio`. See [the admin](authentication.md) story for the auth model.
 
 ## proto3 (`seiva proto`)
 

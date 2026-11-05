@@ -218,6 +218,23 @@ async fn docs_page_is_served() {
         .starts_with("text/html"));
 }
 
+/// The base framework serves **no** admin console: `/admin` is a `404`. The
+/// console is an optional extension (`seiva-console-admin`, ADR 0008) a
+/// composition root mounts explicitly; a plain backend carries none of it.
+#[tokio::test]
+async fn admin_is_not_part_of_the_base() {
+    let response = router(Health::starting())
+        .oneshot(
+            Request::builder()
+                .uri("/admin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 /// `/openapi.json` is a valid 3.1 document carrying the framework version. The
 /// demo-free `seiva-http` links no facade, so `paths` is an empty object here;
 /// the full runtime that mounts modules documents their operations.

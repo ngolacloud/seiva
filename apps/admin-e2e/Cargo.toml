@@ -1,0 +1,23 @@
+# A tiny composition root used ONLY by the admin browser E2E (§10): it serves the
+# `accounts` example module (which registers an admin resource, ADR 0009) with the
+# console mounted (ADR 0008/0010) behind a token authenticator, so a headless
+# Chrome can drive /admin end to end. Not a library; no tests of its own.
+[package]
+name = "admin-e2e"
+description = "Composition root for the admin browser E2E: accounts module + seiva-console-admin + a token authenticator."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+seiva-http = { version = "0.1.0", path = "../../crates/seiva-http" }
+seiva-server = { version = "0.1.0", path = "../../crates/seiva-server" }
+seiva-console-admin = { version = "0.1.0", path = "../../crates/seiva-console-admin" }
+accounts-interface = { path = "../../examples/accounts/interface" }
+accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+[[bin]]
+name = "admin-e2e"
+path = "src/main.rs"

@@ -95,6 +95,17 @@ pub fn object_schema(fields: &[Field]) -> Value {
     Value::Object(object)
 }
 
+/// The JSON Schema for a C-like, **unit-variant** enum: a `string` constrained to
+/// the variant names, matching serde's default serialization of a unit variant as
+/// its name. `#[derive(WireSchema)]` emits this for such an enum. Data-carrying
+/// enums are rejected by the derive (a faithful `oneOf` is future work), and
+/// serde `rename`/`rename_all` attributes are not reflected here — name a wire
+/// enum's variants as they serialize.
+#[must_use]
+pub fn enum_schema(variants: &[&str]) -> Value {
+    json!({ "type": "string", "enum": variants })
+}
+
 /// A facade DTO's registration in the link-time schema inventory.
 ///
 /// `#[derive(WireSchema)]` emits one `inventory::submit!` of this per type, so
@@ -262,5 +273,88 @@ mod tests {
             required: false,
         }]);
         assert!(schema.get("required").is_none());
+    }
+
+    // --- Contract fidelity via the derive (ADR 0007/§8) -----------------------
+    //
+    // These exercise `#[derive(WireSchema)]` end to end — nested DTOs, Option,
+    // arrays, bytes and enums — the shapes §8 requires the contract to describe
+    // faithfully. `extern crate self as delonix_seiva` lets the derive resolve.
+
+    #[derive(crate::WireSchema)]
+    #[allow(dead_code)]
+    enum Status {
+        Active,
+        Suspended,
+    }
+
+    #[derive(crate::WireSchema)]
+    #[allow(dead_code)]
+    struct Address {
+        street: String,
+        zip: String,
+    }
+
+    #[derive(crate::WireSchema)]
+    #[allow(dead_code)]
+    struct Customer {
+        name: String,
+        age: u32,
+        status: Status,           // nested enum → string enum
+        address: Address,         // nested object
+        tags: Vec<String>,        // array
+        avatar: Vec<u8>,          // bytes (faithful to serde_json: array of integers)
+        nickname: Option<String>, // optional
+    }
+
+    #[test]
+    fn unit_enum_is_a_string_enum() {
+        assert_eq!(
+            Status::schema(),
+            json!({ "type": "string", "enum": ["Active", "Suspended"] })
+        );
+    }
+
+    #[test]
+    fn nested_dto_option_array_and_bytes_are_faithful() {
+        let s = Customer::schema();
+        assert_eq!(s["type"], "object");
+        // Scalars with integer format.
+        assert_eq!(
+            s["properties"]["age"],
+            json!({ "type": "integer", "format": "u32" })
+        );
+        // Nested enum inlines the string-enum schema.
+        assert_eq!(
+            s["properties"]["status"],
+            json!({ "type": "string", "enum": ["Active", "Suspended"] })
+        );
+        // Nested object inlines the struct's object schema.
+        assert_eq!(s["properties"]["address"]["type"], "object");
+        assert_eq!(
+            s["properties"]["address"]["properties"]["street"],
+            json!({ "type": "string" })
+        );
+        // Array of strings.
+        assert_eq!(
+            s["properties"]["tags"],
+            json!({ "type": "array", "items": { "type": "string" } })
+        );
+        // Bytes: serde_json serialises Vec<u8> as an array of integers, so the
+        // schema is faithful to the wire (a base64 string would need a serde attr).
+        assert_eq!(
+            s["properties"]["avatar"],
+            json!({ "type": "array", "items": { "type": "integer", "format": "u8" } })
+        );
+        // Option carries the inner schema; optionality shows only in `required`.
+        assert_eq!(s["properties"]["nickname"], json!({ "type": "string" }));
+        let required = s["required"].as_array().unwrap();
+        for req in ["name", "age", "status", "address", "tags", "avatar"] {
+            assert!(required.iter().any(|v| v == req), "{req} must be required");
+        }
+        assert!(
+            !required.iter().any(|v| v == "nickname"),
+            "an Option field must not be required"
+        );
     }
 }

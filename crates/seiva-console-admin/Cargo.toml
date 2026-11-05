@@ -1,0 +1,49 @@
+# seiva-console-admin — the optional admin console, an EXTENSION of the Seiva
+# base (Seiva ADR 0008).
+#
+# This crate is NOT a dependency of the framework base: `seiva-http` carries no
+# admin code and serves 404 for `/admin`. A composition root opts the console in
+# explicitly — `seiva_console_admin::mount(router)` — and must recompile for it
+# to appear. The dependency is one-way: this crate depends on Seiva's public
+# transport type (`axum::Router`); nothing in the base depends on it.
+[package]
+name = "seiva-console-admin"
+description = "The optional Delonix Seiva admin console — a self-contained, CDN-free operations UI generated from a service's live OpenAPI contract, mounted explicitly by a composition root. An extension of the Seiva base; the base never depends on it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["seiva", "admin", "console", "openapi", "axum"]
+categories = ["web-programming"]
+
+[dependencies]
+# The transport type the console mounts onto — the single, public, one-way edge
+# to the Seiva base (axum is Seiva's HTTP transport, re-exported by seiva-http).
+axum = "0.8"
+# The admin registry (`AdminResource`, `registered_admin_resources`) the console
+# reads to decide what to surface. Default features OFF (no DORM): the console
+# only reads the link-time descriptors. This is the one-way edge to the framework
+# contract; the base never depends on this crate.
+delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
+# The `Principal` the registry endpoint filters by (view permission). Transport-free.
+seiva-identity = { version = "0.1.0", path = "../seiva-identity" }
+# Builds the registry JSON response.
+serde_json = "1"
+# A strict `Content-Security-Policy` pins the inline <style>/<script> by their
+# SHA-256 hash (no `unsafe-inline`); these compute it from the exact bytes served.
+sha2 = "0.10"
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# For the end-to-end composition test ONLY (a dev-dependency, never a normal one —
+# the base must not depend on this crate): proves the console, mounted into the
+# `modules` router and wrapped by `router_with_modules`, sees the authenticated
+# `Principal` through the authn layer. No dependency cycle: seiva-http does not
+# depend on seiva-console-admin.
+seiva-http = { version = "0.1.0", path = "../seiva-http" }

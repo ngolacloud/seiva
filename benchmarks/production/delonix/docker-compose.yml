@@ -1,0 +1,60 @@
+# Fully containerised, load-balanced multi-replica deployment of the secure path,
+# run natively by `delonix compose up` (no Docker daemon). Two Catalog replicas
+# share one PostgreSQL and one Redis; HAProxy balances them. The point it proves
+# that the single-host benchmark could not: the per-client rate budget is ONE
+# across replicas, because the DISTRIBUTED Redis limiter (ADR 0015) counts in a
+# shared store — not a per-process counter.
+services:
+  pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: seiva
+      POSTGRES_PASSWORD: seiva
+      POSTGRES_DB: seiva
+    volumes:
+      - ./pg/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seiva -d seiva"]
+      interval: 1s
+      timeout: 3s
+      retries: 40
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 40
+
+  app1:
+    build: ./app
+    environment:
+      ADMIN_DATA_E2E_ADDR: "0.0.0.0:8098"
+      ADMIN_DATA_E2E_DSN: "host=pg user=seiva password=seiva dbname=seiva"
+      ADMIN_DATA_E2E_REDIS_URL: "redis://redis:6379"
+      ADMIN_DATA_E2E_RATE_LIMIT: "__RATE_LIMIT__"
+    depends_on:
+      pg: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  app2:
+    build: ./app
+    environment:
+      ADMIN_DATA_E2E_ADDR: "0.0.0.0:8098"
+      ADMIN_DATA_E2E_DSN: "host=pg user=seiva password=seiva dbname=seiva"
+      ADMIN_DATA_E2E_REDIS_URL: "redis://redis:6379"
+      ADMIN_DATA_E2E_RATE_LIMIT: "__RATE_LIMIT__"
+    depends_on:
+      pg: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  lb:
+    image: haproxy:lts-alpine
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - app1
+      - app2

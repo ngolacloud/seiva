@@ -13,6 +13,14 @@ The index of ADRs.
 - ADR 0005 — Object-level authorization (BOLA)
 - ADR 0006 — Identity and authentication
 - ADR 0007 — Wire-schema contract fidelity
+- ADR 0008 — The admin console is an extension, not part of the base
+- ADR 0009 — Per-module admin registration and the authorization gate
+- ADR 0010 — The extension integration contract (`dx add` / `seiva ext add`)
+- ADR 0011 — Durable business idempotency as a port, reusing DORM
+- ADR 0012 — Cloud-native health probes and rate-limit posture
+- ADR 0013 — Persistent audit of administrative mutations
+- ADR 0014 — Supply-chain audit of the excluded, DORM-coupled lockfiles
+- ADR 0015 — Distributed rate limiting as an optional port
 
 ## Related
 

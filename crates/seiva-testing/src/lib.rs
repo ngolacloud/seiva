@@ -9,9 +9,13 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use seiva_ports::{Clock, EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{
+    AuditEntry, AuditSink, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
+    IdempotencyStore, PortResult, RateLimitDecision, RateLimitStore, UnitOfWork,
+};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// A [`Clock`] fixed at a chosen instant, advanceable for time-based tests.
 #[derive(Clone)]
@@ -187,6 +191,143 @@ impl UnitOfWork for InMemoryUnitOfWork {
     }
 }
 
+/// An in-memory [`IdempotencyStore`] double for unit-testing the idempotency
+/// **state machine** (Fresh → Replay, Mismatch, InProgress) with no database.
+///
+/// It is a faithful single-process model: the `Mutex` serialises `begin`, so a
+/// key claimed and not yet `finish`ed answers [`IdempotencyOutcome::InProgress`]
+/// to a second claim, and a completed key answers [`Replay`](IdempotencyOutcome::Replay).
+/// It does **not** prove the *distributed, durable* guarantee — a Mutex is not a
+/// cross-replica CAS and nothing survives a restart. The real guarantee is proved
+/// against a live database with the DORM-backed store (ADR 0011); use this only
+/// for logic tests.
+#[derive(Clone, Default)]
+pub struct InMemoryIdempotencyStore {
+    keys: Arc<Mutex<HashMap<String, IdemRecord>>>,
+}
+
+#[derive(Clone)]
+struct IdemRecord {
+    fingerprint: String,
+    response: Option<Vec<u8>>,
+}
+
+impl InMemoryIdempotencyStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl IdempotencyStore for InMemoryIdempotencyStore {
+    async fn begin(
+        &self,
+        scoped_key: &str,
+        fingerprint: &str,
+        _ttl: Duration,
+    ) -> PortResult<IdempotencyOutcome> {
+        let mut keys = self.keys.lock().expect("idempotency store poisoned");
+        match keys.get(scoped_key) {
+            None => {
+                keys.insert(
+                    scoped_key.to_owned(),
+                    IdemRecord {
+                        fingerprint: fingerprint.to_owned(),
+                        response: None,
+                    },
+                );
+                Ok(IdempotencyOutcome::Fresh)
+            }
+            Some(record) if record.fingerprint != fingerprint => Ok(IdempotencyOutcome::Mismatch),
+            Some(record) => match &record.response {
+                Some(bytes) => Ok(IdempotencyOutcome::Replay(bytes.clone())),
+                None => Ok(IdempotencyOutcome::InProgress),
+            },
+        }
+    }
+
+    async fn finish(&self, scoped_key: &str, response: &[u8]) -> PortResult<()> {
+        let mut keys = self.keys.lock().expect("idempotency store poisoned");
+        if let Some(record) = keys.get_mut(scoped_key) {
+            record.response = Some(response.to_vec());
+        }
+        Ok(())
+    }
+}
+
+/// An [`AuditSink`] that records every entry for assertions. Cheap to clone and
+/// shares its log, so a test holds a handle, passes a clone into the handler or
+/// the audit middleware, and reads back what was recorded.
+#[derive(Clone, Default)]
+pub struct RecordingAuditSink {
+    entries: Arc<Mutex<Vec<AuditEntry>>>,
+}
+
+impl RecordingAuditSink {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every audit entry recorded so far, in order.
+    #[must_use]
+    pub fn entries(&self) -> Vec<AuditEntry> {
+        self.entries.lock().expect("audit sink poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl AuditSink for RecordingAuditSink {
+    async fn record(&self, entry: &AuditEntry) -> PortResult<()> {
+        self.entries
+            .lock()
+            .expect("audit sink poisoned")
+            .push(entry.clone());
+        Ok(())
+    }
+}
+
+/// An in-memory [`RateLimitStore`] double (fixed window over `Instant`) for
+/// unit-testing the store-based middleware with no Redis. A single-process model:
+/// it does not prove the *distributed* guarantee (that is proved live against
+/// Redis, ADR 0015) — use it only for logic tests.
+#[derive(Clone, Default)]
+pub struct InMemoryRateLimitStore {
+    windows: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
+}
+
+impl InMemoryRateLimitStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl RateLimitStore for InMemoryRateLimitStore {
+    async fn check(
+        &self,
+        key: &str,
+        limit: u32,
+        window: Duration,
+    ) -> PortResult<RateLimitDecision> {
+        let now = Instant::now();
+        let mut windows = self.windows.lock().expect("rate-limit store poisoned");
+        let entry = windows.entry(key.to_owned()).or_insert((0, now));
+        if now.duration_since(entry.1) >= window {
+            *entry = (0, now); // window rolled over
+        }
+        if entry.0 < limit {
+            entry.0 += 1;
+            Ok(RateLimitDecision::Permitted)
+        } else {
+            let retry_after = window - now.duration_since(entry.1);
+            Ok(RateLimitDecision::Limited { retry_after })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +416,68 @@ mod tests {
         assert_eq!(handler.uow.outcomes(), [TxOutcome::Committed]);
         assert_eq!(handler.events.topics(), ["notes.created"]);
         assert_eq!(handler.events.events()[0].payload, id.0);
+    }
+
+    #[tokio::test]
+    async fn idempotency_state_machine_fresh_then_replay_mismatch_inprogress() {
+        let store = InMemoryIdempotencyStore::new();
+        let ttl = Duration::from_secs(60);
+
+        // First claim is Fresh.
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::Fresh
+        );
+        // While in flight (no finish yet), a second claim is InProgress.
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::InProgress
+        );
+        // The same key with a DIFFERENT fingerprint is a Mismatch (never executes).
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-b", ttl).await.unwrap(),
+            IdempotencyOutcome::Mismatch
+        );
+        // After finishing, the key replays the stored response.
+        store
+            .finish("acme:create:k1", b"stored-result")
+            .await
+            .unwrap();
+        assert_eq!(
+            store.begin("acme:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::Replay(b"stored-result".to_vec())
+        );
+        // A different scoped key (another tenant) is wholly independent.
+        assert_eq!(
+            store.begin("globex:create:k1", "fp-a", ttl).await.unwrap(),
+            IdempotencyOutcome::Fresh
+        );
+    }
+
+    #[tokio::test]
+    async fn inbox_dedup_consumes_a_redelivered_event_once() {
+        use seiva_ports::inbox_key;
+        let store = InMemoryIdempotencyStore::new();
+        let ttl = Duration::from_secs(60);
+        let key = inbox_key("billing", "evt-1");
+        let mut effects = 0;
+
+        // Two deliveries of the same (consumer, event): claim+mark, effect once.
+        for _ in 0..2 {
+            if store.begin(&key, "evt-1", ttl).await.unwrap() == IdempotencyOutcome::Fresh {
+                effects += 1;
+                store.finish(&key, b"").await.unwrap();
+            }
+        }
+        assert_eq!(effects, 1, "a redelivered event is consumed once");
+
+        // A different event id for the same consumer is independent.
+        assert_eq!(
+            store
+                .begin(&inbox_key("billing", "evt-2"), "evt-2", ttl)
+                .await
+                .unwrap(),
+            IdempotencyOutcome::Fresh
+        );
     }
 }

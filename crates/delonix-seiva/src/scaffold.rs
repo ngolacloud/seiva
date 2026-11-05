@@ -65,6 +65,15 @@ const MODULE_MERGES_ANCHOR: &str = "// seiva:module-merges (managed by the seiva
 /// `seiva module new` inserts the module's `interface`/`infrastructure` path deps.
 const APP_MODULE_DEPS_ANCHOR: &str = "# seiva:module-deps (managed by the seiva CLI)";
 
+/// The marker line in the app crate's `Cargo.toml` `[dependencies]` before which
+/// `seiva ext add` inserts an optional extension's dependency (ADR 0010).
+const APP_EXTENSION_DEPS_ANCHOR: &str = "# seiva:extension-deps (managed by the seiva CLI)";
+
+/// The marker line in the composition root's `main.rs` — the managed composition
+/// point — before which `seiva ext add` inserts each extension's mount statement
+/// (shadowing `app`), after the framework router is built (ADR 0010).
+const EXTENSIONS_ANCHOR: &str = "// seiva:extensions (managed by the seiva CLI)";
+
 /// Validates a project or module name: lowercase ASCII, starts with a letter,
 /// then letters/digits/underscores, no trailing or doubled underscore.
 pub fn validate_name(name: &str) -> Result<(), ScaffoldError> {
@@ -164,7 +173,7 @@ pub fn project_files(name: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
 /// adapter that yields `<trait>_router` plus the OpenAPI/proto generation, and
 /// the `application` implements the facade over `seiva-ports`. See the module
 /// docs for the full shape and the layering decision.
-pub fn module_files(module: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
+pub fn module_files(module: &str, admin: bool) -> Result<Vec<GeneratedFile>, ScaffoldError> {
     validate_name(module)?;
     // A validated name is already lowercase snake_case, so `snake == module`;
     // we keep the name explicit for the crate-import spellings (`<snake>_facade`).
@@ -220,7 +229,7 @@ pub fn module_files(module: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
         ),
         file(
             format!("{base}/interface/src/lib.rs"),
-            interface_lib(&snake, &pascal),
+            interface_lib(&snake, &pascal, admin),
         ),
     ])
 }
@@ -304,6 +313,100 @@ pub fn wire_module_in_main(main_rs: &str, module: &str) -> Result<String, Scaffo
          {indent}));\n"
     );
     Ok(main_rs.replacen(anchor_line, &format!("{merge}{anchor_line}"), 1))
+}
+
+/// The declarative integration contract for an optional Seiva extension (ADR
+/// 0010): pure data describing how a composition root wires the extension in — a
+/// dependency to add and a mount statement to insert at the managed composition
+/// point. A tool (`seiva ext add`, or the independent DX) reads this and applies
+/// the edits; it is **never** a `build.rs` or an install script, and declaring
+/// the dependency alone never mounts routes — the mount is explicit and recompiled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionManifest {
+    /// The extension's crate name (the `dx add` / `cargo add` argument).
+    pub crate_name: &'static str,
+    /// The version requirement added to the composition root's `[dependencies]`.
+    pub version_req: &'static str,
+    /// The statement inserted at the managed composition point, shadowing `app`.
+    pub mount_stmt: &'static str,
+    /// A one-line human description for the CLI.
+    pub summary: &'static str,
+}
+
+/// The first-party admin console's integration contract.
+pub const CONSOLE_ADMIN_EXTENSION: ExtensionManifest = ExtensionManifest {
+    crate_name: "seiva-console-admin",
+    version_req: "0.1",
+    // Mounts into `modules` BEFORE `router_with_modules` layers them, so /admin is
+    // covered by authn/security-headers/rate-limit (see the composition point).
+    mount_stmt: "let modules = seiva_console_admin::mount(modules);",
+    summary: "The optional admin console at /admin (ADR 0008/0009).",
+};
+
+/// The first-party extensions `seiva ext add` knows how to wire, by crate name.
+/// Kept tiny and first-party on purpose: `seiva` fetches and executes **nothing**
+/// to discover how to install an extension. A third-party extension ships the
+/// same shape as a `seiva-extension.toml`, which the independent DX reads.
+#[must_use]
+pub fn extension_manifest(name: &str) -> Option<ExtensionManifest> {
+    match name {
+        "seiva-console-admin" => Some(CONSOLE_ADMIN_EXTENSION),
+        _ => None,
+    }
+}
+
+/// Adds `ext`'s dependency to the app crate's `[dependencies]` at the managed
+/// extension anchor. **Idempotent**: if the crate is already a dependency the
+/// text is returned unchanged. Returns [`ScaffoldError::MissingAnchor`] when the
+/// manifest is not a recognised Seiva composition root (so the caller can emit a
+/// manual patch instead). Pure.
+pub fn add_extension_to_app_manifest(
+    cargo: &str,
+    ext: &ExtensionManifest,
+) -> Result<String, ScaffoldError> {
+    let dep_key = format!("{} =", ext.crate_name);
+    if cargo.lines().any(|l| l.trim_start().starts_with(&dep_key)) {
+        return Ok(cargo.to_owned()); // already declared — idempotent no-op
+    }
+    let anchor_line = cargo
+        .lines()
+        .find(|line| line.trim() == APP_EXTENSION_DEPS_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: APP_EXTENSION_DEPS_ANCHOR.to_owned(),
+            what: "apps/<name>-api/Cargo.toml".to_owned(),
+        })?;
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let addition = format!("{indent}{} = \"{}\"\n", ext.crate_name, ext.version_req);
+    Ok(cargo.replacen(anchor_line, &format!("{addition}{anchor_line}"), 1))
+}
+
+/// Inserts `ext`'s mount statement at the managed composition point in `main.rs`.
+/// **Idempotent**: if the mount is already present the text is returned
+/// unchanged. Returns [`ScaffoldError::MissingAnchor`] on an unrecognised project.
+/// Pure.
+pub fn mount_extension_in_main(
+    main_rs: &str,
+    ext: &ExtensionManifest,
+) -> Result<String, ScaffoldError> {
+    if main_rs.contains(ext.mount_stmt) {
+        return Ok(main_rs.to_owned()); // already mounted — idempotent no-op
+    }
+    let anchor_line = main_rs
+        .lines()
+        .find(|line| line.trim() == EXTENSIONS_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: EXTENSIONS_ANCHOR.to_owned(),
+            what: "apps/<name>-api/src/main.rs".to_owned(),
+        })?;
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let addition = format!("{indent}{}\n", ext.mount_stmt);
+    Ok(main_rs.replacen(anchor_line, &format!("{addition}{anchor_line}"), 1))
 }
 
 /// Registers a module in `seiva.toml` by appending a `[modules.<name>]` section.
@@ -421,6 +524,8 @@ fn bin_cargo_toml(app: &str) -> String {
          serde_json = \"1\"\n\
          tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
          tracing = \"0.1\"\n\
+         # Optional extensions `seiva ext add` wires in (e.g. seiva-console-admin):\n\
+         {APP_EXTENSION_DEPS_ANCHOR}\n\
          # Module crates `seiva module new` wires into the composition root:\n\
          {APP_MODULE_DEPS_ANCHOR}\n"
     )
@@ -472,6 +577,14 @@ fn app_main_rs(name: &str) -> String {
          \x20   // inserts each module's merge at the anchor below.\n\
          \x20   let modules = Router::new();\n\
          \x20   {MODULE_MERGES_ANCHOR}\n\
+         \x20   // Optional extensions merge into `modules` HERE — the managed\n\
+         \x20   // composition point — BEFORE `router_with_modules` wraps everything,\n\
+         \x20   // so an extension's routes (e.g. the admin console's /admin) get\n\
+         \x20   // authn (the `Principal` populated), the security headers and the\n\
+         \x20   // rate limit like any module route. `seiva ext add <name>` inserts\n\
+         \x20   // each extension's mount at the anchor below — explicit and\n\
+         \x20   // recompiled, never a silent hook. (Admin console: ADR 0008/0009/0010.)\n\
+         \x20   {EXTENSIONS_ANCHOR}\n\
          \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
          \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
          \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
@@ -809,7 +922,45 @@ fn infrastructure_lib(snake: &str) -> String {
     )
 }
 
-fn interface_lib(snake: &str, pascal: &str) -> String {
+fn interface_lib(snake: &str, pascal: &str, admin: bool) -> String {
+    // When `seiva module new --admin` is used, the interface registers an admin
+    // resource (ADR 0009) so the optional console surfaces it. This couples the
+    // module only to the framework contract (`delonix-seiva`), NOT to the admin UI
+    // crate; with the console unmounted it is inert link-time data. A module
+    // scaffolded without `--admin` emits nothing here and stays private to the
+    // console.
+    let admin_block = if admin {
+        format!(
+            "use delonix_seiva::admin::{{AdminPermissions, AdminResource}};\n\
+             use delonix_seiva::register_admin;\n\n\
+             // Make this module visible to the optional admin console (ADR 0009).\n\
+             // The resource id matches the module's route segment (`/v1/{snake}/...`)\n\
+             // so the console pairs it with the operations in `/openapi.json`, and\n\
+             // each permission matches the facade's `#[requires(..)]`. Grant\n\
+             // `{snake}.read` to view the resource and `{snake}.create` to use the\n\
+             // create form; add `change`/`delete` permissions as you add operations.\n\
+             register_admin!(AdminResource {{\n    \
+                 namespace: \"{snake}\",\n    \
+                 resource: \"{snake}\",\n    \
+                 label: \"{pascal}\",\n    \
+                 facade: \"{pascal}\",\n    \
+                 version: \"v1\",\n    \
+                 list_fields: &[\"id\", \"title\"],\n    \
+                 search_fields: &[\"title\"],\n    \
+                 filters: &[],\n    \
+                 ordering: &[\"id\"],\n    \
+                 page_size: 25,\n    \
+                 permissions: AdminPermissions {{\n        \
+                     view: \"{snake}.read\",\n        \
+                     create: \"{snake}.create\",\n        \
+                     change: \"\",\n        \
+                     delete: \"\",\n    \
+                 }},\n\
+             }});\n\n"
+        )
+    } else {
+        String::new()
+    };
     format!(
         "//! Interface layer: the HTTP/gRPC transport. It wires this module's facade\n\
          //! to the real framework transports.\n\
@@ -829,18 +980,14 @@ fn interface_lib(snake: &str, pascal: &str) -> String {
          //! time. The COMPOSITION ROOT in `apps/` picks the concrete adapters and\n\
          //! calls `{snake}_router({pascal}Controller::new(repo, ids))`. The same\n\
          //! descriptor drives this module's OpenAPI document ([`openapi`]), so the\n\
-         //! wire contract is generated, never hand-maintained.\n\
-         //!\n\
-         //! The generated handlers return `Result<_, seiva_http::Problem>`, a large\n\
-         //! value, so the large-`Err` lint is allowed crate-wide (as `seiva-http`\n\
-         //! itself does).\n\
-         #![allow(clippy::result_large_err)]\n\n\
+         //! wire contract is generated, never hand-maintained.\n\n\
          use std::sync::Arc;\n\n\
          use delonix_seiva::contract::Facade;\n\
          use delonix_seiva::controller;\n\
          use seiva_ports::IdGenerator;\n\
          use {snake}_application::{{RecordRepository, RecordService}};\n\
          use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\n\
+         {admin_block}\
          /// Transport adapter: a concrete `{pascal}` service exposed over HTTP,\n\
          /// generic over the repository port `R` and the id-generator port `G`.\n\
          /// Held behind an [`Arc`] so it is `Clone + Send + Sync + 'static` — the\n\
@@ -1083,7 +1230,7 @@ mod tests {
         // Project skeleton, then a module, then the workspace registration edit
         // the CLI performs so the module crates are built too.
         let mut project = project_files("demo").expect("project files");
-        let modules = module_files("notes").expect("module files");
+        let modules = module_files("notes", false).expect("module files");
         let cargo = project
             .iter()
             .find(|f| f.path == "Cargo.toml")
@@ -1147,7 +1294,7 @@ mod tests {
 
     #[test]
     fn module_files_emit_manifest_and_five_layer_crates() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         // One module.toml plus a Cargo.toml and a src/lib.rs per layer = 11.
         assert_eq!(files.len(), 11, "expected 1 manifest + 5 crates * 2 files");
         for layer in [
@@ -1180,7 +1327,7 @@ mod tests {
     /// `application`; the composition root injects the concrete adapters.
     #[test]
     fn generated_interface_does_not_depend_on_infrastructure() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let cargo = contents(&files, "modules/notes/interface/Cargo.toml");
         let deps = cargo
             .split("[dev-dependencies]")
@@ -1198,7 +1345,7 @@ mod tests {
 
     #[test]
     fn every_generated_lib_has_balanced_brackets() {
-        let files = module_files("order_items").unwrap();
+        let files = module_files("order_items", false).unwrap();
         for layer in [
             "facade",
             "domain",
@@ -1216,7 +1363,7 @@ mod tests {
 
     #[test]
     fn generated_facade_is_framework_wired() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let facade = contents(&files, "modules/notes/facade/src/lib.rs");
         // The macro is imported and applied with an explicit version.
         assert!(facade.contains("use delonix_seiva::{facade, WireSchema};"));
@@ -1238,7 +1385,7 @@ mod tests {
 
     #[test]
     fn generated_application_implements_the_facade_over_ports() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let app = contents(&files, "modules/notes/application/src/lib.rs");
         assert!(app.contains("use seiva_ports::{BoxError, IdGenerator, PortResult};"));
         assert!(app.contains("pub trait RecordRepository {"));
@@ -1258,7 +1405,7 @@ mod tests {
 
     #[test]
     fn generated_infrastructure_is_in_memory_and_dorm_free() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let infra = contents(&files, "modules/notes/infrastructure/src/lib.rs");
         assert!(infra.contains("pub struct InMemoryRecordRepository"));
         assert!(infra.contains("impl RecordRepository for InMemoryRecordRepository"));
@@ -1272,7 +1419,7 @@ mod tests {
 
     #[test]
     fn generated_interface_holds_controller_and_transport_generation() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         let interface = contents(&files, "modules/notes/interface/src/lib.rs");
         // The controller macro is imported and applied to a GENERIC adapter impl:
         // generic over the repository/id-generator ports, so the interface never
@@ -1294,13 +1441,99 @@ mod tests {
         assert!(interface.contains("seiva_openapi::openapi_document("));
         assert!(!interface.contains("seiva_grpc"));
         assert!(interface.contains("NotesFacade::DESCRIPTOR"));
-        // The large-Err lint allowance the generated handlers need.
-        assert!(interface.contains("#![allow(clippy::result_large_err)]"));
+        // The generated interface must NOT silence `result_large_err`: `Problem`
+        // is small enough (see seiva-http) that handlers returning it by value
+        // never trip the lint, so scaffolded projects keep the gate intact.
+        assert!(!interface.contains("result_large_err"));
+        // Without `--admin` the module registers NOTHING: it is private to the
+        // console (ADR 0009).
+        assert!(!interface.contains("register_admin!"));
+        assert!(!interface.contains("AdminResource"));
+    }
+
+    #[test]
+    fn module_new_admin_scaffolds_a_registration() {
+        let files = module_files("notes", true).unwrap();
+        let interface = contents(&files, "modules/notes/interface/src/lib.rs");
+        // The `--admin` flag emits a registration coupling only to the framework
+        // contract — not to the admin UI crate.
+        assert!(interface.contains("use delonix_seiva::register_admin;"));
+        assert!(interface.contains("register_admin!(AdminResource {"));
+        assert!(!interface.contains("seiva_console_admin"));
+        // The resource id matches the module's route segment, the permissions the
+        // facade's `#[requires(..)]`.
+        assert!(interface.contains("namespace: \"notes\""));
+        assert!(interface.contains("resource: \"notes\""));
+        assert!(interface.contains("view: \"notes.read\""));
+        assert!(interface.contains("create: \"notes.create\""));
+        // It still compiles as valid-looking Rust: the controller follows the
+        // registration (the block was inserted, not appended past EOF).
+        assert!(interface.contains("pub struct NotesController"));
+    }
+
+    #[test]
+    fn scaffolded_app_has_the_extension_composition_points() {
+        let files = project_files("shop").unwrap();
+        let cargo = contents(&files, "apps/shop-api/Cargo.toml");
+        let main = contents(&files, "apps/shop-api/src/main.rs");
+        assert!(cargo.contains(APP_EXTENSION_DEPS_ANCHOR));
+        assert!(main.contains(EXTENSIONS_ANCHOR));
+    }
+
+    #[test]
+    fn ext_add_is_explicit_and_idempotent() {
+        let files = project_files("shop").unwrap();
+        let cargo0 = contents(&files, "apps/shop-api/Cargo.toml");
+        let main0 = contents(&files, "apps/shop-api/src/main.rs");
+        let ext = CONSOLE_ADMIN_EXTENSION;
+
+        // The freshly scaffolded root must NOT already contain the mount — else
+        // the idempotency `contains` check would wrongly treat an example in a
+        // comment as "already mounted" and never insert the real statement.
+        assert!(
+            !main0.contains(ext.mount_stmt),
+            "the template must not pre-contain the mount statement"
+        );
+        assert!(!cargo0.contains("seiva-console-admin ="));
+
+        // First application wires both the dependency and the mount.
+        let cargo1 = add_extension_to_app_manifest(cargo0, &ext).unwrap();
+        let main1 = mount_extension_in_main(main0, &ext).unwrap();
+        assert!(cargo1.contains("seiva-console-admin = \"0.1\""));
+        assert_eq!(
+            main1.matches(ext.mount_stmt).count(),
+            1,
+            "exactly one mount statement after a single application"
+        );
+
+        // Second application is a no-op: nothing duplicated.
+        let cargo2 = add_extension_to_app_manifest(&cargo1, &ext).unwrap();
+        let main2 = mount_extension_in_main(&main1, &ext).unwrap();
+        assert_eq!(cargo1, cargo2, "the dependency must not be added twice");
+        assert_eq!(main1, main2, "the mount must not be inserted twice");
+        assert_eq!(main2.matches("seiva_console_admin::mount").count(), 1);
+    }
+
+    #[test]
+    fn ext_add_on_an_unrecognised_project_is_a_missing_anchor() {
+        let ext = CONSOLE_ADMIN_EXTENSION;
+        // A hand-written manifest/main with no managed anchors.
+        let err = add_extension_to_app_manifest("[dependencies]\naxum = \"0.8\"\n", &ext)
+            .expect_err("no extension anchor");
+        assert!(matches!(err, ScaffoldError::MissingAnchor { .. }));
+        let err = mount_extension_in_main("fn main() {}\n", &ext).expect_err("no mount anchor");
+        assert!(matches!(err, ScaffoldError::MissingAnchor { .. }));
+    }
+
+    #[test]
+    fn extension_manifest_resolves_only_known_extensions() {
+        assert!(extension_manifest("seiva-console-admin").is_some());
+        assert!(extension_manifest("not-an-extension").is_none());
     }
 
     #[test]
     fn module_manifests_depend_on_the_right_framework_crates() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
 
         // The framework crates are depended on by crates.io VERSION (so a
         // generated project compiles standalone once they are published); the
@@ -1350,7 +1583,7 @@ mod tests {
 
     #[test]
     fn no_generated_file_pulls_in_dorm() {
-        let files = module_files("notes").unwrap();
+        let files = module_files("notes", false).unwrap();
         for file in &files {
             assert!(
                 !file.contents.contains("seiva-data-dorm = "),
@@ -1421,7 +1654,7 @@ mod tests {
         // A distinctly named module so its route could only come from the project.
         let module = "widgets";
         let mut project = project_files("shop").expect("project files");
-        let modules = module_files(module).expect("module files");
+        let modules = module_files(module, false).expect("module files");
 
         // Apply every edit `seiva module new` performs: workspace members + the
         // interim patch, the app crate's module deps, and the main.rs merge.

@@ -1,0 +1,26 @@
+# seiva-ratelimit-redis — a Redis-backed `RateLimitStore` (Seiva ADR 0015).
+#
+# The OPTIONAL distributed rate-limit backend: a deployment running several
+# replicas wires this through `seiva_ports::RateLimitStore` so a client's budget
+# holds across instances. The base framework does NOT depend on it (its default
+# limiter is in-process); this is opt-in, like the DORM adapters.
+[package]
+name = "seiva-ratelimit-redis"
+description = "A Redis-backed distributed rate-limit store for Delonix Seiva (seiva_ports::RateLimitStore). Atomic fixed-window via a Lua script. Optional; the base framework's default limiter is in-process."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["seiva", "rate-limit", "redis", "distributed"]
+categories = ["web-programming"]
+
+[dependencies]
+seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
+async-trait = "0.1"
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

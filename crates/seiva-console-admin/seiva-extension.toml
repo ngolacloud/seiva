@@ -1,0 +1,34 @@
+# The declarative Seiva extension manifest (ADR 0010).
+#
+# This is the integration CONTRACT an optional extension ships so a tool can wire
+# it into a composition root with no build.rs and no install script: the tool
+# reads these declarations and applies the edits explicitly, then the project is
+# recompiled. `seiva ext add seiva-console-admin` carries this first-party
+# manifest built in; the independent `dx` tool reads this file for any extension;
+# the Cargo equivalent is to apply the two edits below by hand.
+#
+# Declaring the dependency ALONE never mounts routes — the `mount` statement is
+# what wires the extension, at the managed composition point, explicitly.
+
+schema = 1
+name = "seiva-console-admin"
+summary = "The optional admin console at /admin (ADR 0008/0009)."
+
+# Minimum framework version this extension integrates against.
+requires_seiva = "0.1"
+
+[dependency]
+# Added to the composition root's [dependencies] at the managed
+# `# seiva:extension-deps` anchor.
+crate = "seiva-console-admin"
+version = "0.1"
+
+[compose]
+# Inserted in the composition root's main.rs at the managed `// seiva:extensions`
+# anchor, which sits BEFORE `let app = router_with_modules(...);`. It merges into
+# `modules` so the console's /admin is wrapped by the framework layers (authn —
+# so the Principal is populated — security headers, rate limit) like any route.
+mount = "let modules = seiva_console_admin::mount(modules);"
+
+# This extension needs no Cargo feature and no runtime configuration. It reads the
+# service's own authorization-filtered admin registry (ADR 0009); nothing else.

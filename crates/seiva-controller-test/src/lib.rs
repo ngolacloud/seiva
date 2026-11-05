@@ -13,11 +13,6 @@
 //! sees them — the proc-macro crate is an implementation detail.
 
 #![forbid(unsafe_code)]
-// The generated handlers return `Result<_, seiva_http::Problem>`, and `Problem`
-// is a rich (large) RFC 9457 payload returned by value on the error path — that
-// is the transport's design, so the large-Err lint is allowed crate-wide, as
-// `seiva-http` itself does.
-#![allow(clippy::result_large_err)]
 
 use serde::{Deserialize, Serialize};
 

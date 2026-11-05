@@ -24,8 +24,10 @@ async fn main() -> ExitCode {
 The runtime pieces come from `seiva-server`: the serve loop, 12-factor
 [configuration](../configuration.md), [observability](../observability.md), and a
 graceful drain on `SIGTERM` (health flips `Ready → Draining`, in-flight requests
-finish). The framework surface — `/health`, `/openapi.json`, `/docs`, `/admin` —
-is assembled by `router_with_modules`.
+finish). The framework surface — `/health`, `/openapi.json`, `/docs` — is
+assembled by `router_with_modules`. The admin console (`/admin`) is **not** part
+of this surface: it is an optional extension (`seiva-console-admin`, ADR 0008) a
+composition root mounts explicitly with `seiva_console_admin::mount(app)`.
 
 ## Merging modules (auto-wired)
 

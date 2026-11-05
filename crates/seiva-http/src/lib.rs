@@ -24,16 +24,14 @@
 //! root merges those in.
 
 #![forbid(unsafe_code)]
-// `Problem` is a rich RFC 9457 payload (several owned strings) and handlers
-// return it by value on the error path — that is the design, not a footgun to
-// box away, so the large-Err lint is allowed crate-wide.
-#![allow(clippy::result_large_err)]
 
-pub mod admin;
+pub mod audit;
 pub mod authn;
+pub mod ctx;
 pub mod docs;
 pub mod guard;
 pub mod health;
+pub mod idempotency;
 pub mod problem;
 pub mod rate_limit;
 pub mod request_id;
@@ -47,15 +45,26 @@ use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::get;
 use axum::{Json, Router};
 
-pub use admin::{admin_handler, ADMIN_HTML};
+pub use audit::audit;
 pub use authn::authn;
+pub use ctx::Ctx;
 pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
-pub use health::{health_router, Health, HealthState};
+pub use health::{
+    health_router, health_router_with_dependency, Health, HealthState, ReadinessCheck,
+};
+pub use idempotency::{
+    fingerprint, in_progress_problem, mismatch_problem, scoped_key, IdempotencyKey,
+    OptionalIdempotencyKey, IDEMPOTENCY_HEADER, MAX_KEY_LEN,
+};
 pub use problem::{Problem, PROBLEM_JSON};
-pub use rate_limit::{rate_limit, RateLimit, RateLimiter};
+pub use rate_limit::{
+    rate_limit, rate_limit_with_store, DistributedRateLimit, RateLimit, RateLimiter,
+};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};
 pub use security::{cors_layer, security_headers, HttpSecurity};
+pub use seiva_ports::{AuditEntry, AuditSink};
+pub use seiva_ports::{RateLimitDecision, RateLimitStore};
 pub use valid::{Valid, Validate, ValidationError};
 // The identity model is owned by `seiva-identity` (transport-free, shared with
 // MCP); re-exported here so a `seiva_http::Principal` import keeps working.
@@ -135,7 +144,7 @@ pub fn router_with_auth(
     security: &HttpSecurity,
     authenticator: Option<Arc<dyn Authenticator>>,
 ) -> Router {
-    apply_framework_layers(framework_routes(health), security, authenticator)
+    apply_framework_layers(framework_routes(health), security, authenticator, None)
 }
 
 /// Builds the full application router: the framework routes **plus the caller's
@@ -158,17 +167,44 @@ pub fn router_with_modules(
         framework_routes(health).merge(modules),
         security,
         authenticator,
+        None,
     )
 }
 
-/// The framework's own routes, unlayered: health, `/openapi.json`, `/docs`, and
-/// the generated `/admin` console.
+/// Like [`router_with_modules`], but enforces the per-client rate limit with a
+/// **distributed** store ([`DistributedRateLimit`], ADR 0015) instead of the
+/// per-process limiter — the form that holds ONE budget across replicas behind a
+/// load balancer. The distributed limiter takes the in-process one's exact layer
+/// position (inside the security headers, so a `429` still carries them), so a
+/// `429` keeps its correlation id and headers; `security.rate_limit` is ignored
+/// when a distributed limiter is supplied. Set `security.trust_forwarded_for`
+/// (and pass it through on the limiter) only behind a single trusted proxy.
+pub fn router_with_modules_distributed(
+    health: Health,
+    security: &HttpSecurity,
+    authenticator: Option<Arc<dyn Authenticator>>,
+    modules: Router,
+    distributed: DistributedRateLimit,
+) -> Router {
+    apply_framework_layers(
+        framework_routes(health).merge(modules),
+        security,
+        authenticator,
+        Some(distributed),
+    )
+}
+
+/// The framework's own routes, unlayered: health, `/openapi.json` and `/docs`.
+///
+/// There is deliberately **no** `/admin` here: the admin console is an optional
+/// extension (`seiva-console-admin`, ADR 0008), not part of the base. A backend
+/// built without that crate answers `404` for `/admin`; a composition root that
+/// wants it calls `seiva_console_admin::mount(router)` before serving.
 fn framework_routes(health: Health) -> Router {
     Router::new()
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
         .route("/docs", get(docs::docs_handler))
-        .route("/admin", get(admin::admin_handler))
 }
 
 /// Wraps `app` (framework routes, and any merged module routes) in the transport
@@ -180,6 +216,7 @@ fn apply_framework_layers(
     app: Router,
     security: &HttpSecurity,
     authenticator: Option<Arc<dyn Authenticator>>,
+    distributed: Option<DistributedRateLimit>,
 ) -> Router {
     let mut app = app.layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
 
@@ -187,7 +224,12 @@ fn apply_framework_layers(
         app = app.layer(cors);
     }
 
-    if let Some(limit) = security.rate_limit {
+    // The distributed limiter, when supplied, takes the in-process one's place at
+    // this exact layer position; otherwise the per-process limiter runs if the
+    // security config enables it.
+    if let Some(dist) = distributed {
+        app = app.layer(from_fn_with_state(dist, rate_limit_with_store));
+    } else if let Some(limit) = security.rate_limit {
         let limiter = RateLimiter::new(limit).trusting_forwarded_for(security.trust_forwarded_for);
         app = app.layer(from_fn_with_state(limiter, rate_limit));
     }

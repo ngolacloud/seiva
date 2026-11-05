@@ -22,21 +22,27 @@ pub const PROBLEM_JSON: &str = "application/problem+json";
 /// [`Problem::unprocessable_entity`], [`Problem::internal`], …) and refine it
 /// with the builder methods. The response body is the JSON object RFC 9457
 /// defines, with `request_id` added as an extension member.
+///
+/// The string members are stored as `Box<str>` rather than `String`: a problem
+/// is built once and never mutated after construction, so the extra `String`
+/// capacity word buys nothing, and the smaller footprint keeps the whole value
+/// comfortably under clippy's `result_large_err` threshold. That is why no crate
+/// returning `Result<_, Problem>` needs to silence that lint.
 #[derive(Debug, Clone)]
 pub struct Problem {
     /// A URI reference identifying the problem type. Defaults to `about:blank`,
     /// which RFC 9457 treats as "no extra semantics beyond the status code".
-    pub type_uri: String,
+    pub type_uri: Box<str>,
     /// A short, human-readable summary of the problem type.
-    pub title: String,
+    pub title: Box<str>,
     /// The HTTP status code.
     pub status: StatusCode,
     /// A human-readable explanation specific to this occurrence.
-    pub detail: Option<String>,
+    pub detail: Option<Box<str>>,
     /// A URI reference identifying this specific occurrence (e.g. the path).
-    pub instance: Option<String>,
+    pub instance: Option<Box<str>>,
     /// The id of the request that produced the problem, for correlation.
-    pub request_id: Option<String>,
+    pub request_id: Option<Box<str>>,
 }
 
 impl Problem {
@@ -44,8 +50,8 @@ impl Problem {
     /// `about:blank` and no detail/instance/request id yet.
     pub fn new(status: StatusCode, title: impl Into<String>) -> Self {
         Self {
-            type_uri: "about:blank".to_owned(),
-            title: title.into(),
+            type_uri: "about:blank".into(),
+            title: title.into().into_boxed_str(),
             status,
             detail: None,
             instance: None,
@@ -90,52 +96,52 @@ impl Problem {
     /// Sets the `type` URI.
     #[must_use]
     pub fn with_type(mut self, type_uri: impl Into<String>) -> Self {
-        self.type_uri = type_uri.into();
+        self.type_uri = type_uri.into().into_boxed_str();
         self
     }
 
     /// Sets the human-readable `detail`.
     #[must_use]
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
+        self.detail = Some(detail.into().into_boxed_str());
         self
     }
 
     /// Sets the `instance` URI reference.
     #[must_use]
     pub fn with_instance(mut self, instance: impl Into<String>) -> Self {
-        self.instance = Some(instance.into());
+        self.instance = Some(instance.into().into_boxed_str());
         self
     }
 
     /// Sets the correlation `request_id`.
     #[must_use]
     pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
-        self.request_id = Some(request_id.into());
+        self.request_id = Some(request_id.into().into_boxed_str());
         self
     }
 
     /// Sets the `request_id` when one is present, leaving it unset otherwise.
     #[must_use]
     pub fn with_request_id_opt(mut self, request_id: Option<String>) -> Self {
-        self.request_id = request_id;
+        self.request_id = request_id.map(String::into_boxed_str);
         self
     }
 
     /// The problem document as a JSON value, omitting absent optional members.
     fn to_json(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
-        map.insert("type".to_owned(), self.type_uri.clone().into());
-        map.insert("title".to_owned(), self.title.clone().into());
+        map.insert("type".to_owned(), self.type_uri.as_ref().into());
+        map.insert("title".to_owned(), self.title.as_ref().into());
         map.insert("status".to_owned(), self.status.as_u16().into());
         if let Some(detail) = &self.detail {
-            map.insert("detail".to_owned(), detail.clone().into());
+            map.insert("detail".to_owned(), detail.as_ref().into());
         }
         if let Some(instance) = &self.instance {
-            map.insert("instance".to_owned(), instance.clone().into());
+            map.insert("instance".to_owned(), instance.as_ref().into());
         }
         if let Some(request_id) = &self.request_id {
-            map.insert("request_id".to_owned(), request_id.clone().into());
+            map.insert("request_id".to_owned(), request_id.as_ref().into());
         }
         serde_json::Value::Object(map)
     }
@@ -179,3 +185,13 @@ impl From<BoxError> for Problem {
         Problem::internal(error.to_string())
     }
 }
+
+// Regression guard for the `result_large_err` win: should a future field push
+// `Problem` back over clippy's 128-byte threshold, the blanket allows return and
+// the `check` CI job fails on the integration test again. Fail the build here
+// instead, at the type, with a message pointing at the cause.
+const _: () = assert!(
+    std::mem::size_of::<Problem>() <= 112,
+    "Problem must stay small enough that Result<_, Problem> does not trip \
+     clippy::result_large_err; box or restructure a field before growing it",
+);

@@ -51,3 +51,5 @@ serde_json = "1"
 # publish, so they do not block it.
 accounts-interface = { path = "../../examples/accounts/interface" }
 accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
+# In-memory port doubles to drive the idempotency-purge worker without a database.
+seiva-testing = { version = "0.1.0", path = "../seiva-testing" }

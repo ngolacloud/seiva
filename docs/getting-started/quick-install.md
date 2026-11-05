@@ -25,9 +25,10 @@ $ seiva module new notes       # a module, auto-wired into the composition root
 $ seiva start                  # run it (add --watch for hot-reload)
 ```
 
-The service serves `/health`, `/openapi.json`, `/docs`, `/admin` and the module's
-`POST /v1/notes`. Check `seiva doctor` for the framework version and which data
-layer is linked.
+The service serves `/health`, `/openapi.json`, `/docs` and the module's
+`POST /v1/notes`. (`/admin` is an optional extension — see
+[API documents](../topics/api-documents.md); the base returns `404` for it.)
+Check `seiva doctor` for the framework version and which data layer is linked.
 
 ## Verify
 

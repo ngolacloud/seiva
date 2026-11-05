@@ -101,3 +101,25 @@ real shape.
 - `Vec<u8>` composes as an array of integers rather than the string mapper's
   `format:"byte"` special case — a minor, documented divergence for composed
   field schemas.
+
+## Addendum (2026-11-05) — enums, bytes and error responses
+
+Extending the fidelity work (§8) without changing the decision above:
+
+- **Unit-variant enums.** `#[derive(WireSchema)]` now accepts a C-like enum and
+  emits `{"type":"string","enum":[…variant names…]}` (`schema::enum_schema`),
+  matching serde's default serialization of a unit variant as its name. A
+  **data-carrying** variant is a clear compile error (a faithful `oneOf` is future
+  work), and serde `rename`/`rename_all` is not reflected — name wire-enum
+  variants as they serialize. Nested enums inline into their containing object.
+- **Bytes.** `Vec<u8>` composes as an array of integers — faithful to
+  `serde_json`'s default wire form (a base64 `format:"byte"` string would need a
+  serde attribute), now covered by a test.
+- **Error responses.** The OpenAPI generator documents error responses as
+  `application/problem+json` referencing a shared `Problem` schema in
+  `components.schemas`: a guarded operation documents `401`/`403`, and any
+  operation with a request body documents `422`. `components` is therefore always
+  present (it carries `Problem`); the bearer scheme is still added only when a
+  method is guarded.
+- **gRPC** remains proto-generation only; a served round-trip is explicitly not
+  claimed, so none is asserted.

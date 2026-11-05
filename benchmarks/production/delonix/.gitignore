@@ -1,0 +1,4 @@
+# Staged binary (built by run.sh) and raw oha JSON
+app/admin-data-e2e
+*.json
+docker-compose.rendered.yml

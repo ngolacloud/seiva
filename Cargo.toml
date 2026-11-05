@@ -22,6 +22,10 @@ exclude = [
     # The DORM end-to-end proof: the real "main" composing the gateway, the
     # outbox relay and the server over real DORM. Built by the `dorm-e2e` CI job.
     "apps/dorm-e2e",
+    # The data-layer admin proof (ADR 0009 Phase-3): a DORM-backed CRUD module
+    # (`Catalog`) the console drives over PG. DORM-coupled, so excluded like the
+    # siblings; built by the token-gated `dorm-gateway` job.
+    "apps/admin-data-e2e",
 ]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,
@@ -42,6 +46,14 @@ members = [
     # The HTTP transport: axum/tower, RFC 9457 errors, facade-driven permission
     # guard, health endpoints. Data-layer-free, so a workspace member.
     "crates/seiva-http",
+    # The OPTIONAL admin console — an extension of the base (ADR 0008), NOT a
+    # dependency of it. A workspace member so CI builds/tests it, but nothing in
+    # the base depends on it: a backend built without it has no `/admin` route.
+    "crates/seiva-console-admin",
+    # The OPTIONAL Redis-backed distributed rate-limit store (ADR 0015). Not a
+    # base dependency; a multi-replica deployment opts in. A member so CI builds
+    # and audits it (the `redis` client is not DORM-git-coupled).
+    "crates/seiva-ratelimit-redis",
     # Password/credential primitives (Argon2id PHC) — accounts out of DORM's CLI.
     "crates/seiva-auth",
     # Identity: one verified Principal + Authenticator (OIDC/JWT via JWKS). Transport-free.
@@ -84,6 +96,10 @@ members = [
     "examples/accounts/application",
     "examples/accounts/infrastructure",
     "examples/accounts/interface",
+    # Composition root for the admin browser E2E (§10): accounts module + the
+    # console + a token authenticator. Built in CI (catches rot); the browser
+    # E2E itself is run on demand (needs a headless Chrome), not in `cargo test`.
+    "apps/admin-e2e",
 ]
 
 [workspace.package]
@@ -115,3 +131,16 @@ toml = { version = "0.9" }
 syn = { version = "3" }
 quote = "1"
 proc-macro2 = "1"
+
+# Release profile (Seiva §9 — LLVM via Cargo/rustc). ThinLTO + a single codegen
+# unit let LLVM optimise across crate boundaries (smaller, faster binary) at the
+# cost of build time; `strip` drops symbols for a leaner artefact. Deliberately
+# NO `target-cpu=native`: the default release binary must stay portable across
+# the hosts a PaaS schedules it on (set `RUSTFLAGS=-C target-cpu=native` per-host
+# only when you control the target). `panic` stays `unwind` so tests and any
+# `catch_unwind` boundary keep working. PGO is opt-in and workload-specific, not
+# baked into the default profile. Measurements: docs/topics/performance/llvm-profile.md.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

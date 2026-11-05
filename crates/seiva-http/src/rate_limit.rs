@@ -192,6 +192,13 @@ impl RateLimiter {
 /// test harness). All such requests share this bucket.
 const UNKNOWN_PEER: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
+/// Whether `path` is exempt from rate limiting — the framework's health probes
+/// (`/health/live`, `/health/ready`), which a load balancer polls constantly and
+/// must never be throttled out of service.
+fn is_rate_limit_exempt(path: &str) -> bool {
+    path == "/health/live" || path == "/health/ready"
+}
+
 /// The rightmost parseable `X-Forwarded-For` entry — the address the single
 /// trusted reverse proxy in front observed. A client can prepend forged entries
 /// to the left of the header, but not past the value the trusted proxy appends,
@@ -232,21 +239,101 @@ pub async fn rate_limit(
     request: Request,
     next: Next,
 ) -> Response {
+    // Operational health probes are exempt (§8): a load balancer or orchestrator
+    // polls `/health/*` constantly, and many clients can share one source IP
+    // (a NAT, the proxy itself). Counting probes against a client budget would
+    // let that traffic trip a `429` and get the instance marked unhealthy — a
+    // restart storm. The probes carry no business effect, so they skip the limiter.
+    if is_rate_limit_exempt(request.uri().path()) {
+        return next.run(request).await;
+    }
+
     let key = client_key(&request, limiter.trust_forwarded_for);
 
     match limiter.check(key) {
         Ok(()) => next.run(request).await,
         Err(retry_after) => {
             let request_id = request.extensions().request_id();
-            let seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
-            let mut response = Problem::too_many_requests("request rate limit exceeded")
-                .with_instance(request.uri().path().to_owned())
-                .with_request_id_opt(request_id)
-                .into_response();
-            if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
-                response.headers_mut().insert("retry-after", value);
-            }
-            response
+            rate_limited_response(retry_after, request.uri().path(), request_id)
+        }
+    }
+}
+
+/// The `429` problem response carrying a `Retry-After` header (whole seconds,
+/// rounded up) — shared by the in-process and the distributed limiters.
+fn rate_limited_response(
+    retry_after: Duration,
+    path: &str,
+    request_id: Option<String>,
+) -> Response {
+    let seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+    let mut response = Problem::too_many_requests("request rate limit exceeded")
+        .with_instance(path.to_owned())
+        .with_request_id_opt(request_id)
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+        response.headers_mut().insert("retry-after", value);
+    }
+    response
+}
+
+/// A **distributed** rate limiter: the same window + proxy-trust policy as the
+/// in-process [`RateLimiter`], but the budget lives in a shared
+/// [`RateLimitStore`](seiva_ports::RateLimitStore) (e.g. Redis) so it holds
+/// across replicas (ADR 0015). Build one and mount [`rate_limit_with_store`].
+#[derive(Clone)]
+pub struct DistributedRateLimit {
+    store: std::sync::Arc<dyn seiva_ports::RateLimitStore>,
+    limit: RateLimit,
+    trust_forwarded_for: bool,
+}
+
+impl DistributedRateLimit {
+    /// A distributed limiter over `store`, enforcing `limit` per client.
+    #[must_use]
+    pub fn new(store: std::sync::Arc<dyn seiva_ports::RateLimitStore>, limit: RateLimit) -> Self {
+        Self {
+            store,
+            limit,
+            trust_forwarded_for: false,
+        }
+    }
+
+    /// Keys on the rightmost `X-Forwarded-For` entry (single trusted edge only),
+    /// exactly as [`RateLimiter::trusting_forwarded_for`].
+    #[must_use]
+    pub fn trusting_forwarded_for(mut self, trust: bool) -> Self {
+        self.trust_forwarded_for = trust;
+        self
+    }
+}
+
+/// Middleware enforcing a [`DistributedRateLimit`]. Health probes are exempt (as
+/// in [`rate_limit`]). The store check is atomic in the backend; if the store
+/// errors (a transient outage) the request is permitted — rate limiting is
+/// abuse-dampening, so a limiter outage must not drop legitimate traffic.
+pub async fn rate_limit_with_store(
+    State(cfg): State<DistributedRateLimit>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if is_rate_limit_exempt(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let key = client_key(&request, cfg.trust_forwarded_for).to_string();
+    match cfg
+        .store
+        .check(&key, cfg.limit.max_requests, cfg.limit.window)
+        .await
+    {
+        Ok(seiva_ports::RateLimitDecision::Permitted) => next.run(request).await,
+        Ok(seiva_ports::RateLimitDecision::Limited { retry_after }) => {
+            let request_id = request.extensions().request_id();
+            rate_limited_response(retry_after, request.uri().path(), request_id)
+        }
+        Err(error) => {
+            tracing::warn!(target: "seiva::rate_limit", %error, "rate-limit store failed; failing open");
+            next.run(request).await
         }
     }
 }
@@ -294,6 +381,87 @@ mod tests {
         assert_eq!(hit(&app).await, StatusCode::OK);
         // ...the fourth is refused.
         assert_eq!(hit(&app).await, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn store_backed_limiter_permits_up_to_the_limit_then_429s_and_exempts_health() {
+        use seiva_testing::InMemoryRateLimitStore;
+        let store = std::sync::Arc::new(InMemoryRateLimitStore::new());
+        let cfg = DistributedRateLimit::new(
+            store,
+            RateLimit {
+                max_requests: 2,
+                window: Duration::from_secs(60),
+            },
+        );
+        let app = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .route("/health/ready", get(|| async { "ready" }))
+            .layer(from_fn_with_state(cfg, rate_limit_with_store));
+
+        let hit = |path: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    HttpRequest::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+            }
+        };
+
+        // Two permitted, the third over budget.
+        assert_eq!(hit("/").await, StatusCode::OK);
+        assert_eq!(hit("/").await, StatusCode::OK);
+        assert_eq!(hit("/").await, StatusCode::TOO_MANY_REQUESTS);
+        // Health stays exempt even when the business budget is spent.
+        assert_eq!(hit("/health/ready").await, StatusCode::OK);
+        assert_eq!(hit("/health/ready").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn health_probes_are_exempt_from_the_limit() {
+        let clock = Arc::new(FixedClock::at_unix_secs(0));
+        let limiter = RateLimiter::with_clock(
+            RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(60),
+            },
+            clock.clone(),
+        );
+        let app = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .route("/health/live", get(|| async { "live" }))
+            .route("/health/ready", get(|| async { "ready" }))
+            .layer(from_fn_with_state(limiter, rate_limit));
+
+        let probe = |path: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    HttpRequest::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+            }
+        };
+
+        // Hammer the probes well past the budget of 1 — never throttled.
+        for _ in 0..5 {
+            assert_eq!(probe("/health/live").await, StatusCode::OK);
+            assert_eq!(probe("/health/ready").await, StatusCode::OK);
+        }
+        // A business route still consumes and exhausts the same small budget.
+        assert_eq!(probe("/").await, StatusCode::OK);
+        assert_eq!(probe("/").await, StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

@@ -170,7 +170,10 @@ pub fn openapi_document(info: ApiInfo, facades: &[FacadeDescriptor]) -> Value {
         }
     }
 
-    let components = any_guarded.then(Components::bearer);
+    // `components` is always present: it carries the reusable RFC 9457 `Problem`
+    // schema every operation's error responses reference. The bearer security
+    // scheme is added only when at least one method is guarded.
+    let components = Some(Components::new(any_guarded));
 
     let document = OpenApiDocument {
         openapi: "3.1.0",
@@ -418,6 +421,43 @@ fn operation_for(facade: &FacadeDescriptor, method: &MethodDescriptor, route: &R
         },
     );
 
+    // Error responses, as RFC 9457 `application/problem+json` referencing the
+    // shared `Problem` schema (§8 contract fidelity): a guarded operation can
+    // `401`/`403`, and any operation with a request body can `422` on a body that
+    // fails to parse or validate.
+    let problem = || {
+        Some(media(
+            "application/problem+json",
+            json!({ "$ref": PROBLEM_REF }),
+        ))
+    };
+    if method.is_guarded() {
+        responses.insert(
+            "401".to_string(),
+            ResponseObject {
+                description: "Unauthorized — missing or invalid bearer credential".to_string(),
+                content: problem(),
+            },
+        );
+        responses.insert(
+            "403".to_string(),
+            ResponseObject {
+                description: "Forbidden — the caller lacks the required permission".to_string(),
+                content: problem(),
+            },
+        );
+    }
+    if request_body.is_some() {
+        responses.insert(
+            "422".to_string(),
+            ResponseObject {
+                description: "Unprocessable Entity — the request body failed to parse or validate"
+                    .to_string(),
+                content: problem(),
+            },
+        );
+    }
+
     let (security, requires) = if method.is_guarded() {
         (
             vec![BTreeMap::from([("bearerAuth".to_string(), Vec::new())])],
@@ -520,22 +560,51 @@ struct ResponseObject {
     content: Option<BTreeMap<String, MediaType>>,
 }
 
-/// The `components` object; here, only the security schemes.
+/// The `$ref` every error response points at for the shared `Problem` schema.
+const PROBLEM_REF: &str = "#/components/schemas/Problem";
+
+/// The reusable RFC 9457 `Problem` schema (`application/problem+json`): the shape
+/// every error response carries.
+fn problem_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "RFC 9457 problem detail (application/problem+json).",
+        "properties": {
+            "type": { "type": "string", "format": "uri-reference" },
+            "title": { "type": "string" },
+            "status": { "type": "integer" },
+            "detail": { "type": "string" },
+            "instance": { "type": "string" },
+            "request_id": { "type": "string" }
+        },
+        "required": ["title", "status"]
+    })
+}
+
+/// The `components` object: the shared `Problem` schema, plus the bearer security
+/// scheme when any operation is guarded.
 #[derive(Serialize)]
 struct Components {
-    #[serde(rename = "securitySchemes")]
+    schemas: BTreeMap<String, Value>,
+    #[serde(rename = "securitySchemes", skip_serializing_if = "BTreeMap::is_empty")]
     security_schemes: BTreeMap<String, Value>,
 }
 
 impl Components {
-    /// Components declaring a single HTTP bearer security scheme named
-    /// `bearerAuth`.
-    fn bearer() -> Self {
-        Components {
-            security_schemes: BTreeMap::from([(
+    /// Components carrying the `Problem` schema, and — when `bearer` — an HTTP
+    /// bearer security scheme named `bearerAuth`.
+    fn new(bearer: bool) -> Self {
+        let security_schemes = if bearer {
+            BTreeMap::from([(
                 "bearerAuth".to_string(),
                 json!({ "type": "http", "scheme": "bearer" }),
-            )]),
+            )])
+        } else {
+            BTreeMap::new()
+        };
+        Components {
+            schemas: BTreeMap::from([("Problem".to_string(), problem_schema())]),
+            security_schemes,
         }
     }
 }
@@ -593,6 +662,28 @@ mod tests {
             },
             &[NotesFacade::DESCRIPTOR],
         )
+    }
+
+    #[test]
+    fn guarded_write_documents_error_responses_as_problem() {
+        let doc = notes_doc();
+        // The shared Problem schema lives in components (always present).
+        let problem = &doc["components"]["schemas"]["Problem"];
+        assert_eq!(problem["type"], "object");
+        assert_eq!(problem["required"], json!(["title", "status"]));
+
+        let responses = &doc["paths"]["/v1/notes"]["post"]["responses"];
+        // The success response stays.
+        assert!(responses.get("201").is_some());
+        // A guarded write documents 401/403 (auth) and 422 (validation), each as
+        // application/problem+json referencing the shared Problem schema.
+        for code in ["401", "403", "422"] {
+            let schema = &responses[code]["content"]["application/problem+json"]["schema"];
+            assert_eq!(
+                schema["$ref"], "#/components/schemas/Problem",
+                "response {code} must reference the Problem schema"
+            );
+        }
     }
 
     #[test]
