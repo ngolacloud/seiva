@@ -56,11 +56,11 @@ New ADRs: **0008–0014** (+ the 0007 addendum). Indexed in
 
 ## Honest gaps (remaining)
 
-- **F5 tail.** Distributed rate limiter (the in-process limiter is documented as
-  per-process, ADR 0012; a shared backend — Redis-class, not a per-request DB
-  round-trip — is the right integration and is **not** built). Console
-  field-level masking of data rows (the API path has `Scoped<T>`/BOLA; row-level
-  masking is module-handler work).
+- **F5 tail.** Distributed rate limiter — **done** (ADR 0015): `RateLimitStore`
+  port + `rate_limit_with_store` + optional `seiva-ratelimit-redis`, proved live
+  against Redis 7 (50 concurrent clients share one budget). Console field-level
+  masking of data rows remains (the API path has `Scoped<T>`/BOLA; row-level
+  masking is module-handler work, tied to the console's model-row CRUD).
 - **F6 tail.** Browser E2E of the admin (Playwright) — needs a headless browser
   and a running server. Production load benchmark with auth + idempotency +
   multiple replicas (p50/p95/p99, throughput, errors, CPU, RSS) — needs that

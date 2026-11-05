@@ -46,6 +46,10 @@ members = [
     # dependency of it. A workspace member so CI builds/tests it, but nothing in
     # the base depends on it: a backend built without it has no `/admin` route.
     "crates/seiva-console-admin",
+    # The OPTIONAL Redis-backed distributed rate-limit store (ADR 0015). Not a
+    # base dependency; a multi-replica deployment opts in. A member so CI builds
+    # and audits it (the `redis` client is not DORM-git-coupled).
+    "crates/seiva-ratelimit-redis",
     # Password/credential primitives (Argon2id PHC) — accounts out of DORM's CLI.
     "crates/seiva-auth",
     # Identity: one verified Principal + Authenticator (OIDC/JWT via JWKS). Transport-free.

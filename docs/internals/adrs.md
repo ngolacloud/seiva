@@ -20,6 +20,7 @@ The index of ADRs.
 - ADR 0012 — Cloud-native health probes and rate-limit posture
 - ADR 0013 — Persistent audit of administrative mutations
 - ADR 0014 — Supply-chain audit of the excluded, DORM-coupled lockfiles
+- ADR 0015 — Distributed rate limiting as an optional port
 
 ## Related
 

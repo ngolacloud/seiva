@@ -242,6 +242,37 @@ pub trait AuditSink: Send + Sync {
     async fn record(&self, entry: &AuditEntry) -> PortResult<()>;
 }
 
+/// The outcome of a rate-limit check for one client (ADR 0015).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RateLimitDecision {
+    /// Within budget — serve the request.
+    Permitted,
+    /// Budget exhausted — reject (`429`); retry after this long.
+    Limited {
+        /// Time until the client's window rolls over.
+        retry_after: Duration,
+    },
+}
+
+/// A **distributed** rate-limit backend (ADR 0015): the authority a cluster
+/// shares so a client's budget is enforced across replicas, not per-process.
+///
+/// The base framework's default limiter is in-process (fine for a single
+/// instance, and documented as such); a deployment that runs several replicas
+/// behind a load balancer wires a shared store (e.g. Redis) through this port so
+/// one client cannot get `N × limit` by spreading requests across instances. The
+/// check must be **atomic** in the backend (a single round trip that increments
+/// and expires), not a read-modify-write, so concurrent replicas cannot race past
+/// the limit. Rate limiting is abuse-dampening, not a durable business guarantee,
+/// so a store that is briefly unavailable should fail **open** at the call site.
+#[async_trait]
+pub trait RateLimitStore: Send + Sync {
+    /// Records one hit for `key` and reports whether it is within `limit` per
+    /// `window`. Implementations increment-and-expire atomically.
+    async fn check(&self, key: &str, limit: u32, window: Duration)
+        -> PortResult<RateLimitDecision>;
+}
+
 /// The store key for **consumer-side inbox deduplication**: processing one event
 /// at most once per consumer (ADR 0011). Compose it from the consumer's name and
 /// the event id, then claim it through [`IdempotencyStore::begin`] **in the same

@@ -11,11 +11,11 @@
 use async_trait::async_trait;
 use seiva_ports::{
     AuditEntry, AuditSink, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
-    IdempotencyStore, PortResult, UnitOfWork,
+    IdempotencyStore, PortResult, RateLimitDecision, RateLimitStore, UnitOfWork,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// A [`Clock`] fixed at a chosen instant, advanceable for time-based tests.
 #[derive(Clone)]
@@ -285,6 +285,46 @@ impl AuditSink for RecordingAuditSink {
             .expect("audit sink poisoned")
             .push(entry.clone());
         Ok(())
+    }
+}
+
+/// An in-memory [`RateLimitStore`] double (fixed window over `Instant`) for
+/// unit-testing the store-based middleware with no Redis. A single-process model:
+/// it does not prove the *distributed* guarantee (that is proved live against
+/// Redis, ADR 0015) — use it only for logic tests.
+#[derive(Clone, Default)]
+pub struct InMemoryRateLimitStore {
+    windows: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
+}
+
+impl InMemoryRateLimitStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl RateLimitStore for InMemoryRateLimitStore {
+    async fn check(
+        &self,
+        key: &str,
+        limit: u32,
+        window: Duration,
+    ) -> PortResult<RateLimitDecision> {
+        let now = Instant::now();
+        let mut windows = self.windows.lock().expect("rate-limit store poisoned");
+        let entry = windows.entry(key.to_owned()).or_insert((0, now));
+        if now.duration_since(entry.1) >= window {
+            *entry = (0, now); // window rolled over
+        }
+        if entry.0 < limit {
+            entry.0 += 1;
+            Ok(RateLimitDecision::Permitted)
+        } else {
+            let retry_after = window - now.duration_since(entry.1);
+            Ok(RateLimitDecision::Limited { retry_after })
+        }
     }
 }
 

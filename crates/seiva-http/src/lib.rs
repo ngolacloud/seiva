@@ -56,10 +56,13 @@ pub use idempotency::{
     OptionalIdempotencyKey, IDEMPOTENCY_HEADER, MAX_KEY_LEN,
 };
 pub use problem::{Problem, PROBLEM_JSON};
-pub use rate_limit::{rate_limit, RateLimit, RateLimiter};
+pub use rate_limit::{
+    rate_limit, rate_limit_with_store, DistributedRateLimit, RateLimit, RateLimiter,
+};
 pub use request_id::{request_id, RequestId, REQUEST_ID_HEADER};
 pub use security::{cors_layer, security_headers, HttpSecurity};
 pub use seiva_ports::{AuditEntry, AuditSink};
+pub use seiva_ports::{RateLimitDecision, RateLimitStore};
 pub use valid::{Valid, Validate, ValidationError};
 // The identity model is owned by `seiva-identity` (transport-free, shared with
 // MCP); re-exported here so a `seiva_http::Principal` import keeps working.
