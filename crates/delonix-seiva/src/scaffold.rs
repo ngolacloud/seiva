@@ -482,7 +482,11 @@ pub fn add_app_member(cargo: &str, path: &str) -> Result<String, ScaffoldError> 
         .chars()
         .take_while(|c| c.is_whitespace())
         .collect();
-    Ok(cargo.replacen(anchor_line, &format!("{indent}\"{path}\",\n{anchor_line}"), 1))
+    Ok(cargo.replacen(
+        anchor_line,
+        &format!("{indent}\"{path}\",\n{anchor_line}"),
+        1,
+    ))
 }
 
 /// Removes a single workspace member line for `path` (the inverse of
@@ -499,7 +503,10 @@ pub fn remove_app_member(cargo: &str, path: &str) -> String {
 /// `mode = "<mode>"` line under `[module]` or replacing the existing one. Pure.
 pub fn set_module_mode(module_toml: &str, mode: &str) -> Result<String, ScaffoldError> {
     let line = format!("mode = \"{mode}\"");
-    if module_toml.lines().any(|l| l.trim_start().starts_with("mode =")) {
+    if module_toml
+        .lines()
+        .any(|l| l.trim_start().starts_with("mode ="))
+    {
         return Ok(module_toml
             .lines()
             .map(|l| {
@@ -1873,7 +1880,9 @@ mod tests {
             .unwrap()
             .contents;
         assert!(cargo.contains("name = \"catalog-service\""));
-        assert!(cargo.contains("catalog-interface = { path = \"../../modules/catalog/interface\" }"));
+        assert!(
+            cargo.contains("catalog-interface = { path = \"../../modules/catalog/interface\" }")
+        );
     }
 
     #[test]

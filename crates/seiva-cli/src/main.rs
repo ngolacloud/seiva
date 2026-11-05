@@ -413,7 +413,9 @@ fn module_split(name: &str) -> ExitCode {
     }
     let root = Path::new(".");
     if !root.join("seiva.toml").is_file() {
-        eprintln!("seiva: no seiva.toml here — run this inside a project (see `seiva project new`).");
+        eprintln!(
+            "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+        );
         return ExitCode::FAILURE;
     }
     let module_dir = root.join(format!("modules/{name}"));
@@ -439,17 +441,24 @@ fn module_split(name: &str) -> ExitCode {
     }
 
     // Registration edits: workspace member + module mode. Each is a pure transform.
-    let apply = |path: PathBuf, transform: &dyn Fn(&str) -> Result<String, scaffold::ScaffoldError>| -> Result<(), String> {
-        let current = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let apply = |path: PathBuf,
+                 transform: &dyn Fn(&str) -> Result<String, scaffold::ScaffoldError>|
+     -> Result<(), String> {
+        let current = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
         let next = transform(&current).map_err(|e| format!("{}: {e}", path.display()))?;
         std::fs::write(&path, next).map_err(|e| format!("writing {}: {e}", path.display()))
     };
     let member = scaffold::service_member_path(name);
-    if let Err(err) = apply(root.join("Cargo.toml"), &|s| scaffold::add_app_member(s, &member)) {
+    if let Err(err) = apply(root.join("Cargo.toml"), &|s| {
+        scaffold::add_app_member(s, &member)
+    }) {
         eprintln!("seiva: service files written, but workspace registration failed: {err}");
         return ExitCode::FAILURE;
     }
-    if let Err(err) = apply(module_dir.join("module.toml"), &|s| scaffold::set_module_mode(s, "service")) {
+    if let Err(err) = apply(module_dir.join("module.toml"), &|s| {
+        scaffold::set_module_mode(s, "service")
+    }) {
         eprintln!("seiva: {err}");
         return ExitCode::FAILURE;
     }
@@ -470,7 +479,9 @@ fn module_merge(name: &str) -> ExitCode {
     }
     let root = Path::new(".");
     if !root.join("seiva.toml").is_file() {
-        eprintln!("seiva: no seiva.toml here — run this inside a project (see `seiva project new`).");
+        eprintln!(
+            "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+        );
         return ExitCode::FAILURE;
     }
     let service_dir = root.join(scaffold::service_member_path(name));

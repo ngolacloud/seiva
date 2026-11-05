@@ -156,7 +156,10 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{uri} should be 200");
         assert!(ctype.starts_with("text/html"), "{uri} should be html");
         // Each page renders the service's OWN spec.
-        assert!(body.contains("/openapi.json"), "{uri} must point at the spec");
+        assert!(
+            body.contains("/openapi.json"),
+            "{uri} must point at the spec"
+        );
         (status, body, csp)
     }
 

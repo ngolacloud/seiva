@@ -12,9 +12,12 @@ use polls_facade::{AddChoice, CreateQuestion, GetQuestion, Polls, Vote};
 use polls_infrastructure::InMemoryPollRepository;
 use seiva_testing::{InMemoryUnitOfWork, RecordingEventPublisher, SequenceIdGenerator};
 
-fn service(
-) -> PollsService<InMemoryPollRepository, SequenceIdGenerator, InMemoryUnitOfWork, RecordingEventPublisher>
-{
+fn service() -> PollsService<
+    InMemoryPollRepository,
+    SequenceIdGenerator,
+    InMemoryUnitOfWork,
+    RecordingEventPublisher,
+> {
     PollsService {
         repository: InMemoryPollRepository::new(),
         ids: SequenceIdGenerator::new(),
