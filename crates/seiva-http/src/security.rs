@@ -190,7 +190,8 @@ mod tests {
         // A limit of one request per minute: the second request in the window is
         // a 429 that short-circuits before the route. It must STILL carry the
         // secure-by-default headers (regression: they used to be stripped because
-        // the limiter sat outside the header layer).
+        // the limiter sat outside the header layer). Uses `/openapi.json` because
+        // the health probes are now exempt from the limiter (§8).
         let security = HttpSecurity {
             rate_limit: Some(RateLimit {
                 max_requests: 1,
@@ -202,7 +203,7 @@ mod tests {
 
         let req = || {
             Request::builder()
-                .uri("/health/ready")
+                .uri("/openapi.json")
                 .body(Body::empty())
                 .unwrap()
         };

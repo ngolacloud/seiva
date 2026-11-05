@@ -46,7 +46,9 @@ use axum::{Json, Router};
 pub use authn::authn;
 pub use docs::{docs_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
-pub use health::{health_router, Health, HealthState};
+pub use health::{
+    health_router, health_router_with_dependency, Health, HealthState, ReadinessCheck,
+};
 pub use idempotency::{
     fingerprint, in_progress_problem, mismatch_problem, scoped_key, IdempotencyKey,
     OptionalIdempotencyKey, IDEMPOTENCY_HEADER, MAX_KEY_LEN,

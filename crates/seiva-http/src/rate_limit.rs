@@ -192,6 +192,13 @@ impl RateLimiter {
 /// test harness). All such requests share this bucket.
 const UNKNOWN_PEER: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
+/// Whether `path` is exempt from rate limiting — the framework's health probes
+/// (`/health/live`, `/health/ready`), which a load balancer polls constantly and
+/// must never be throttled out of service.
+fn is_rate_limit_exempt(path: &str) -> bool {
+    path == "/health/live" || path == "/health/ready"
+}
+
 /// The rightmost parseable `X-Forwarded-For` entry — the address the single
 /// trusted reverse proxy in front observed. A client can prepend forged entries
 /// to the left of the header, but not past the value the trusted proxy appends,
@@ -232,6 +239,15 @@ pub async fn rate_limit(
     request: Request,
     next: Next,
 ) -> Response {
+    // Operational health probes are exempt (§8): a load balancer or orchestrator
+    // polls `/health/*` constantly, and many clients can share one source IP
+    // (a NAT, the proxy itself). Counting probes against a client budget would
+    // let that traffic trip a `429` and get the instance marked unhealthy — a
+    // restart storm. The probes carry no business effect, so they skip the limiter.
+    if is_rate_limit_exempt(request.uri().path()) {
+        return next.run(request).await;
+    }
+
     let key = client_key(&request, limiter.trust_forwarded_for);
 
     match limiter.check(key) {
@@ -294,6 +310,47 @@ mod tests {
         assert_eq!(hit(&app).await, StatusCode::OK);
         // ...the fourth is refused.
         assert_eq!(hit(&app).await, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn health_probes_are_exempt_from_the_limit() {
+        let clock = Arc::new(FixedClock::at_unix_secs(0));
+        let limiter = RateLimiter::with_clock(
+            RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(60),
+            },
+            clock.clone(),
+        );
+        let app = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .route("/health/live", get(|| async { "live" }))
+            .route("/health/ready", get(|| async { "ready" }))
+            .layer(from_fn_with_state(limiter, rate_limit));
+
+        let probe = |path: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    HttpRequest::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+            }
+        };
+
+        // Hammer the probes well past the budget of 1 — never throttled.
+        for _ in 0..5 {
+            assert_eq!(probe("/health/live").await, StatusCode::OK);
+            assert_eq!(probe("/health/ready").await, StatusCode::OK);
+        }
+        // A business route still consumes and exhausts the same small budget.
+        assert_eq!(probe("/").await, StatusCode::OK);
+        assert_eq!(probe("/").await, StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

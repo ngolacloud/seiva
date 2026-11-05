@@ -17,6 +17,7 @@ The index of ADRs.
 - ADR 0009 — Per-module admin registration and the authorization gate
 - ADR 0010 — The extension integration contract (`dx add` / `seiva ext add`)
 - ADR 0011 — Durable business idempotency as a port, reusing DORM
+- ADR 0012 — Cloud-native health probes and rate-limit posture
 
 ## Related
 
