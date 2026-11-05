@@ -346,12 +346,18 @@ pub fn append_namespace_block(schema: &str, module: &str) -> Result<String, Scaf
 ///    `@version`, which this DORM's schema parser does not accept yet; it is
 ///    dropped so the schema parses. The `version` column itself stays — only the
 ///    attribute is removed (the concurrency enforcement is a runtime concern).
+/// 3. **The datasource provider.** Set to `provider` (`"postgresql"`, `"mysql"`,
+///    `"sqlite"`) so DORM compiles the right dialect for the chosen backend.
 ///
 /// Pure, so `seiva db init`/`dev` can write the result and the transform is tested
 /// without a database.
 #[must_use]
-pub fn dorm_schema_from_project(project_schema: &str) -> String {
-    let mut out = project_schema.to_owned();
+pub fn dorm_schema_from_project(project_schema: &str, provider: &str) -> String {
+    // The project schema is authored for `postgresql`; retarget the datasource.
+    let mut out = project_schema.replace(
+        "provider = \"postgresql\"",
+        &format!("provider = \"{provider}\""),
+    );
     let anchor = "datasource db {\n";
     if !out.contains("url ") && !out.contains("url=") {
         if let Some(pos) = out.find(anchor) {
@@ -361,7 +367,8 @@ pub fn dorm_schema_from_project(project_schema: &str) -> String {
             );
         }
     }
-    out.replace("@version", "")
+    out = out.replace("@version", "");
+    out
 }
 
 // --- templates ---------------------------------------------------------------
@@ -1518,7 +1525,7 @@ mod tests {
     fn dorm_schema_adapts_the_project_schema() {
         // A project schema with a module namespace (and the scaffold's `@version`).
         let project = append_namespace_block(&project_schema(), "notes").unwrap();
-        let dorm = dorm_schema_from_project(&project);
+        let dorm = dorm_schema_from_project(&project, "postgresql");
         // The datasource gains the env-driven URL DORM's migrate needs.
         assert!(dorm.contains("url      = env(\"DELONIX_ORM_DSN\")"));
         // The module namespace and its model pass through (shared DSL).
@@ -1529,7 +1536,12 @@ mod tests {
         assert!(!dorm.contains("@version"));
         assert!(dorm.contains("version Int"));
         // Idempotent on the URL: running it again does not add a second one.
-        let twice = dorm_schema_from_project(&dorm);
+        let twice = dorm_schema_from_project(&dorm, "postgresql");
         assert_eq!(twice.matches("DELONIX_ORM_DSN").count(), 1);
+
+        // A non-PG backend retargets the datasource provider.
+        let my = dorm_schema_from_project(&project, "mysql");
+        assert!(my.contains("provider = \"mysql\""));
+        assert!(!my.contains("provider = \"postgresql\""));
     }
 }

@@ -153,6 +153,10 @@ enum DbAction {
         /// The directory to create the DORM project in (default `data`).
         #[arg(long)]
         dir: Option<String>,
+        /// The database backend: `postgres` (default), `mysql` or `sqlite`. Sets
+        /// the DORM feature and the schema's `provider`; use a matching DSN.
+        #[arg(long, default_value = "postgres")]
+        backend: String,
     },
     /// Author the next migration from the schema and apply it — the dev loop
     /// (`prisma migrate dev` / Django `makemigrations` + `migrate`). Delegates to
@@ -863,9 +867,19 @@ fn require_project() -> Option<String> {
 /// delegating to `dorm init`, then (until DORM publishes) point its
 /// `[patch.crates-io]` at a local DORM checkout so it builds. Idempotent-ish:
 /// refuses if the directory already exists (DORM's `init` does).
-fn db_init(dir: Option<String>) -> ExitCode {
+fn db_init(dir: Option<String>, backend: String) -> ExitCode {
     let Some(project) = require_project() else {
         return ExitCode::FAILURE;
+    };
+    // Map the backend to the DORM feature to enable and the datasource provider.
+    let (feature, provider): (Option<&str>, &str) = match backend.as_str() {
+        "postgres" | "postgresql" => (None, "postgresql"),
+        "mysql" | "mariadb" => (Some("mysql"), "mysql"),
+        "sqlite" => (Some("sqlite"), "sqlite"),
+        other => {
+            eprintln!("seiva: unknown --backend `{other}` (expected postgres, mysql or sqlite).");
+            return ExitCode::FAILURE;
+        }
     };
     let dir = dir.unwrap_or_else(|| DORM_PROJECT_DIR.to_owned());
     if Path::new(&dir).exists() {
@@ -900,25 +914,56 @@ fn db_init(dir: Option<String>) -> ExitCode {
              `{dir}` will resolve DORM from crates.io."
         );
     }
-    if let Err(error) =
-        finalize_dorm_manifest(&Path::new(&dir).join("Cargo.toml"), checkout.as_deref())
-    {
+    let manifest = Path::new(&dir).join("Cargo.toml");
+    if let Err(error) = finalize_dorm_manifest(&manifest, checkout.as_deref()) {
         eprintln!("seiva: warning — could not finalize `{dir}/Cargo.toml`: {error}");
+    }
+    // Enable the chosen backend's DORM feature on the data layer's `dorm-core`.
+    if let Some(feature) = feature {
+        if let Err(error) = enable_dorm_feature(&manifest, feature) {
+            eprintln!("seiva: warning — could not enable the `{feature}` feature: {error}");
+        }
     }
     // Make the DORM data layer track THIS project's schema from the start: write
     // `data/dorm.schema` from `schema/<project>.schema` (so the module namespaces
-    // drive it, not DORM's default template) and regenerate the models.
-    if let Err(error) = sync_dorm_schema(&project, &dir) {
+    // drive it, not DORM's default template), retarget the provider, regenerate.
+    if let Err(error) = sync_dorm_schema(&project, &dir, provider) {
         eprintln!("seiva: warning — could not sync the project schema into `{dir}`: {error}");
     } else if let Err(code) = run_dorm_in(&dir, &["generate".to_owned()]) {
         return code;
     }
     println!(
-        "Set up the DORM data layer in `{dir}/` from schema/{project}.schema. \
+        "Set up the DORM data layer in `{dir}/` ({backend}) from schema/{project}.schema. \
          Add models with `seiva module new`, then `seiva db dev <name>` to \
-         author+apply a migration (needs DELONIX_ORM_DSN)."
+         author+apply a migration (needs DELONIX_ORM_DSN for your {backend} database)."
     );
     ExitCode::SUCCESS
+}
+
+/// Enables a DORM feature (`mysql`/`sqlite`) on the data layer's `dorm-core`
+/// dependency: rewrites `dorm-core = "x"` into `dorm-core = { version = "x",
+/// features = ["<feature>"] }`. Idempotent-ish (no-op if a features list already
+/// mentions it).
+fn enable_dorm_feature(manifest: &Path, feature: &str) -> std::io::Result<()> {
+    let cargo = std::fs::read_to_string(manifest)?;
+    if cargo.contains(&format!("\"{feature}\"")) {
+        return Ok(());
+    }
+    let re_target = "dorm-core = \"";
+    let next = if let Some(start) = cargo.find(re_target) {
+        let rest = &cargo[start + re_target.len()..];
+        if let Some(end) = rest.find('"') {
+            let version = &rest[..end];
+            let replaced =
+                format!("dorm-core = {{ version = \"{version}\", features = [\"{feature}\"] }}");
+            cargo.replacen(&format!("dorm-core = \"{version}\""), &replaced, 1)
+        } else {
+            cargo
+        }
+    } else {
+        cargo
+    };
+    std::fs::write(manifest, next)
 }
 
 /// Finalizes the generated DORM project's manifest so it builds nested inside a
@@ -953,12 +998,29 @@ fn finalize_dorm_manifest(manifest: &Path, checkout: Option<&str>) -> std::io::R
 
 /// Writes the DORM data layer's `<dir>/dorm.schema` from the project's
 /// `schema/<project>.schema`, adapted by [`scaffold::dorm_schema_from_project`]
-/// (the module `namespace`s drive the data layer; the datasource URL and
-/// `@version` are adjusted). Run before a migrate so new modules are picked up.
-fn sync_dorm_schema(project: &str, dir: &str) -> std::io::Result<()> {
+/// (the module `namespace`s drive the data layer; the datasource URL, `@version`
+/// and the `provider` are adjusted). Run before a migrate so new modules are
+/// picked up.
+fn sync_dorm_schema(project: &str, dir: &str, provider: &str) -> std::io::Result<()> {
     let src = std::fs::read_to_string(format!("schema/{project}.schema"))?;
-    let dorm_schema = scaffold::dorm_schema_from_project(&src);
+    let dorm_schema = scaffold::dorm_schema_from_project(&src, provider);
     std::fs::write(Path::new(dir).join("dorm.schema"), dorm_schema)
+}
+
+/// The datasource `provider` recorded in an existing `<dir>/dorm.schema`, so a
+/// re-sync (on `seiva db dev`) keeps the backend chosen at `seiva db init`.
+/// Defaults to `postgresql` when absent.
+fn dorm_provider_of(dir: &str) -> String {
+    std::fs::read_to_string(Path::new(dir).join("dorm.schema"))
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.trim()
+                    .strip_prefix("provider = ")
+                    .map(|v| v.trim().trim_matches('"').to_owned())
+            })
+        })
+        .unwrap_or_else(|| "postgresql".to_owned())
 }
 
 /// Runs the DORM CLI with `args` inside the data-layer directory `dir`. Maps a
@@ -1018,7 +1080,9 @@ fn db_dev(name: &str) -> ExitCode {
         Ok(ok) => ok,
         Err(code) => return code,
     };
-    if let Err(error) = sync_dorm_schema(&project, &dir) {
+    // Preserve the backend chosen at `seiva db init` (its provider).
+    let provider = dorm_provider_of(&dir);
+    if let Err(error) = sync_dorm_schema(&project, &dir, &provider) {
         eprintln!("seiva: could not sync schema/{project}.schema into `{dir}`: {error}");
         return ExitCode::FAILURE;
     }
@@ -1153,7 +1217,7 @@ fn main() -> ExitCode {
             ModuleAction::Merge { .. } => not_yet("module merge", "the module-mode phase"),
         },
         Command::Db { action } => match action {
-            DbAction::Init { dir } => db_init(dir),
+            DbAction::Init { dir, backend } => db_init(dir, backend),
             DbAction::Dev { name } => db_dev(&name),
             DbAction::Migrate => db_migrate(),
             DbAction::Pull { out, dsn } => db_pull(out, dsn),
