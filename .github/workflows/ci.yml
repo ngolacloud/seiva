@@ -102,6 +102,11 @@ jobs:
         run: rustup toolchain install stable --component rustfmt --component clippy
       - uses: Swatinem/rust-cache@v2
         if: steps.gate.outputs.present == 'true'
+      - name: Install cargo-deny
+        if: steps.gate.outputs.present == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: Authenticate cargo to the private DORM repo
         if: steps.gate.outputs.present == 'true'
         env:
@@ -123,6 +128,24 @@ jobs:
             cargo fmt --manifest-path "crates/$crate/Cargo.toml" --all --check
             cargo clippy --manifest-path "crates/$crate/Cargo.toml" --all-targets --all-features -- -D warnings
             cargo test --manifest-path "crates/$crate/Cargo.toml" --all-features
+            echo "::endgroup::"
+          done
+      # The RustSec advisory gate for the DORM-coupled lockfiles (§9): the
+      # workspace `audit` job never sees DORM's tree, so audit each excluded
+      # crate's lockfile here, where DORM resolves. Tracked exceptions live in
+      # `deny.excluded.toml` (with reasons + a review date), so a NEW advisory in
+      # DORM's tree fails this gate instead of hiding.
+      - name: cargo-deny — advisories for the DORM-coupled lockfiles
+        if: steps.gate.outputs.present == 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          set -euo pipefail
+          for crate in crates/seiva-data-dorm crates/seiva-outbox-relay \
+                       crates/seiva-rag-worker crates/seiva-mcp apps/dorm-e2e; do
+            echo "::group::deny $crate"
+            cargo deny --manifest-path "$crate/Cargo.toml" \
+              --config deny.excluded.toml check advisories
             echo "::endgroup::"
           done
 

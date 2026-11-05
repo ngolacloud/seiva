@@ -1,0 +1,29 @@
+# cargo-deny — the RustSec advisory gate for the EXCLUDED, DORM-coupled crates
+# (Seiva §9). The workspace `deny.toml` only sees the workspace dependency graph;
+# the excluded crates (`seiva-data-dorm`, `seiva-outbox-relay`, `seiva-rag-worker`,
+# `seiva-mcp`, `apps/dorm-e2e`) pull DORM's whole tree, which carries advisories
+# the workspace audit never sees. The `dorm-gateway` CI job runs
+# `cargo deny --config deny.excluded.toml check advisories` per excluded crate so
+# those advisories are surfaced, not invisible.
+#
+# Exceptions below are TRACKED DEBT, not a lowered policy: each names the pulling
+# crate, the owner (the fix belongs in DORM's dependency tree, not Seiva), and a
+# review date. Re-audit at each date; drop an ignore the moment DORM updates.
+# Review by: 2026-02-28.
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # Stack overflow in rustc_serialize's JSON parser. Pulled transitively by
+    # `eui48` (MAC-address support in `postgres-types`), which uses rustc-serialize
+    # only for its Decodable/Encodable MAC string codec, NOT the vulnerable
+    # untrusted-JSON path — so the specific overflow is not reachable here. Fix:
+    # DORM drops `eui48`/MAC or moves off rustc-serialize. Owner: DORM.
+    { id = "RUSTSEC-2022-0004", reason = "rustc-serialize via eui48 (postgres MAC); JSON-overflow path not exercised; fix in DORM" },
+    # rustc-serialize is unmaintained — same source (`eui48`), same fix in DORM.
+    { id = "RUSTSEC-2025-0025", reason = "rustc-serialize unmaintained via eui48; fix in DORM" },
+    # rustls-pemfile 2.x is unmaintained (a thin wrapper; functionality moved to
+    # rustls-pki-types). Pulled by `tokio-postgres-rustls` in DORM's TLS path.
+    # Unmaintained-only, no known vulnerability. Owner: DORM.
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained via tokio-postgres-rustls; fix in DORM" },
+]

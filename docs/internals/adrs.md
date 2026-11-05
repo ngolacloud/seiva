@@ -19,6 +19,7 @@ The index of ADRs.
 - ADR 0011 — Durable business idempotency as a port, reusing DORM
 - ADR 0012 — Cloud-native health probes and rate-limit posture
 - ADR 0013 — Persistent audit of administrative mutations
+- ADR 0014 — Supply-chain audit of the excluded, DORM-coupled lockfiles
 
 ## Related
 

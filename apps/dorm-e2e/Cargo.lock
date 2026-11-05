@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "dorm-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64",
  "chrono",
@@ -461,7 +461,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.11.1",
  "thiserror",
  "tokio",
  "tokio-postgres",
@@ -1063,7 +1063,7 @@ dependencies = [
  "md-5",
  "memchr",
  "rand 0.10.3",
- "sha2",
+ "sha2 0.11.1",
  "stringprep",
 ]
 
@@ -1409,7 +1409,9 @@ dependencies = [
  "seiva-ports",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tower-http",
+ "tracing",
 ]
 
 [[package]]
@@ -1552,6 +1554,17 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -1831,7 +1844,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c2ad44aa0ae96db89c4742212ed41645b2f597311ff6e1945542a4d9fadc2fb"
 dependencies = [
  "rustls",
- "sha2",
+ "sha2 0.11.1",
  "tokio",
  "tokio-postgres",
  "tokio-rustls",
