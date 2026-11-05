@@ -109,13 +109,16 @@ waits on P0-1. P2 runs continuously.
      `WireSchema` of each DTO.
   3. Register-and-forget: `seiva module new` makes a module admin-visible by default.
 - **Status (2026-11-05):** an **operations** console (a form per contract
-  operation, bearer token) exists and is now extracted to the optional
-  `seiva-console-admin` extension (ADR 0008) — the base returns `404` for
-  `/admin`, the console mounts explicitly, and its CSP is hash-based (no
-  `unsafe-inline`). Still **pending** (the register-and-forget model-CRUD vision
-  above): per-module `--admin` registration, read/write admin API over DORM
-  models, server-side field/tenant authorization in the console, and the
-  Playwright E2E. Scorecard: *Admin GUI* 🟡 (operations console), not yet ✅.
+  operation, bearer token) is extracted to the optional `seiva-console-admin`
+  extension (ADR 0008) — base `404`s `/admin`, the console mounts explicitly,
+  hash-based CSP (no `unsafe-inline`). **Per-module registration** landed too
+  (ADR 0009): `delonix_seiva::register_admin!` declares a resource; the console
+  shows only resources that are registered *and* the caller is authorized to
+  view (server-filtered `/admin/registry.json`), with duplicate-registration
+  detection. Still **pending**: `seiva module new --admin` scaffolding (3b), the
+  DX `dx add` contract + Cargo equivalent (3c), read/write admin API over DORM
+  models, field/tenant masking of data rows, and the Playwright E2E. Scorecard:
+  *Admin GUI* 🟡 (registered operations console), not yet ✅.
 - **Depends on:** P0-1 (data), P0-3 (discovery).
 
 ### P1-6 · Database introspection (brownfield adoption) — **M/L**

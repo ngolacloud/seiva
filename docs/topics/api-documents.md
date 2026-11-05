@@ -39,11 +39,36 @@ let app = seiva_console_admin::mount(app); // now GET /admin serves the console
 ```
 
 Once mounted, `GET /admin` is a self-contained console (no CDN, strict
-hash-based CSP) that renders each module as a resource with its operations and a
-try-form per write operation built from the DTO's schema, with a bearer-token
-field. Add a module and it appears. It drives the contract's *operations*; for
-browsing/editing data rows use `seiva db studio`. See
-[the admin](authentication.md) story for the auth model.
+hash-based CSP) that renders each **registered, authorized** resource with its
+operations and a try-form per write operation built from the DTO's schema, with
+a bearer-token field.
+
+A resource appears only when a module **registers** it with
+`delonix_seiva::register_admin!` *and* the caller holds its `view` permission —
+being in `/openapi.json` is never enough (ADR 0009). The console reads a
+server-filtered `GET /admin/registry.json`, so an unauthorized caller sees
+neither the resource nor its existence; write forms are hidden unless the caller
+holds the create/change permission (and the server guard enforces it regardless).
+A module that registers nothing stays private to the console.
+
+```rust
+// in the module's interface layer (e.g. examples/accounts/interface):
+use delonix_seiva::admin::{AdminPermissions, AdminResource};
+use delonix_seiva::register_admin;
+
+register_admin!(AdminResource {
+    namespace: "accounts", resource: "accounts", label: "Accounts",
+    facade: "Accounts", version: "v1",
+    list_fields: &["id", "username"], search_fields: &["username"],
+    filters: &[], ordering: &["username"], page_size: 25,
+    permissions: AdminPermissions {
+        view: "accounts.read", create: "accounts.create", change: "", delete: "",
+    },
+});
+```
+
+It drives the contract's *operations*; for browsing/editing data rows use
+`seiva db studio`. See [the admin](authentication.md) story for the auth model.
 
 ## proto3 (`seiva proto`)
 

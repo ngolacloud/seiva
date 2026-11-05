@@ -23,6 +23,15 @@ categories = ["web-programming"]
 # The transport type the console mounts onto — the single, public, one-way edge
 # to the Seiva base (axum is Seiva's HTTP transport, re-exported by seiva-http).
 axum = "0.8"
+# The admin registry (`AdminResource`, `registered_admin_resources`) the console
+# reads to decide what to surface. Default features OFF (no DORM): the console
+# only reads the link-time descriptors. This is the one-way edge to the framework
+# contract; the base never depends on this crate.
+delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
+# The `Principal` the registry endpoint filters by (view permission). Transport-free.
+seiva-identity = { version = "0.1.0", path = "../seiva-identity" }
+# Builds the registry JSON response.
+serde_json = "1"
 # A strict `Content-Security-Policy` pins the inline <style>/<script> by their
 # SHA-256 hash (no `unsafe-inline`); these compute it from the exact bytes served.
 sha2 = "0.10"

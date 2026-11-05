@@ -24,6 +24,7 @@ pub mod ports {
     pub use seiva_ports::*;
 }
 
+pub mod admin;
 pub mod contract;
 pub mod lint;
 pub mod manifest;

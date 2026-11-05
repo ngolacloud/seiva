@@ -120,3 +120,71 @@ fn between<'a>(haystack: &'a str, open: &str, close: &str) -> &'a str {
     let end = start + haystack[start..].find(close).expect("close tag present");
     &haystack[start..end]
 }
+
+// --- The registry endpoint, end to end over the real link-time inventory ------
+
+use delonix_seiva::admin::{AdminPermissions, AdminResource};
+use delonix_seiva::register_admin;
+use seiva_identity::Principal;
+
+// A real registration in THIS test binary's inventory (non-conflicting).
+register_admin!(AdminResource {
+    namespace: "shop",
+    resource: "widgets",
+    label: "Widgets",
+    facade: "Shop",
+    version: "v1",
+    list_fields: &["id", "name"],
+    search_fields: &["name"],
+    filters: &[],
+    ordering: &["name"],
+    page_size: 25,
+    permissions: AdminPermissions {
+        view: "shop.read",
+        create: "shop.create",
+        change: "",
+        delete: "",
+    },
+});
+
+async fn registry_as(principal: Option<Principal>) -> serde_json::Value {
+    let mut builder = Request::builder().uri("/admin/registry.json");
+    if let Some(p) = principal {
+        builder = builder.extension(p);
+    }
+    let res = admin_router()
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn registry_lists_a_registered_resource_the_caller_may_view() {
+    let body = registry_as(Some(Principal::new("clerk", ["shop.read"]))).await;
+    let ids: Vec<&str> = body["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["resource"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&"widgets"),
+        "registered+authorized resource shows: {body}"
+    );
+}
+
+#[tokio::test]
+async fn registry_hides_the_resource_from_an_unauthorized_caller() {
+    // A caller without `shop.read` must not see the resource, nor its existence.
+    let body = registry_as(Some(Principal::new("stranger", ["other.read"]))).await;
+    assert_eq!(body["resources"].as_array().unwrap().len(), 0, "{body}");
+}
+
+#[tokio::test]
+async fn registry_is_empty_for_an_anonymous_caller() {
+    let body = registry_as(None).await;
+    assert_eq!(body["resources"].as_array().unwrap().len(), 0, "{body}");
+}
