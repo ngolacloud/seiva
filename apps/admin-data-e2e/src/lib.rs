@@ -36,7 +36,8 @@ pub fn catalog_table_ddl() -> &'static str {
        tenant TEXT NOT NULL, \
        name TEXT NOT NULL, \
        price BIGINT NOT NULL, \
-       cost BIGINT NOT NULL DEFAULT 0)"
+       cost BIGINT NOT NULL DEFAULT 0, \
+       version BIGINT NOT NULL DEFAULT 1)"
 }
 
 /// Create body.
@@ -61,11 +62,16 @@ impl Validate for CreateItem {
     }
 }
 
-/// Update body: the id plus the new field values.
+/// Update body: the id, the expected version (optimistic concurrency) plus the
+/// new field values.
 #[derive(Debug, Clone, Deserialize, Serialize, delonix_seiva::WireSchema)]
 pub struct UpdateItem {
     /// The id of the item to change.
     pub id: u64,
+    /// The version the caller last saw (from a prior read). The update applies
+    /// only if the stored version still matches — otherwise the row changed under
+    /// the caller and the update is a `409` (optimistic concurrency, ETag-style).
+    pub version: u64,
     /// The new name (non-empty).
     pub name: String,
     /// The new price.
@@ -82,6 +88,31 @@ impl Validate for UpdateItem {
         }
         Ok(())
     }
+}
+
+/// List query (read from the query string on `GET /v1/catalogs`): optional
+/// substring search, ordering and pagination. Every field is optional, so an
+/// empty query lists the first page in the default order. The server validates
+/// `order` against a fixed allow-list (mirroring the registered `ordering`) and
+/// clamps `page_size`, so a client can never inject a column name or ask for an
+/// unbounded page.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, delonix_seiva::WireSchema)]
+pub struct ListQuery {
+    /// Case-insensitive substring to match against the name (parameterised ILIKE).
+    #[serde(default)]
+    pub search: Option<String>,
+    /// Column to order by: `id` or `name` (anything else falls back to `id`).
+    #[serde(default)]
+    pub order: Option<String>,
+    /// Order descending instead of ascending.
+    #[serde(default)]
+    pub desc: Option<bool>,
+    /// Zero-based page index (default 0).
+    #[serde(default)]
+    pub page: Option<u32>,
+    /// Rows per page (default 25, clamped to 1..=100).
+    #[serde(default)]
+    pub page_size: Option<u32>,
 }
 
 /// Delete body: just the id.
@@ -112,6 +143,9 @@ pub struct ItemDto {
     /// so an unauthorized caller never receives the value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<i64>,
+    /// The row's current version — the value a client echoes back in `UpdateItem`
+    /// so a stale edit is rejected (optimistic concurrency).
+    pub version: u64,
 }
 
 /// The facade's error type: a message plus the HTTP status it maps to. Mapped to
@@ -161,9 +195,10 @@ pub trait Catalog {
     #[requires("catalog.read")]
     async fn get(&self, ctx: &Ctx, id: u64) -> Result<ItemDto, CatalogError>;
 
-    /// List the caller's tenant's items (`GET /v1/catalogs`).
+    /// List the caller's tenant's items (`GET /v1/catalogs`), with optional
+    /// search, ordering and pagination from the query string.
     #[requires("catalog.read")]
-    async fn list(&self, ctx: &Ctx) -> Result<Vec<ItemDto>, CatalogError>;
+    async fn list(&self, ctx: &Ctx, query: ListQuery) -> Result<Vec<ItemDto>, CatalogError>;
 
     /// Change one of the caller's tenant's items (`POST /v1/catalogs/update`).
     #[requires("catalog.change")]
@@ -233,14 +268,26 @@ enum CreateOutcome {
     Conflict(&'static str),
 }
 
+/// What an `update` attempt resolved to, so a stale-version conflict maps to `409`
+/// and a missing row to `422` — distinguished *inside* the transaction (an
+/// unaffected update is ambiguous between the two without a follow-up read).
+enum UpdateOutcome {
+    /// Applied; the new row (version bumped).
+    Done(ItemDto),
+    /// No such row for this tenant — `422`.
+    NotFound,
+    /// The row exists but its version moved on — `409` (optimistic concurrency).
+    VersionConflict,
+}
+
 /// A boxed boundary error from a static message (e.g. "item not found"), so a
 /// missing row surfaces as an `Err` the handler maps to a `Problem`.
 fn boxed(msg: &'static str) -> BoxError {
     msg.into()
 }
 
-/// Reads an [`ItemDto`] out of a row of `(id, name, price, cost)`, masking the
-/// `cost` to `None` unless `show_cost` (the caller holds `catalog.cost.view`).
+/// Reads an [`ItemDto`] out of a row of `(id, name, price, cost, version)`, masking
+/// the `cost` to `None` unless `show_cost` (the caller holds `catalog.cost.view`).
 fn row_to_item(row: &dorm_core::row::Row, show_cost: bool) -> PortResult<ItemDto> {
     Ok(ItemDto {
         id: u64::try_from(row.try_get::<i64>(0).map_err(|e| Box::new(e) as BoxError)?)
@@ -254,6 +301,8 @@ fn row_to_item(row: &dorm_core::row::Row, show_cost: bool) -> PortResult<ItemDto
         } else {
             None
         },
+        version: u64::try_from(row.try_get::<i64>(4).map_err(|e| Box::new(e) as BoxError)?)
+            .map_err(|e| Box::new(e) as BoxError)?,
     })
 }
 
@@ -309,7 +358,7 @@ impl Catalog for CatalogController {
                 }
                 let rows = dorm_core::db::sql(
                     "INSERT INTO catalog_items (tenant, name, price, cost) \
-                     VALUES ($1, $2, $3, $4) RETURNING id, name, price, cost",
+                     VALUES ($1, $2, $3, $4) RETURNING id, name, price, cost, version",
                     &[
                         Value::Text(tenant),
                         Value::Text(cmd.name),
@@ -346,7 +395,7 @@ impl Catalog for CatalogController {
         self.uow
             .transaction(move || async move {
                 let rows = dorm_core::db::sql(
-                    "SELECT id, name, price, cost FROM catalog_items \
+                    "SELECT id, name, price, cost, version FROM catalog_items \
                      WHERE id = $1 AND tenant = $2",
                     &[Value::I64(id), Value::Text(tenant)],
                 )
@@ -361,18 +410,41 @@ impl Catalog for CatalogController {
             .map_err(err)
     }
 
-    async fn list(&self, ctx: &Ctx) -> Result<Vec<ItemDto>, CatalogError> {
+    async fn list(&self, ctx: &Ctx, query: ListQuery) -> Result<Vec<ItemDto>, CatalogError> {
         let tenant = tenant_of(ctx)?;
         let show_cost = ctx.has(COST_PERMISSION);
+        // Validate the order column against a FIXED allow-list (mirrors the
+        // registered `ordering`) — a client-supplied column name is never
+        // interpolated unchecked. Direction, page size and offset are integers or
+        // literals, so they are safe to format; the search term is parameterised.
+        let order_col = match query.order.as_deref() {
+            Some("name") => "name",
+            _ => "id",
+        };
+        let dir = if query.desc.unwrap_or(false) {
+            "DESC"
+        } else {
+            "ASC"
+        };
+        let page_size = i64::from(query.page_size.unwrap_or(25).clamp(1, 100));
+        let offset = i64::from(query.page.unwrap_or(0)).saturating_mul(page_size);
+        let search = query.search.filter(|s| !s.trim().is_empty());
         self.uow
             .transaction(move || async move {
-                let rows = dorm_core::db::sql(
-                    "SELECT id, name, price, cost FROM catalog_items \
-                     WHERE tenant = $1 ORDER BY id LIMIT 100",
-                    &[Value::Text(tenant)],
-                )
-                .await
-                .map_err(|e| Box::new(e) as BoxError)?;
+                let mut sql = String::from(
+                    "SELECT id, name, price, cost, version FROM catalog_items WHERE tenant = $1",
+                );
+                let mut params = vec![Value::Text(tenant)];
+                if let Some(term) = search {
+                    params.push(Value::Text(format!("%{term}%")));
+                    sql.push_str(" AND name ILIKE $2");
+                }
+                sql.push_str(&format!(
+                    " ORDER BY {order_col} {dir} LIMIT {page_size} OFFSET {offset}"
+                ));
+                let rows = dorm_core::db::sql(&sql, &params)
+                    .await
+                    .map_err(|e| Box::new(e) as BoxError)?;
                 rows.iter()
                     .map(|row| row_to_item(row, show_cost))
                     .collect::<PortResult<Vec<_>>>()
@@ -383,30 +455,57 @@ impl Catalog for CatalogController {
 
     async fn update(&self, ctx: &Ctx, cmd: UpdateItem) -> Result<ItemDto, CatalogError> {
         let id = i64::try_from(cmd.id).map_err(err)?;
+        let version = i64::try_from(cmd.version).map_err(err)?;
         let tenant = tenant_of(ctx)?;
         let show_cost = ctx.has(COST_PERMISSION);
-        self.uow
+        let outcome = self
+            .uow
             .transaction(move || async move {
+                // Apply only if the version still matches, and bump it. A stale
+                // edit updates no row.
                 let rows = dorm_core::db::sql(
-                    "UPDATE catalog_items SET name = $3, price = $4, cost = $5 \
-                     WHERE id = $1 AND tenant = $2 RETURNING id, name, price, cost",
+                    "UPDATE catalog_items SET name = $3, price = $4, cost = $5, \
+                     version = version + 1 \
+                     WHERE id = $1 AND tenant = $2 AND version = $6 \
+                     RETURNING id, name, price, cost, version",
                     &[
                         Value::I64(id),
-                        Value::Text(tenant),
+                        Value::Text(tenant.clone()),
                         Value::Text(cmd.name),
                         Value::I64(cmd.price),
                         Value::I64(cmd.cost.unwrap_or(0)),
+                        Value::I64(version),
                     ],
                 )
                 .await
                 .map_err(|e| Box::new(e) as BoxError)?;
-                row_to_item(
-                    rows.first().ok_or_else(|| boxed("item not found"))?,
-                    show_cost,
+                if let Some(row) = rows.first() {
+                    return Ok(UpdateOutcome::Done(row_to_item(row, show_cost)?));
+                }
+                // Nothing updated: the row is absent (NotFound) or its version
+                // moved on under the caller (VersionConflict). A scoped read tells
+                // them apart — still inside the same transaction.
+                let exists = dorm_core::db::sql(
+                    "SELECT 1 FROM catalog_items WHERE id = $1 AND tenant = $2",
+                    &[Value::I64(id), Value::Text(tenant)],
                 )
+                .await
+                .map_err(|e| Box::new(e) as BoxError)?;
+                Ok(if exists.is_empty() {
+                    UpdateOutcome::NotFound
+                } else {
+                    UpdateOutcome::VersionConflict
+                })
             })
             .await
-            .map_err(err)
+            .map_err(err)?;
+        match outcome {
+            UpdateOutcome::Done(dto) => Ok(dto),
+            UpdateOutcome::NotFound => Err(CatalogError::unprocessable("item not found")),
+            UpdateOutcome::VersionConflict => Err(CatalogError::conflict(
+                "the item was modified since you loaded it (version conflict); reload and retry",
+            )),
+        }
     }
 
     async fn delete(&self, ctx: &Ctx, cmd: DeleteItem) -> Result<(), CatalogError> {

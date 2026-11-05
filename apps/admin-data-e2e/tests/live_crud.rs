@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use admin_data_e2e::{
-    catalog_table_ddl, Catalog, CatalogController, CreateItem, DeleteItem, UpdateItem,
+    catalog_table_ddl, Catalog, CatalogController, CreateItem, DeleteItem, ListQuery, UpdateItem,
 };
 use seiva_data_dorm::{
     connect, idempotency_migrations, DormConfig, DormIdempotencyStore, DormUnitOfWork,
@@ -100,7 +100,7 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
         "another tenant cannot read the row"
     );
     assert!(
-        catalog.list(&globex).await.expect("globex list").is_empty(),
+        catalog.list(&globex, ListQuery::default()).await.expect("globex list").is_empty(),
         "globex sees no acme rows"
     );
     // globex has its own, separate row.
@@ -116,11 +116,11 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
         .await
         .expect("globex create");
     assert_eq!(
-        catalog.list(&acme).await.expect("acme list").len(),
+        catalog.list(&acme, ListQuery::default()).await.expect("acme list").len(),
         1,
         "acme still sees only its own"
     );
-    assert_eq!(catalog.list(&globex).await.expect("globex list").len(), 1);
+    assert_eq!(catalog.list(&globex, ListQuery::default()).await.expect("globex list").len(), 1);
 
     // UPDATE + DELETE within acme.
     let updated = catalog
@@ -128,6 +128,7 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
             &acme,
             UpdateItem {
                 id,
+                version: created.version,
                 name: "widget2".into(),
                 price: 150,
                 cost: Some(70),
@@ -137,6 +138,30 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
         .expect("update");
     assert_eq!(updated.name, "widget2");
     assert_eq!(updated.cost, Some(70));
+    assert_eq!(updated.version, created.version + 1, "update bumps the version");
+
+    // OPTIMISTIC CONCURRENCY: a second update with the now-stale version is a 409.
+    let stale = catalog
+        .update(
+            &acme,
+            UpdateItem {
+                id,
+                version: created.version, // stale: the row is now at created.version + 1
+                name: "widget3".into(),
+                price: 200,
+                cost: Some(80),
+            },
+        )
+        .await
+        .expect_err("a stale-version update must be rejected");
+    assert_eq!(
+        stale.status,
+        axum::http::StatusCode::CONFLICT,
+        "a stale-version update is a 409"
+    );
+    // The rejected update did not change the row.
+    let current = catalog.get(&acme, id).await.expect("get after conflict");
+    assert_eq!(current.name, "widget2", "the conflicting update did not apply");
     // globex cannot delete acme's row (tenant scope): the delete affects nothing,
     // so acme's row survives.
     catalog
@@ -231,7 +256,7 @@ async fn live_catalog_create_is_idempotent() {
     assert_eq!(first, replay, "a retry returns the identical stored response");
 
     // Exactly one row exists for the tenant.
-    let count = catalog.list(&ctx).await.expect("list").len();
+    let count = catalog.list(&ctx, ListQuery::default()).await.expect("list").len();
     assert_eq!(count, 1, "the retried create inserted exactly once");
 
     // Reusing the key with DIFFERENT content is a 409 conflict (not a second row).
@@ -250,7 +275,7 @@ async fn live_catalog_create_is_idempotent() {
         "a key reused with different content is a 409"
     );
     assert_eq!(
-        catalog.list(&ctx).await.expect("list after mismatch").len(),
+        catalog.list(&ctx, ListQuery::default()).await.expect("list after mismatch").len(),
         1,
         "the rejected mismatch did not insert"
     );
@@ -261,6 +286,141 @@ async fn live_catalog_create_is_idempotent() {
             .await
             .map_err(|e| Box::new(e) as BoxError)?;
         dorm_core::db::execute("DROP TABLE dorm_idempotency", &[])
+            .await
+            .map(|_| ())
+            .map_err(|e| Box::new(e) as BoxError)
+    })
+    .await
+    .expect("cleanup");
+}
+
+/// Live proof of the list query controls: tenant-scoped **search**, **ordering**
+/// and **pagination**, all driven from the registered allow-lists (ADR 0009).
+/// Gated on `SEIVA_DORM_TEST_DSN`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_catalog_list_search_order_paginate() {
+    let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+        eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the list-query proof");
+        return;
+    };
+    let uow = Arc::new(DormUnitOfWork::new(
+        connect(&DormConfig {
+            dsn,
+            replicas: vec![],
+            read_only: false,
+            schema: None,
+            pool_max: 4,
+            cursor_key: b"admin-data-e2e-secret".to_vec(),
+        })
+        .expect("connect to the test database"),
+    ));
+    uow.transaction(|| async {
+        dorm_core::db::execute("DROP TABLE IF EXISTS catalog_items", &[])
+            .await
+            .map_err(|e| Box::new(e) as BoxError)?;
+        dorm_core::db::execute(catalog_table_ddl(), &[])
+            .await
+            .map(|_| ())
+            .map_err(|e| Box::new(e) as BoxError)
+    })
+    .await
+    .expect("table setup");
+
+    let catalog = CatalogController::new(Arc::clone(&uow), Arc::new(DormIdempotencyStore));
+    let acme = Ctx::new(Principal::in_tenant(
+        "clerk",
+        "acme",
+        ["catalog.read", "catalog.create"],
+    ));
+    for name in ["banana", "apple", "cherry", "avocado"] {
+        catalog
+            .create(
+                &acme,
+                CreateItem {
+                    name: name.into(),
+                    price: 1,
+                    cost: None,
+                },
+            )
+            .await
+            .expect("seed");
+    }
+
+    let names = |items: &[admin_data_e2e::ItemDto]| {
+        items.iter().map(|i| i.name.clone()).collect::<Vec<_>>()
+    };
+
+    // ORDER by name ascending.
+    let asc = catalog
+        .list(
+            &acme,
+            ListQuery {
+                order: Some("name".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("ordered list");
+    assert_eq!(names(&asc), ["apple", "avocado", "banana", "cherry"]);
+
+    // ORDER by name descending.
+    let desc = catalog
+        .list(
+            &acme,
+            ListQuery {
+                order: Some("name".into()),
+                desc: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("desc list");
+    assert_eq!(names(&desc), ["cherry", "banana", "avocado", "apple"]);
+
+    // SEARCH (substring, case-insensitive).
+    let found = catalog
+        .list(
+            &acme,
+            ListQuery {
+                search: Some("AV".into()),
+                order: Some("name".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("search list");
+    assert_eq!(names(&found), ["avocado"], "search matches a substring, case-insensitively");
+
+    // PAGINATION: page_size 2, ordered by name.
+    let page0 = catalog
+        .list(
+            &acme,
+            ListQuery {
+                order: Some("name".into()),
+                page: Some(0),
+                page_size: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("page 0");
+    assert_eq!(names(&page0), ["apple", "avocado"]);
+    let page1 = catalog
+        .list(
+            &acme,
+            ListQuery {
+                order: Some("name".into()),
+                page: Some(1),
+                page_size: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("page 1");
+    assert_eq!(names(&page1), ["banana", "cherry"]);
+
+    uow.transaction(|| async {
+        dorm_core::db::execute("DROP TABLE catalog_items", &[])
             .await
             .map(|_| ())
             .map_err(|e| Box::new(e) as BoxError)

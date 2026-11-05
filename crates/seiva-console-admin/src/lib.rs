@@ -109,6 +109,11 @@ const ADMIN_CSS: &str = r#"
   .acts button { font-size: 12px; padding: 3px 8px; }
   .danger { color: #c0392b; }
   .rowmsg { font-size: 12px; color: var(--mut); padding: 4px 10px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--b); }
+  .toolbar .search { flex: 1; min-width: 160px; }
+  .toolbar .pagelbl { font-size: 12px; white-space: nowrap; }
+  table.tbl th.ord { cursor: pointer; user-select: none; }
+  table.tbl th.ord .arrow { font-size: 10px; }
 "#;
 
 /// The console's script — the exact bytes that go between `<script>` and
@@ -241,11 +246,44 @@ function renderDataResource(r, spec, k){
     el.appendChild(cf);
   }
 
+  // Query state driven from the registry's allow-lists (ADR 0009): searchable
+  // fields, orderable columns and the page size the module declared.
+  const orderable = r.ordering || [];
+  const searchable = (r.search_fields && r.search_fields.length) ? r.search_fields : [];
+  const state = { search: '', order: orderable[0] || '', desc: false, page: 0, pageSize: r.page_size || 25 };
+
+  // Toolbar: a search box (only if the module declared searchable fields) and
+  // prev/next pagination.
+  const bar = document.createElement('div'); bar.className = 'toolbar';
+  if (searchable.length){
+    const si = document.createElement('input');
+    si.type = 'search'; si.className = 'search'; si.placeholder = 'search ' + searchable.join(', ');
+    si.addEventListener('input', () => { state.search = si.value; state.page = 0; refresh(); });
+    bar.appendChild(si);
+  }
+  const prev = document.createElement('button'); prev.textContent = '‹ Prev'; prev.disabled = true;
+  const pageLbl = document.createElement('span'); pageLbl.className = 'muted pagelbl';
+  const next = document.createElement('button'); next.textContent = 'Next ›';
+  prev.addEventListener('click', () => { if (state.page > 0) { state.page--; refresh(); } });
+  next.addEventListener('click', () => { state.page++; refresh(); });
+  bar.appendChild(prev); bar.appendChild(pageLbl); bar.appendChild(next);
+  el.appendChild(bar);
+
   const table = document.createElement('table'); table.className = 'tbl';
-  table.innerHTML = `<thead><tr>${fields.map(f=>`<th>${esc(f)}</th>`).join('')}<th></th></tr></thead><tbody></tbody>`;
+  const headCells = fields.map(f =>
+    orderable.includes(f)
+      ? `<th class="ord" data-col="${esc(f)}">${esc(f)} <span class="arrow"></span></th>`
+      : `<th>${esc(f)}</th>`).join('');
+  table.innerHTML = `<thead><tr>${headCells}<th></th></tr></thead><tbody></tbody>`;
   el.appendChild(table);
   el.appendChild(msg);
   const tbody = table.querySelector('tbody');
+  // Clickable ordering headers: first click sorts ascending, next toggles desc.
+  table.querySelectorAll('th.ord').forEach(th => th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (state.order === col) state.desc = !state.desc; else { state.order = col; state.desc = false; }
+    state.page = 0; refresh();
+  }));
 
   function renderRow(item){
     const tr = document.createElement('tr');
@@ -271,8 +309,12 @@ function renderDataResource(r, spec, k){
     const cols = bodyFields(k.update.op);
     const form = document.createElement('tr');
     const cell = document.createElement('td'); cell.colSpan = fields.length + 1;
+    // `id` and `version` ride along read-only: `version` is the optimistic-
+    // concurrency token the server checks, so it must be the value we loaded, not
+    // something the operator retypes.
+    const ro = (c) => (c === 'id' || c === 'version') ? ' readonly' : '';
     const inputs = cols.map(c =>
-      `<label>${esc(c)} <input data-k="${esc(c)}" value="${esc(item[c] === undefined ? '' : item[c])}" /></label>`).join(' ');
+      `<label>${esc(c)} <input data-k="${esc(c)}"${ro(c)} value="${esc(item[c] === undefined ? '' : item[c])}" /></label>`).join(' ');
     cell.innerHTML = `<div class="fields">${inputs}</div><div class="acts"><button data-save>Save</button><button data-cancel>Cancel</button></div>`;
     form.appendChild(cell); tr.replaceWith(form);
     cell.querySelector('[data-cancel]').addEventListener('click', () => refresh());
@@ -288,11 +330,26 @@ function renderDataResource(r, spec, k){
   }
   async function refresh(){
     tbody.innerHTML = '';
-    const res = await apiCall('GET', k.list.path);
+    const qs = new URLSearchParams();
+    if (state.search) qs.set('search', state.search);
+    if (state.order) { qs.set('order', state.order); if (state.desc) qs.set('desc', 'true'); }
+    qs.set('page', String(state.page));
+    qs.set('page_size', String(state.pageSize));
+    const url = k.list.path + '?' + qs.toString();
+    const res = await apiCall('GET', url);
     if (!res.ok) { say('could not list: ' + res.status); return; }
     const rows = Array.isArray(res.json) ? res.json : [];
-    say(rows.length ? '' : 'no records yet');
+    say(rows.length ? '' : (state.page > 0 ? 'no more records' : 'no records yet'));
     for (const item of rows) tbody.appendChild(renderRow(item));
+    // Pagination affordances: a full page implies there may be a next one.
+    prev.disabled = state.page === 0;
+    next.disabled = rows.length < state.pageSize;
+    pageLbl.textContent = 'page ' + (state.page + 1);
+    // Reflect the current sort in the column arrows.
+    table.querySelectorAll('th.ord').forEach(th => {
+      const a = th.querySelector('.arrow');
+      if (a) a.textContent = (state.order === th.dataset.col) ? (state.desc ? '▼' : '▲') : '';
+    });
   }
   refresh();
   return el;

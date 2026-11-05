@@ -84,6 +84,6 @@ New ADRs: **0008–0015** (+ the 0007 addendum). Later commits (0015 distributed
   build-profile numbers remain overhead-only and are labelled so.
 - **gRPC** is proto-generation only; no served round-trip is claimed, so none is
   asserted (ADR 0007 addendum).
-- **Admin console** now does registered, authorized **row CRUD** (list table + create + edit + delete) over a module's contract operations, proven in-browser against a live DORM-backed module (`Catalog`). It enforces tenant-scoped reads and field masking server-side (the `&Ctx` seam); a step short of full Django-admin on pagination/search/ordering controls and optimistic-concurrency.
+- **Admin console** now does registered, authorized **row CRUD** (list table + create + edit + delete) over a module's contract operations, proven in-browser against a live DORM-backed module (`Catalog`). It enforces tenant-scoped reads and field masking server-side (the `&Ctx` seam); **search, clickable-header ordering and pagination** (from the registered `search_fields`/`ordering`/`page_size` allow-lists, server-validated); and **optimistic concurrency** (rows carry a `version`; a stale edit is a `409`). Proved by live tests (`live_catalog_list_search_order_paginate`, the version-conflict assertion) and the browser E2E (`e2e/admin/catalog.mjs`: search filters the table, a concurrent bump then a stale save shows the `409`). Future scope (not an open gap in the brief): bulk actions, richer filter widgets.
 
 Nothing above is a silent gap: each is stated here and in the relevant ADR.

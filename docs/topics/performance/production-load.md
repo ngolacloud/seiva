@@ -174,7 +174,9 @@ stores the response; a retry replays it; a key reused with different content is 
 `live_catalog_create_is_idempotent` test proves the replay + the `409` against a
 real PostgreSQL.
 
-### Still open
+### Console controls + optimistic concurrency — done
 
-Pagination/search/ordering console controls and optimistic-concurrency
-(version/ETag) on edit remain — tracked in the evolution evidence, not here.
+The console list now has server-driven **search**, **ordering** (clickable
+column headers) and **pagination**, from the registered allow-lists (ADR 0009),
+and **optimistic concurrency** on edit: rows carry a `version`, a stale edit is a
+`409`. Proved by live tests and the browser E2E (`e2e/admin/catalog.mjs`).

@@ -142,5 +142,22 @@ another tenant's rows) and mask the internal `cost` field unless the caller hold
 acme's rows and a cross-tenant delete is a no-op), and a caller without
 `cost.view` gets `cost = None` on the same row the owner sees in full.
 
-Still pending: pagination/search/ordering controls wired from the registered
-allow-lists; optimistic-concurrency (version/ETag) on edit.
+**Pagination, search and ordering are wired too** (2026-11-05). The `list`
+operation takes an optional `ListQuery` (read from the query string via the
+controller macro's `Query<T>`), and the console renders a search box, clickable
+orderable column headers and prev/next pagination — all driven from the
+registry's declared `search_fields`/`ordering`/`page_size` allow-lists. The
+server validates the order column against a fixed allow-list and parameterises
+the search term, so a client can never inject a column name or an unbounded page.
+
+**Optimistic concurrency is done too.** Rows carry a `version`; `UpdateItem`
+echoes the version the caller last read, the update applies only if it still
+matches (bumping it), and a stale edit is a `409` — the console loads the
+version read-only into the edit form and surfaces the conflict. Proved by
+`live_catalog_list_search_order_paginate`, the version-conflict assertion in
+`live_catalog_crud_tenant_scoped_and_masked`, and the browser E2E
+(`e2e/admin/catalog.mjs`: search filters the table; a concurrent bump then a
+stale save shows the `409`).
+
+Still pending: nothing in this slice — the remaining console work (bulk actions,
+richer filters) is future scope, not an open gap in the brief.

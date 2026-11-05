@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS catalog_items (
     tenant TEXT NOT NULL,
     name TEXT NOT NULL,
     price BIGINT NOT NULL,
-    cost BIGINT NOT NULL DEFAULT 0
+    cost BIGINT NOT NULL DEFAULT 0,
+    version BIGINT NOT NULL DEFAULT 1
 );
 
 -- The durable idempotency store (ADR 0011). Pre-created here so the two replicas
