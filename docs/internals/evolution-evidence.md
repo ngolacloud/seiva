@@ -73,11 +73,15 @@ New ADRs: **0008–0015** (+ the 0007 addendum). Later commits (0015 distributed
   compose up` runs PostgreSQL + Redis + two Catalog replicas + HAProxy, and proves
   the per-client rate budget is ONE across replicas (120/min limit, 4000-req burst
   through the LB → 119 admitted, not ~240) via the distributed Redis limiter, plus
-  throughput through the containerised LB. The remaining smaller gap: idempotency on
-  this deployment's write hot path (the durable store is proved cross-replica by
-  `seiva-data-dorm`'s multi-process test, but the `Catalog` HTTP POST does not yet
-  attach an `Idempotency-Key`). The published build-profile numbers remain
-  overhead-only and are labelled so.
+  throughput through the containerised LB. **Idempotency on the write hot path —
+  done** (ADR 0011 addendum): the `&Ctx` seam carries the validated
+  `Idempotency-Key` + method/path, and `Catalog.create` claims a scoped key +
+  canonical body fingerprint through the durable store inside the write
+  transaction — a retry replays, a reused-with-different-content key is `409`.
+  Proof C of the delonix deployment fires 40 concurrent identical POSTs (one key)
+  through the LB onto two replicas and gets exactly ONE insert; the
+  `live_catalog_create_is_idempotent` test proves replay + `409`. The published
+  build-profile numbers remain overhead-only and are labelled so.
 - **gRPC** is proto-generation only; no served round-trip is claimed, so none is
   asserted (ADR 0007 addendum).
 - **Admin console** now does registered, authorized **row CRUD** (list table + create + edit + delete) over a module's contract operations, proven in-browser against a live DORM-backed module (`Catalog`). It enforces tenant-scoped reads and field masking server-side (the `&Ctx` seam); a step short of full Django-admin on pagination/search/ordering controls and optimistic-concurrency.
