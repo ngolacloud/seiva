@@ -43,7 +43,7 @@ New ADRs: **0008–0015** (+ the 0007 addendum). Later commits (0015 distributed
 | Core coherent after extraction | docs/tests | ✅ | base tests + docs aligned |
 | Security: audit of all lockfile variants + negative tests | ADR 0014, deny gates | 🟡 | advisories gate extended to excluded lockfiles; license/bans on excluded crates deferred |
 | Quality: fmt, clippy, unit/integration, doctests | CI | ✅ | all green each commit |
-| E2E + load with thresholds | `e2e/admin` (browser) | 🟡 | admin browser E2E passes on headless Chrome (authenticate → list authorized → create, no secret leak); row CRUD (create/list/edit/delete) proven in-browser over the live Catalog module; filter/version-conflict + production load benchmark still pending |
+| E2E + load with thresholds | `e2e/admin` (browser), `benchmarks/production` | ✅ | admin browser E2E passes on headless Chrome (authenticate → list authorized → create, no secret leak); row CRUD proven in-browser over the live Catalog module; **production load benchmark over PostgreSQL** (secure path, two replicas): ~94.7k req/s authed+tenant-scoped reads (p99 <2.5ms), ~10.6k req/s authed inserts (p99 32ms), 429-shedding at p99 0.74ms, RSS 6→15 MiB — `docs/topics/performance/production-load.md`. Filter/version-conflict E2E still pending |
 
 ## Compatibility matrix
 
@@ -59,9 +59,19 @@ New ADRs: **0008–0015** (+ the 0007 addendum). Later commits (0015 distributed
 - **F5 tail.** Distributed rate limiter — **done** (ADR 0015): `RateLimitStore`
   port + `rate_limit_with_store` + optional `seiva-ratelimit-redis`, proved live
   against Redis 7 (50 concurrent clients share one budget). Server-side tenant-scoping and field masking are done via a completed `&Ctx` seam (the controller injects the Principal): the `Catalog` ops scope by tenant and mask `cost` unless `catalog.cost.view` — proved live (tenant isolation + mask).
-- **F6 tail.** Browser E2E of the admin — **done** (Playwright on system Chrome): the admin flow (`e2e/admin/admin.mjs`) and the full row-CRUD loop over the live Catalog module (`e2e/admin/catalog.mjs`). The production load benchmark with auth + idempotency +
-  multiple replicas (p50/p95/p99, throughput, errors, CPU, RSS) — needs that
-  infra; the published microbenchmarks remain overhead-only and are labelled so.
+- **F6 tail.** Browser E2E of the admin — **done** (Playwright on system Chrome):
+  the admin flow (`e2e/admin/admin.mjs`) and the full row-CRUD loop over the live
+  Catalog module (`e2e/admin/catalog.mjs`). Production load benchmark over
+  PostgreSQL — **done** (`benchmarks/production/run.sh`,
+  `docs/topics/performance/production-load.md`): the secure path (auth + tenant-scoped
+  DB) across two replicas measured at ~94.7k req/s reads / ~10.6k req/s inserts with
+  p50/p95/p99 + status codes + RSS reported, and the per-IP limiter shown shedding a
+  flood as sub-ms 429s. Honest caveats stated: single host/loopback, two processes
+  model replicas, in-process limiter here (not the distributed Redis one), idempotency
+  not on this write's hot path. A fully containerised, load-balanced multi-replica
+  deployment via `delonix` with the distributed rate-limit/idempotency on the hot path
+  remains the open production-form gap. The published build-profile numbers remain
+  overhead-only and are labelled so.
 - **gRPC** is proto-generation only; no served round-trip is claimed, so none is
   asserted (ADR 0007 addendum).
 - **Admin console** now does registered, authorized **row CRUD** (list table + create + edit + delete) over a module's contract operations, proven in-browser against a live DORM-backed module (`Catalog`). It enforces tenant-scoped reads and field masking server-side (the `&Ctx` seam); a step short of full Django-admin on pagination/search/ordering controls and optimistic-concurrency.
