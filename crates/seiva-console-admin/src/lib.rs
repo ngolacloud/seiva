@@ -86,6 +86,12 @@ pub const ADMIN_DX_PATH: &str = "/admin/dx";
 /// same-origin module (so its `script-src` is `'self'`, not a per-byte hash).
 pub const ADMIN_DX_JS_PATH: &str = "/admin/dx.js";
 
+/// The vendored `@dxjs/ui` stylesheet, linked by the [`ADMIN_DX_PATH`] page as an
+/// external same-origin sheet (so its `style-src` is `'self'`, not a per-byte
+/// hash). The kit only toggles CSS classes, so all of the console's look lives
+/// here — no inline `<style>` and no `style=""`.
+pub const ADMIN_DX_CSS_PATH: &str = "/admin/dx.css";
+
 /// The console's stylesheet — the exact bytes that go between `<style>` and
 /// `</style>`, so the CSP's `style-src` hash is computed over this verbatim.
 const ADMIN_CSS: &str = r#"
@@ -631,14 +637,21 @@ pub fn mount(router: Router) -> Router {
 /// 0016 drift guard). Rebuild + re-vendor when the dxjs console changes.
 const ADMIN_DX_JS: &str = include_str!("../assets/dx.js");
 
-/// The dxjs page shell: an external same-origin module, no inline script/style,
-/// so the page runs under `script-src 'self'` with no hash and no `unsafe-*`.
+/// The vendored `@dxjs/ui` stylesheet (the console's design system), served
+/// byte-for-byte at [`ADMIN_DX_CSS_PATH`] and linked by the shell. Embedded with
+/// `include_str!` so the bytes served are exactly the committed artifact.
+const ADMIN_DX_CSS: &str = include_str!("../assets/dx.css");
+
+/// The dxjs page shell: an external same-origin module plus an external
+/// same-origin stylesheet, no inline script/style — so the page runs under
+/// `script-src 'self'` / `style-src 'self'` with no hash and no `unsafe-*`.
 const ADMIN_DX_SHELL: &str = r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Delonix Seiva — Admin (dxjs)</title>
+<link rel="stylesheet" href="/admin/dx.css" />
 </head>
 <body>
 <div id="app"></div>
@@ -681,13 +694,26 @@ pub async fn admin_dx_js_handler() -> Response {
     res
 }
 
-/// A `Router` serving the opt-in dxjs console at [`ADMIN_DX_PATH`] and its bundle
-/// at [`ADMIN_DX_JS_PATH`]. The dxjs page reads the SAME [`REGISTRY_PATH`] and
-/// `/openapi.json` endpoints the inline console uses.
+/// `GET /admin/dx.css` — the vendored `@dxjs/ui` stylesheet, served byte-for-byte
+/// and linked by the shell under `style-src 'self'`.
+pub async fn admin_dx_css_handler() -> Response {
+    let mut res = ADMIN_DX_CSS.into_response();
+    res.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/css; charset=utf-8"),
+    );
+    res
+}
+
+/// A `Router` serving the opt-in dxjs console at [`ADMIN_DX_PATH`], its bundle at
+/// [`ADMIN_DX_JS_PATH`] and its stylesheet at [`ADMIN_DX_CSS_PATH`]. The dxjs page
+/// reads the SAME [`REGISTRY_PATH`] and `/openapi.json` endpoints the inline
+/// console uses.
 pub fn admin_dx_router() -> Router {
     Router::new()
         .route(ADMIN_DX_PATH, get(admin_dx_handler))
         .route(ADMIN_DX_JS_PATH, get(admin_dx_js_handler))
+        .route(ADMIN_DX_CSS_PATH, get(admin_dx_css_handler))
 }
 
 /// Opt-in: mount the inline console ([`mount`]) **and** the dxjs console. Use

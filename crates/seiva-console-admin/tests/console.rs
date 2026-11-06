@@ -283,10 +283,29 @@ async fn dx_page_loads_an_external_same_origin_module() {
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-    // External same-origin module, an #app mount point, no inline script/CDN.
+    // External same-origin module + stylesheet, an #app mount point, no inline
+    // script/style and no CDN.
     assert!(body.contains(r#"<script type="module" src="/admin/dx.js">"#));
+    assert!(body.contains(r#"<link rel="stylesheet" href="/admin/dx.css" />"#));
     assert!(body.contains(r#"id="app""#));
     assert!(!body.contains("http://") && !body.contains("https://"));
+}
+
+#[tokio::test]
+async fn dx_stylesheet_is_served_as_css_same_origin() {
+    let res = get_dx(seiva_console_admin::ADMIN_DX_CSS_PATH).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/css"));
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let css = String::from_utf8(bytes.to_vec()).unwrap();
+    // It is the vendored @dxjs/ui kit sheet (served same-origin, style-src 'self').
+    assert!(
+        css.contains(".dx-shell"),
+        "the @dxjs/ui stylesheet is embedded"
+    );
 }
 
 #[tokio::test]
