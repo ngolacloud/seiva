@@ -3012,6 +3012,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "shop-api"
+version = "0.1.0"
+dependencies = [
+ "seiva-console-admin",
+ "seiva-http",
+ "seiva-server",
+ "shop-catalog-infrastructure",
+ "shop-catalog-interface",
+ "shop-inventory-infrastructure",
+ "shop-inventory-interface",
+ "shop-notifications-infrastructure",
+ "shop-notifications-interface",
+ "shop-orders-infrastructure",
+ "shop-orders-interface",
+ "shop-payments-infrastructure",
+ "shop-payments-interface",
+ "tokio",
+]
+
+[[package]]
 name = "shop-catalog-application"
 version = "0.1.0"
 dependencies = [
@@ -3032,6 +3052,8 @@ name = "shop-catalog-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
+ "serde",
 ]
 
 [[package]]
@@ -3050,7 +3072,17 @@ dependencies = [
 name = "shop-catalog-interface"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "axum",
+ "delonix-seiva",
+ "seiva-http",
+ "seiva-ports",
+ "serde_json",
+ "shop-catalog-application",
  "shop-catalog-facade",
+ "shop-catalog-infrastructure",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -3074,6 +3106,8 @@ name = "shop-inventory-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
+ "serde",
 ]
 
 [[package]]
@@ -3092,7 +3126,17 @@ dependencies = [
 name = "shop-inventory-interface"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "axum",
+ "delonix-seiva",
+ "seiva-http",
+ "seiva-ports",
+ "serde_json",
+ "shop-inventory-application",
  "shop-inventory-facade",
+ "shop-inventory-infrastructure",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -3116,6 +3160,8 @@ name = "shop-notifications-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
+ "serde",
 ]
 
 [[package]]
@@ -3134,13 +3180,24 @@ dependencies = [
 name = "shop-notifications-interface"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "axum",
+ "delonix-seiva",
+ "seiva-http",
+ "seiva-ports",
+ "serde_json",
+ "shop-notifications-application",
  "shop-notifications-facade",
+ "shop-notifications-infrastructure",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "shop-orders-application"
 version = "0.1.0"
 dependencies = [
+ "seiva-cqrs",
  "seiva-ports",
  "seiva-testing",
  "serde_json",
@@ -3158,6 +3215,8 @@ name = "shop-orders-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
+ "serde",
 ]
 
 [[package]]
@@ -3176,7 +3235,17 @@ dependencies = [
 name = "shop-orders-interface"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "axum",
+ "delonix-seiva",
+ "seiva-http",
+ "seiva-ports",
+ "serde_json",
+ "shop-orders-application",
  "shop-orders-facade",
+ "shop-orders-infrastructure",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -3200,6 +3269,8 @@ name = "shop-payments-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
+ "serde",
 ]
 
 [[package]]
@@ -3218,7 +3289,17 @@ dependencies = [
 name = "shop-payments-interface"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "axum",
+ "delonix-seiva",
+ "seiva-http",
+ "seiva-ports",
+ "serde_json",
+ "shop-payments-application",
  "shop-payments-facade",
+ "shop-payments-infrastructure",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

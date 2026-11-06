@@ -136,6 +136,10 @@ members = [
     # console + a token authenticator. Built in CI (catches rot); the browser
     # E2E itself is run on demand (needs a headless Chrome), not in `cargo test`.
     "apps/admin-e2e",
+    # Composition root for the shop tutorial: the five shop modules + the console
+    # + a demo token authenticator, served over HTTP (`/openapi.json`, `/docs`,
+    # `/health`, `/admin`). A binary app, not an example module.
+    "apps/shop-api",
 ]
 
 [workspace.package]

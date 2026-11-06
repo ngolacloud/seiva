@@ -11,7 +11,9 @@
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_notifications_domain::Notification;
-use shop_notifications_facade::{NotificationDto, Notifications, SendNotification};
+use shop_notifications_facade::{
+    NotificationDto, Notifications, NotificationsError, SendNotification,
+};
 
 /// Outbound port: persistence of sent notifications, in the domain's language.
 /// Implemented in `infrastructure`. Each future is `Send` so a use case can
@@ -90,16 +92,16 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn send(&self, cmd: SendNotification) -> Result<NotificationDto, String> {
+    async fn send(&self, cmd: SendNotification) -> Result<NotificationDto, NotificationsError> {
         self.send_a_notification(cmd)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| NotificationsError::Invalid(err.to_string()))
     }
 
-    async fn list(&self) -> Result<Vec<NotificationDto>, String> {
+    async fn list(&self) -> Result<Vec<NotificationDto>, NotificationsError> {
         self.all_notifications()
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| NotificationsError::Invalid(err.to_string()))
     }
 }
 

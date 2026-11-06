@@ -10,7 +10,7 @@
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_catalog_domain::Product;
-use shop_catalog_facade::{Catalog, CreateProduct, ProductDto, ProductId};
+use shop_catalog_facade::{Catalog, CatalogError, CreateProduct, ProductDto, ProductId};
 
 /// Outbound port: persistence of products, in the domain's language.
 /// Implemented in `infrastructure` (over DORM or an external library). Each
@@ -82,15 +82,6 @@ where
         let products = self.repository.list_products().await?;
         Ok(products.into_iter().map(to_product_dto).collect())
     }
-
-    async fn one_product(&self, id: u128) -> PortResult<ProductDto> {
-        let product = self
-            .repository
-            .get_product(id)
-            .await?
-            .ok_or_else(|| BoxError::from(format!("product {id} not found")))?;
-        Ok(to_product_dto(product))
-    }
 }
 
 impl<R, G, U, E> Catalog for CatalogService<R, G, U, E>
@@ -100,16 +91,30 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn add_product(&self, cmd: CreateProduct) -> Result<ProductDto, String> {
-        self.add_a_product(cmd).await.map_err(|err| err.to_string())
+    async fn add_product(&self, cmd: CreateProduct) -> Result<ProductDto, CatalogError> {
+        // A write failure here is a domain-rule violation (empty name / zero
+        // price) or an infrastructure error; both surface as `422`.
+        self.add_a_product(cmd)
+            .await
+            .map_err(|err| CatalogError::Invalid(err.to_string()))
     }
 
-    async fn list(&self) -> Result<Vec<ProductDto>, String> {
-        self.all_products().await.map_err(|err| err.to_string())
+    async fn list(&self) -> Result<Vec<ProductDto>, CatalogError> {
+        self.all_products()
+            .await
+            .map_err(|err| CatalogError::Invalid(err.to_string()))
     }
 
-    async fn get(&self, q: ProductId) -> Result<ProductDto, String> {
-        self.one_product(q.id).await.map_err(|err| err.to_string())
+    async fn get(&self, id: ProductId) -> Result<ProductDto, CatalogError> {
+        // A missing product is a typed `NotFound` (→ `404`), distinct from a
+        // repository error (→ `422`).
+        let product = self
+            .repository
+            .get_product(id.id)
+            .await
+            .map_err(|err| CatalogError::Invalid(err.to_string()))?
+            .ok_or_else(|| CatalogError::NotFound(format!("product {} not found", id.id)))?;
+        Ok(to_product_dto(product))
     }
 }
 

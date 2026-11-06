@@ -1,7 +1,8 @@
-# Interface layer of the `payments` shop example: the transport-facing shell.
-# Depends on the facade (the trait it exposes). Must not depend on
-# infrastructure or domain (ADR 0003). HTTP/gRPC wiring is a later phase; the
-# scaffold's `#[seiva::controller]` generates the routes from the same facade.
+# Interface layer of the `payments` shop example: the HTTP transport.
+#
+# The `#[seiva::controller]` lives HERE; the controller is generic over the
+# repository port, so this layer depends on `application` but NEVER on
+# `infrastructure` (the layering rule forbids `interface -> infrastructure`).
 [package]
 name = "shop-payments-interface"
 version.workspace = true
@@ -11,3 +12,15 @@ publish = false
 
 [dependencies]
 shop-payments-facade = { path = "../facade" }
+shop-payments-application = { path = "../application" }
+delonix-seiva = { workspace = true }
+seiva-http = { path = "../../../../crates/seiva-http" }
+seiva-ports = { workspace = true }
+async-trait = { workspace = true }
+axum = "0.8"
+
+[dev-dependencies]
+shop-payments-infrastructure = { path = "../infrastructure" }
+tokio = { workspace = true, features = ["rt", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+serde_json = "1"

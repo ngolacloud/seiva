@@ -10,7 +10,9 @@
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_orders_domain::{Line, Order};
-use shop_orders_facade::{LineDto, OrderDto, OrderId, Orders, PlaceOrder};
+use shop_orders_facade::{LineDto, OrderDto, OrderId, Orders, OrdersError, PlaceOrder};
+
+pub mod cqrs;
 
 /// Outbound port: persistence of orders, in the domain's language. Implemented
 /// in `infrastructure`. Each future is `Send` so a use case can `.await` it
@@ -98,15 +100,6 @@ where
         Ok(to_order_dto(order))
     }
 
-    async fn one_order(&self, id: u128) -> PortResult<OrderDto> {
-        let order = self
-            .repository
-            .get_order(id)
-            .await?
-            .ok_or_else(|| BoxError::from(format!("order {id} not found")))?;
-        Ok(to_order_dto(order))
-    }
-
     async fn all_orders(&self) -> PortResult<Vec<OrderDto>> {
         let orders = self.repository.list_orders().await?;
         Ok(orders.into_iter().map(to_order_dto).collect())
@@ -120,18 +113,28 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, String> {
+    async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError> {
         self.place_an_order(cmd)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| OrdersError::Invalid(err.to_string()))
     }
 
-    async fn get(&self, q: OrderId) -> Result<OrderDto, String> {
-        self.one_order(q.id).await.map_err(|err| err.to_string())
+    async fn get(&self, id: OrderId) -> Result<OrderDto, OrdersError> {
+        // A missing order is a typed `NotFound` (→ `404`), distinct from a
+        // repository error (→ `422`).
+        let order = self
+            .repository
+            .get_order(id.id)
+            .await
+            .map_err(|err| OrdersError::Invalid(err.to_string()))?
+            .ok_or_else(|| OrdersError::NotFound(format!("order {} not found", id.id)))?;
+        Ok(to_order_dto(order))
     }
 
-    async fn list(&self) -> Result<Vec<OrderDto>, String> {
-        self.all_orders().await.map_err(|err| err.to_string())
+    async fn list(&self) -> Result<Vec<OrderDto>, OrdersError> {
+        self.all_orders()
+            .await
+            .map_err(|err| OrdersError::Invalid(err.to_string()))
     }
 }
 
