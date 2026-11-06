@@ -86,12 +86,18 @@ async fn main() {
         ),
     ));
 
-    let app = router_with_modules(
-        health.clone(),
-        &HttpSecurity::default(),
-        Some(auth),
-        modules,
-    );
+    // CORS for a separately-deployed frontend (Part 11): list the storefront's
+    // origin(s) in SHOP_API_CORS_ORIGINS (comma-separated). Empty = same-origin
+    // only (the secure default); non-empty mounts the CORS layer for exactly
+    // those origins.
+    let security = match std::env::var("SHOP_API_CORS_ORIGINS") {
+        Ok(origins) if !origins.trim().is_empty() => {
+            HttpSecurity::with_cors_origins(origins.split(',').map(|o| o.trim().to_owned()))
+        }
+        _ => HttpSecurity::default(),
+    };
+
+    let app = router_with_modules(health.clone(), &security, Some(auth), modules);
 
     let addr: SocketAddr = std::env::var("SHOP_API_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8090".to_owned())

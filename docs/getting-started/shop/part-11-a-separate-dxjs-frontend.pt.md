@@ -80,22 +80,34 @@ storefront/                  # the separate dxjs app (its own repo or folder)
 
 ## Construir e testar (dois processos)
 
-```console
-# terminal 1 — the API, with CORS allowing the SPA origin
-$ cargo run -p shop-api
+A montra terminada é a
+[`examples/shop-storefront`](https://github.com/ngolacloud/seiva/tree/main/examples/shop-storefront)
+— uma app dxjs que corre, empacotada com esbuild. Corre a API com CORS ligado,
+depois constrói e serve a SPA na sua própria origem:
 
-# terminal 2 — the dxjs storefront (Node ≥ 22 runs the TS directly)
-$ node --watch storefront/src/main.ts
+```console
+# terminal 1 — a API, a permitir a origem da montra
+$ SHOP_API_CORS_ORIGINS=http://127.0.0.1:5173 cargo run -p shop-api
+
+# terminal 2 — construir + servir a montra (Node ≥ 22; dxjs do repo irmão)
+$ cd examples/shop-storefront
+$ node build.mjs            # esbuild → dist/app.js
+$ node serve.mjs           # http://127.0.0.1:5173
 ```
 
 Confirma que o preflight é permitido:
 
 ```console
 $ curl -s -i -X OPTIONS localhost:8090/v1/catalogs \
-    -H 'Origin: http://localhost:5173' \
+    -H 'Origin: http://127.0.0.1:5173' \
     -H 'Access-Control-Request-Method: GET' | grep -i access-control-allow-origin
-access-control-allow-origin: http://localhost:5173
+access-control-allow-origin: http://127.0.0.1:5173
 ```
+
+Abre <http://127.0.0.1:5173>: o catálogo é obtido **cross-origin** da API e
+renderizado pelo dxjs; podes adicionar um produto e colocar uma encomenda.
+
+![A montra dxjs a renderizar o catálogo da loja via CORS](img/storefront.png)
 
 ## Live-reload, dos dois lados
 
