@@ -36,7 +36,7 @@ stock (`inventory.reserved`), uma cobrança (`payments.captured`) e uma confirma
 5. [Autorização entre módulos](part-5-authorization.md) — quem pode fazer o quê, imposto pelo contrato.
 6. [CQRS](part-6-cqrs.md) — separar leituras de escritas com `seiva-cqrs`.
 7. [Documentação de API auto-gerada & Swagger](part-7-api-docs-and-swagger.md) — cada fluxo documentado, sem escrever especificação.
-8. [Testar a loja](part-8-testing.md) — testes unitários, o fluxo de eventos, funções de aptidão.
+8. [Testar a loja](part-8-testing.md) — testes unitários, o fluxo de eventos, funções de fitness.
 9. [Do monólito aos microserviços](part-9-monolith-to-microservices.md) — separar `payments` e `notifications` nos seus próprios serviços.
 10. [Uma consola admin](part-10-admin-console.md) — `seiva-console-admin` como extensão, sem escrever frontend.
 11. [Um frontend dxjs separado, sobre CORS](part-11-a-separate-dxjs-frontend.md) — uma montra desacoplada na sua própria origem.
