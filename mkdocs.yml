@@ -69,6 +69,23 @@ hooks:
 
 plugins:
   - search
+  # Bilingual docs: English is the base (served at the root); Angolan Portuguese
+  # (pre-AO90 orthography) is served under /pt/. A `<name>.pt.md` file translates
+  # `<name>.md`; untranslated pages fall back to English. The language switcher is
+  # wired into the Material header automatically.
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: pt
+          name: Português (Angola)
+          build: true
 
 nav:
   - Home: index.md
