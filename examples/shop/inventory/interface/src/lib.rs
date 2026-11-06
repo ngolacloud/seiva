@@ -9,9 +9,9 @@
 //!
 //! | facade method | route                              | success | required permission |
 //! |---------------|------------------------------------|---------|---------------------|
-//! | `receive`     | `POST /v1/inventorys/receive`      | `200`   | `inventory.manage`  |
-//! | `reserve`     | `POST /v1/inventorys/reserve`      | `200`   | `inventory.manage`  |
-//! | `available`   | `POST /v1/inventorys/available`    | `200`   | `inventory.read`    |
+//! | `receive`     | `POST /v1/inventories/receive`      | `200`   | `inventory.manage`  |
+//! | `reserve`     | `POST /v1/inventories/reserve`      | `200`   | `inventory.manage`  |
+//! | `available`   | `POST /v1/inventories/available`    | `200`   | `inventory.read`    |
 
 #![forbid(unsafe_code)]
 
@@ -27,7 +27,7 @@ use shop_inventory_facade::{
 
 register_admin!(AdminResource {
     namespace: "inventory",
-    resource: "inventorys",
+    resource: "inventories",
     label: "Inventory",
     facade: "Inventory",
     version: "v1",
@@ -158,7 +158,7 @@ mod tests {
     async fn receive_is_forbidden_without_permission() {
         let request = Request::builder()
             .method("POST")
-            .uri("/v1/inventorys/receive")
+            .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
             .body(Body::from(r#"{"product_id":42,"qty":10}"#))
             .unwrap();
@@ -176,7 +176,7 @@ mod tests {
     async fn receive_zero_qty_is_422_problem() {
         let request = Request::builder()
             .method("POST")
-            .uri("/v1/inventorys/receive")
+            .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
             .extension(Principal::new("mgr", ["inventory.manage"]))
             .body(Body::from(r#"{"product_id":42,"qty":0}"#))
@@ -193,7 +193,7 @@ mod tests {
 
         let receive = Request::builder()
             .method("POST")
-            .uri("/v1/inventorys/receive")
+            .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
             .extension(Principal::new("mgr", ["inventory.manage"]))
             .body(Body::from(r#"{"product_id":42,"qty":10}"#))
@@ -205,7 +205,7 @@ mod tests {
 
         let reserve = Request::builder()
             .method("POST")
-            .uri("/v1/inventorys/reserve")
+            .uri("/v1/inventories/reserve")
             .header("content-type", "application/json")
             .extension(Principal::new("mgr", ["inventory.manage"]))
             .body(Body::from(r#"{"product_id":42,"qty":4}"#))
@@ -217,7 +217,7 @@ mod tests {
 
         let available = Request::builder()
             .method("POST")
-            .uri("/v1/inventorys/available")
+            .uri("/v1/inventories/available")
             .header("content-type", "application/json")
             .extension(Principal::new("clerk", ["inventory.read"]))
             .body(Body::from(r#"{"id":42}"#))

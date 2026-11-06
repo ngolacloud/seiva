@@ -384,10 +384,11 @@ fn is_ctx_type(ty: &Type) -> bool {
 ///
 /// # Routing convention
 ///
-/// The **resource** is the facade's descriptor name, lowercased and naively
-/// pluralised (append `s` unless it already ends in one): `Notes` → `notes`,
-/// `User` → `users`. The rule is deliberately naive; name a facade to suit it
-/// (e.g. already-plural `Notes`). The **version** is `descriptor.version`
+/// The **resource** is the facade's descriptor name, lowercased and pluralised:
+/// a name already ending in `s` is taken as plural (`Notes` → `notes`), a
+/// consonant + `y` becomes `ies` (`Inventory` → `inventories`), otherwise `s` is
+/// appended (`User` → `users`). The rule is intentionally small; name a facade to
+/// suit it. The **version** is `descriptor.version`
 /// verbatim. The method name chooses the HTTP method and path shape:
 ///
 /// | method name | HTTP route                          | success | request data |
@@ -698,11 +699,19 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
         {
             let __descriptor =
                 <#facade_path as ::delonix_seiva::contract::Facade>::DESCRIPTOR;
-            // Resource name from the descriptor: lowercased, naively pluralised.
+            // Resource name from the descriptor: lowercased and pluralised. A name
+            // already ending in `s` is taken as plural; a consonant + `y` becomes
+            // `ies` (`Inventory` → `inventories`); otherwise append `s`.
             let __resource = {
                 let __lower = __descriptor.name.to_ascii_lowercase();
+                let __bytes = __lower.as_bytes();
                 if __lower.ends_with('s') {
                     __lower
+                } else if __lower.ends_with('y')
+                    && __bytes.len() >= 2
+                    && !matches!(__bytes[__bytes.len() - 2], b'a' | b'e' | b'i' | b'o' | b'u')
+                {
+                    ::std::format!("{}ies", &__lower[..__lower.len() - 1])
                 } else {
                     ::std::format!("{__lower}s")
                 }
