@@ -1,0 +1,3 @@
+# esbuild output (build artifact — run `node build.mjs`)
+dist/
+node_modules/
