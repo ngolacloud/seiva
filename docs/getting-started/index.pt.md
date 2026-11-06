@@ -27,9 +27,12 @@ não por chamadas.
 3. [Eventos entre módulos](shop/part-3-events-between-modules.md) — o fluxo da encomenda, ligado por eventos
 4. [A camada de dados](shop/part-4-the-data-layer.md) — tabelas reais por módulo com o DORM
 5. [Autorização entre módulos](shop/part-5-authorization.md) — quem pode fazer o quê, imposto pelo contrato
-6. [Testar a loja](shop/part-6-testing.md) — fakes, o fluxo de eventos, funções de fitness
-7. [Do monólito aos microserviços](shop/part-7-monolith-to-microservices.md) — separar `payments` + `notifications`, o mesmo código
-8. [Um frontend de browser com dxjs](shop/part-8-a-dxjs-frontend.md) — uma montra segura sob CSP a consumir a API da loja
+6. [CQRS](shop/part-6-cqrs.md) — separar leituras de escritas com o `seiva-cqrs`
+7. [Docs de API & Swagger](shop/part-7-api-docs-and-swagger.md) — cada fluxo documentado, sem spec escrita à mão
+8. [Testar a loja](shop/part-8-testing.md) — fakes, o fluxo de eventos, funções de fitness
+9. [Do monólito aos microserviços](shop/part-9-monolith-to-microservices.md) — separar `payments` + `notifications`, o mesmo código
+10. [Uma consola admin](shop/part-10-admin-console.md) — `seiva-console-admin` como extensão, sem frontend escrito
+11. [Um frontend dxjs separado, com CORS](shop/part-11-a-separate-dxjs-frontend.md) — uma montra desacoplada na sua própria origem
 
 ## Para onde a seguir
 

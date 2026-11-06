@@ -1,5 +1,7 @@
-# Facade layer of the `inventory` shop example module: the public, versioned contract
-# and DTOs. May depend only on shared/kernel and the Seiva macros (ADR 0003).
+# Facade layer of the `inventory` shop example module: the public, versioned
+# contract and DTOs. The generated controller uses these DTOs as the wire types,
+# so the write DTOs derive `serde` + implement `seiva_http::Validate` and the
+# error maps to an RFC 9457 `Problem` here (like `examples/accounts`).
 [package]
 name = "shop-inventory-facade"
 version.workspace = true
@@ -9,3 +11,5 @@ publish = false
 
 [dependencies]
 delonix-seiva = { workspace = true }
+seiva-http = { path = "../../../../crates/seiva-http" }
+serde = { workspace = true }

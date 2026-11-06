@@ -50,7 +50,7 @@ fail-closed concern. See [Authorization](../../topics/authorization.md) and
 
 ## Next
 
-[Part 6: Testing the shop](part-6-testing.md).
+[Part 6: CQRS — separating reads from writes](part-6-cqrs.md).
 
 ---
 

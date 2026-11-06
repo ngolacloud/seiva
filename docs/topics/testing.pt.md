@@ -52,7 +52,7 @@ divergir silenciosamente do que o servidor aceita (ver
 
 ## Relacionado
 
-- [Arquitectura](../architecture.md) · [Tutorial parte 5](../getting-started/shop/part-6-testing.md)
+- [Arquitectura](../architecture.md) · [Tutorial parte 5](../getting-started/shop/part-8-testing.md)
 - [Contribuir](../internals/contributing.md)
 
 ---

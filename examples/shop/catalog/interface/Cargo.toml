@@ -1,7 +1,10 @@
-# Interface layer of the `catalog` shop example: the transport-facing shell.
-# Depends on the facade (the trait it exposes). Must not depend on
-# infrastructure or domain (ADR 0003). HTTP/gRPC wiring is a later phase; the
-# scaffold's `#[seiva::controller]` generates the routes from the same facade.
+# Interface layer of the `catalog` shop example: the HTTP transport.
+#
+# The `#[seiva::controller]` lives HERE, not in `application`, so the application
+# layer stays transport-free. The controller is GENERIC over the repository port,
+# so this layer depends on `application` (the service + the `ProductRepository`
+# port) but NEVER on the `infrastructure` crate — the layering rule forbids
+# `interface -> infrastructure`. The composition root injects the repository.
 [package]
 name = "shop-catalog-interface"
 version.workspace = true
@@ -11,3 +14,19 @@ publish = false
 
 [dependencies]
 shop-catalog-facade = { path = "../facade" }
+shop-catalog-application = { path = "../application" }
+delonix-seiva = { workspace = true }
+seiva-http = { path = "../../../../crates/seiva-http" }
+seiva-ports = { workspace = true }
+async-trait = { workspace = true }
+axum = "0.8"
+
+[dev-dependencies]
+# Tests wire the in-memory repository into the controller — the composition the
+# real `apps/` root performs. A dev-dependency, so the layering rule (which reads
+# only `[dependencies]`) still forbids a production `interface -> infrastructure`
+# edge.
+shop-catalog-infrastructure = { path = "../infrastructure" }
+tokio = { workspace = true, features = ["rt", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+serde_json = "1"

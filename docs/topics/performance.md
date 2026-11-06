@@ -18,7 +18,7 @@ The generated `Delonixfile` builds a multi-stage, **distroless** image: only the
 binary and its runtime libraries, no shell, no package manager, running as uid
 65532. Deploy is "copy one binary", not "ship a Python/Node runtime and its
 dependency tree". Smaller image, smaller attack surface, faster cold start. See
-[tutorial part 6](../getting-started/shop/part-7-monolith-to-microservices.md).
+[tutorial part 6](../getting-started/shop/part-9-monolith-to-microservices.md).
 
 ## Readiness and graceful drain
 

@@ -11,13 +11,13 @@ appear in [`examples/shop`](https://github.com/ngolacloud/seiva/tree/main/exampl
 #[facade(version = "v1")]
 pub trait Catalog {
     #[requires("catalog.manage")]
-    async fn add_product(&self, cmd: CreateProduct) -> Result<ProductDto, String>; // catalog.product_added
+    async fn add_product(&self, cmd: CreateProduct) -> Result<ProductDto, CatalogError>; // catalog.product_added
 
     #[requires("catalog.read")]
-    async fn list(&self) -> Result<Vec<ProductDto>, String>;
+    async fn list(&self) -> Result<Vec<ProductDto>, CatalogError>;
 
     #[requires("catalog.read")]
-    async fn get(&self, id: ProductId) -> Result<ProductDto, String>;
+    async fn get(&self, id: ProductId) -> Result<ProductDto, CatalogError>;
 }
 // CreateProduct { name, price_cents }   ProductDto { id, name, price_cents }
 ```
@@ -31,13 +31,13 @@ its `price_cents` must be greater than zero (`Product::new`).
 #[facade(version = "v1")]
 pub trait Inventory {
     #[requires("inventory.manage")]
-    async fn receive(&self, cmd: ReceiveStock) -> Result<StockDto, String>;  // inventory.received
+    async fn receive(&self, cmd: ReceiveStock) -> Result<StockDto, InventoryError>;  // inventory.received
 
     #[requires("inventory.manage")]
-    async fn reserve(&self, cmd: Reserve) -> Result<StockDto, String>;       // inventory.reserved
+    async fn reserve(&self, cmd: Reserve) -> Result<StockDto, InventoryError>;       // inventory.reserved
 
     #[requires("inventory.read")]
-    async fn available(&self, id: ProductId) -> Result<StockDto, String>;
+    async fn available(&self, id: ProductId) -> Result<StockDto, InventoryError>;
 }
 // ReceiveStock { product_id, qty }   Reserve { product_id, qty }   StockDto { product_id, available }
 ```
@@ -51,13 +51,13 @@ below what is requested — a domain rule, not a database constraint.
 #[facade(version = "v1")]
 pub trait Orders {
     #[requires("orders.manage")]
-    async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, String>;  // orders.placed
+    async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError>;  // orders.placed
 
     #[requires("orders.read")]
-    async fn get(&self, id: OrderId) -> Result<OrderDto, String>;
+    async fn get(&self, id: OrderId) -> Result<OrderDto, OrdersError>;
 
     #[requires("orders.read")]
-    async fn list(&self) -> Result<Vec<OrderDto>, String>;
+    async fn list(&self) -> Result<Vec<OrderDto>, OrdersError>;
 }
 // PlaceOrder { customer, lines: Vec<LineDto> }   LineDto { product_id, qty }
 // OrderDto { id, customer, lines, status }   // status starts at "placed"
@@ -74,10 +74,10 @@ line a positive quantity.
 #[facade(version = "v1")]
 pub trait Payments {
     #[requires("payments.charge")]
-    async fn charge(&self, cmd: Charge) -> Result<PaymentDto, String>; // payments.captured | payments.declined
+    async fn charge(&self, cmd: Charge) -> Result<PaymentDto, PaymentsError>; // payments.captured | payments.declined
 
     #[requires("payments.read")]
-    async fn get(&self, id: PaymentId) -> Result<PaymentDto, String>;
+    async fn get(&self, id: PaymentId) -> Result<PaymentDto, PaymentsError>;
 }
 // Charge { order_id, amount_cents }   PaymentDto { id, order_id, amount_cents, status }
 ```
@@ -93,10 +93,10 @@ can never have a zero amount.
 #[facade(version = "v1")]
 pub trait Notifications {
     #[requires("notifications.send")]
-    async fn send(&self, cmd: SendNotification) -> Result<NotificationDto, String>; // notifications.sent
+    async fn send(&self, cmd: SendNotification) -> Result<NotificationDto, NotificationsError>; // notifications.sent
 
     #[requires("notifications.read")]
-    async fn list(&self) -> Result<Vec<NotificationDto>, String>;
+    async fn list(&self) -> Result<Vec<NotificationDto>, NotificationsError>;
 }
 // SendNotification { to, subject, body }   NotificationDto { id, to, subject, body }
 ```

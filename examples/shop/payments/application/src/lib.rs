@@ -14,7 +14,7 @@
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_payments_domain::Payment;
-use shop_payments_facade::{Charge, PaymentDto, PaymentId, Payments};
+use shop_payments_facade::{Charge, PaymentDto, PaymentId, Payments, PaymentsError};
 
 /// Outbound port: persistence of payments, in the domain's language.
 /// Implemented in `infrastructure`. Each future is `Send` so a use case can
@@ -91,15 +91,6 @@ where
 
         Ok(to_payment_dto(payment))
     }
-
-    async fn one_payment(&self, id: u128) -> PortResult<PaymentDto> {
-        let payment = self
-            .repository
-            .get_payment(id)
-            .await?
-            .ok_or_else(|| BoxError::from(format!("payment {id} not found")))?;
-        Ok(to_payment_dto(payment))
-    }
 }
 
 impl<R, G, U, E> Payments for PaymentsService<R, G, U, E>
@@ -109,14 +100,22 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn charge(&self, cmd: Charge) -> Result<PaymentDto, String> {
+    async fn charge(&self, cmd: Charge) -> Result<PaymentDto, PaymentsError> {
         self.charge_an_order(cmd)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| PaymentsError::Invalid(err.to_string()))
     }
 
-    async fn get(&self, q: PaymentId) -> Result<PaymentDto, String> {
-        self.one_payment(q.id).await.map_err(|err| err.to_string())
+    async fn get(&self, id: PaymentId) -> Result<PaymentDto, PaymentsError> {
+        // A missing payment is a typed `NotFound` (→ `404`), distinct from a
+        // repository error (→ `422`).
+        let payment = self
+            .repository
+            .get_payment(id.id)
+            .await
+            .map_err(|err| PaymentsError::Invalid(err.to_string()))?
+            .ok_or_else(|| PaymentsError::NotFound(format!("payment {} not found", id.id)))?;
+        Ok(to_payment_dto(payment))
     }
 }
 

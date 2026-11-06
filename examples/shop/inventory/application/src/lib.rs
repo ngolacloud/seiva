@@ -11,7 +11,9 @@
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_inventory_domain::StockItem;
-use shop_inventory_facade::{Inventory, ProductId, ReceiveStock, Reserve, StockDto};
+use shop_inventory_facade::{
+    Inventory, InventoryError, ProductId, ReceiveStock, Reserve, StockDto,
+};
 
 /// Outbound port: persistence of per-product stock, in the domain's language.
 /// Implemented in `infrastructure`. Each future is `Send` so a use case can
@@ -129,18 +131,22 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn receive(&self, cmd: ReceiveStock) -> Result<StockDto, String> {
-        self.receive_stock(cmd).await.map_err(|err| err.to_string())
+    async fn receive(&self, cmd: ReceiveStock) -> Result<StockDto, InventoryError> {
+        self.receive_stock(cmd)
+            .await
+            .map_err(|err| InventoryError::Invalid(err.to_string()))
     }
 
-    async fn reserve(&self, cmd: Reserve) -> Result<StockDto, String> {
-        self.reserve_stock(cmd).await.map_err(|err| err.to_string())
+    async fn reserve(&self, cmd: Reserve) -> Result<StockDto, InventoryError> {
+        self.reserve_stock(cmd)
+            .await
+            .map_err(|err| InventoryError::Invalid(err.to_string()))
     }
 
-    async fn available(&self, q: ProductId) -> Result<StockDto, String> {
+    async fn available(&self, q: ProductId) -> Result<StockDto, InventoryError> {
         self.available_for(q.id)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| InventoryError::Invalid(err.to_string()))
     }
 }
 

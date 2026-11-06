@@ -13,6 +13,10 @@ publish = false
 shop-orders-domain = { path = "../domain" }
 shop-orders-facade = { path = "../facade" }
 seiva-ports = { workspace = true }
+# CQRS dispatch for the `orders` module: a `PlaceOrder` command + a cached
+# `GetOrder` query through a Mediator. CQRS lives in the application layer, and
+# `seiva-cqrs` is allowed there (the layering rule only forbids `delonix-seiva`).
+seiva-cqrs = { path = "../../../../crates/seiva-cqrs" }
 # Domain events are published as a JSON envelope (the DORM outbox publisher
 # parses the payload as JSON).
 serde_json = "1"

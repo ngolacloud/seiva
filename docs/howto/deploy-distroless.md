@@ -34,7 +34,7 @@ $ delonix stack up -f compose.yaml -f compose/postgres.yaml
 
 ## Related
 
-- [Tutorial part 6](../getting-started/shop/part-7-monolith-to-microservices.md) · [Performance & cloud-native](../topics/performance.md)
+- [Tutorial part 6](../getting-started/shop/part-9-monolith-to-microservices.md) · [Performance & cloud-native](../topics/performance.md)
 
 ---
 

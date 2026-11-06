@@ -1,0 +1,37 @@
+# Composition root for the `shop` tutorial: the five INDEPENDENT shop modules
+# (catalog, inventory, orders, payments, notifications) composed into one running
+# HTTP service, with the admin console mounted (ADR 0008/0009) behind a token
+# authenticator. It serves the facade-driven `/openapi.json`, Swagger UI at
+# `/docs`, `/health` and `/admin`. Not a workspace example module — a binary app,
+# like `apps/admin-e2e`.
+[package]
+name = "shop-api"
+description = "Composition root for the shop tutorial: the five shop modules + seiva-console-admin + a demo token authenticator, served over HTTP."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+seiva-http = { version = "0.1.0", path = "../../crates/seiva-http" }
+seiva-server = { version = "0.1.0", path = "../../crates/seiva-server" }
+seiva-console-admin = { version = "0.1.0", path = "../../crates/seiva-console-admin" }
+
+# Each module contributes its generated controller router + its in-memory
+# repository. The modules share no crate with one another.
+shop-catalog-interface = { path = "../../examples/shop/catalog/interface" }
+shop-catalog-infrastructure = { path = "../../examples/shop/catalog/infrastructure" }
+shop-inventory-interface = { path = "../../examples/shop/inventory/interface" }
+shop-inventory-infrastructure = { path = "../../examples/shop/inventory/infrastructure" }
+shop-orders-interface = { path = "../../examples/shop/orders/interface" }
+shop-orders-infrastructure = { path = "../../examples/shop/orders/infrastructure" }
+shop-payments-interface = { path = "../../examples/shop/payments/interface" }
+shop-payments-infrastructure = { path = "../../examples/shop/payments/infrastructure" }
+shop-notifications-interface = { path = "../../examples/shop/notifications/interface" }
+shop-notifications-infrastructure = { path = "../../examples/shop/notifications/infrastructure" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+[[bin]]
+name = "shop-api"
+path = "src/main.rs"
