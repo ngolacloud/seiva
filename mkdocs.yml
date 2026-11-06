@@ -77,7 +77,7 @@ nav:
       - Seiva at a glance: getting-started/seiva-at-a-glance.md
       - Quick install: getting-started/quick-install.md
       - Quickstart: quickstart.md
-      - Coming from a dynamic framework: getting-started/from-fastapi.md
+      - Coming from a dynamic framework: getting-started/coming-from-a-dynamic-framework.md
       - Your first day: first-day.md
       - Tutorial:
           - 1 · Your first module: getting-started/tutorial/part-1-your-first-module.md
