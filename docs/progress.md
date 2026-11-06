@@ -411,6 +411,15 @@ Instalados em `.claude/` (versionados via exceção no `.gitignore`; o resto de
 `dx-advocate`, `community-maintainer`). Ver `.claude/README.md`. A auditoria passa
 a gate permanente: uma sessão nova usa-os sem reler o prompt original.
 
+### Console dxjs — ADR 0016 (Proposed, 2026-11-06)
+[ADR 0016](adr/0016-dxjs-admin-console.md) propõe servir o console `/admin` por uma
+SPA **dxjs** (`github.com/ngolacloud/dxjs`, nascida da auditoria StillJS→Seiva),
+como mount **opt-in** (`/admin/dx`, módulo externo same-origin sob `script-src
+'self'` — CSP estrita mantida) a par do console inline hash-pinned (ADR 0008), que
+fica como default/fallback. Cutover completo = ADR futuro, só após paridade. Já
+provado: o `examples/seiva-console` dxjs renderiza o contrato real deste backend
+(`admin-e2e`) via proxy same-origin, sob CSP estrita, sem violações.
+
 ### Framework padrão da comunidade — fase futura (fora do âmbito desta auditoria)
 Falta, para o Seiva ser referência pública ao nível de axum/loco.rs/shuttle:
 - **Getting-started de 5 minutos** executável (quando os crates do framework
