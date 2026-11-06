@@ -2,8 +2,8 @@
 
 <div class="seiva-hero" markdown>
 # Delonix Seiva
-A Rust backend framework for robust, high-criticality systems — the **ergonomics
-of FastAPI** and the **batteries of Django**, delivered as a single, compiled,
+A Rust backend framework for robust, high-criticality systems — **ergonomic
+request handling** and **batteries included**, delivered as a single, compiled,
 no-GC binary. Your handlers are plain `async fn`; a module owns its data and
 exposes **one machine-readable contract**, and from it Seiva *derives* the HTTP
 routes, the interactive API docs, the permission checks and the gRPC service —
@@ -12,7 +12,7 @@ so you write behaviour, not boilerplate.
 
 > **New here?** Read [Seiva at a glance](getting-started/seiva-at-a-glance.md),
 > then the [Quick install guide](getting-started/quick-install.md). Coming from
-> FastAPI? Start with [your first day](first-day.md). Want to build something end
+> a dynamic framework? Start with [your first day](first-day.md). Want to build something end
 > to end? The [tutorial](getting-started/tutorial/part-1-your-first-module.md)
 > builds a polls app as a monolith and then splits a module into a microservice.
 
@@ -22,8 +22,8 @@ so you write behaviour, not boilerplate.
 
 -   :material-flash: **Async by default**
 
-    Handlers are native `async fn` on a multi-threaded Tokio runtime — the
-    FastAPI mental model, with no GC and no event-loop surprises.
+    Handlers are native `async fn` on a multi-threaded Tokio runtime — a
+    familiar async mental model, with no GC and no event-loop surprises.
 
 -   :material-file-document-check: **Docs you never write**
 
@@ -45,10 +45,10 @@ so you write behaviour, not boilerplate.
 
 ## How the documentation is organized
 
-This documentation follows the same four-mode structure as the Django docs — the
+This documentation is organized in four modes — the
 [Diátaxis](https://diataxis.fr) model — because it keeps *learning* separate from
-*looking up*. (See [the structure map](STRUCTURE.md) for how each Django section
-maps to Seiva.)
+*looking up*. (See [the structure map](STRUCTURE.md) for how the sections fit
+together.)
 
 <div class="grid cards" markdown>
 
@@ -104,8 +104,8 @@ maps to Seiva.)
 
     ---
 
-    Seiva vs FastAPI vs Django — measured throughput and latency on the
-    production path.
+    Measured throughput and latency on the production path, against interpreted
+    stacks.
 
 </div>
 
@@ -121,11 +121,11 @@ maps to Seiva.)
   → [5 · Testing](getting-started/tutorial/part-5-testing.md)
   → [6 · Packaging & deploy](getting-started/tutorial/part-6-packaging-and-deploy.md)
   → [7 · Monolith to microservice](getting-started/tutorial/part-7-monolith-to-microservice.md)
-- [Coming from FastAPI](first-day.md)
+- [Coming from a dynamic framework](first-day.md)
 
 ## The layers (topic guides)
 
-| Django analogue | Seiva topic |
+| Concern | Seiva topic |
 | --- | --- |
 | The model layer | [The data layer (DORM)](topics/data-layer/index.md) |
 | The view layer | [The transport layer](topics/transport/index.md) |
@@ -158,6 +158,6 @@ maps to Seiva.)
 
 ---
 
-*This structure mirrors the [Django 6.1 documentation](https://docs.djangoproject.com/en/6.1/).
+*This documentation follows the [Diátaxis](https://diataxis.fr) model.
 Pages marked “planned” carry the intended outline; the framework’s capabilities
 are tracked honestly in [progress.md](progress.md) and the ADRs.*

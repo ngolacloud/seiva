@@ -1,7 +1,7 @@
 # Delonix Seiva
 
 A Rust backend framework for robust, high-criticality systems — backend only,
-with the ease of FastAPI and NestJS, a production- and cluster-ready server, and
+ergonomic and batteries-included, a production- and cluster-ready server, and
 [DORM](https://github.com/ngolacloud/dorm) as the default (optional) data layer.
 
 Seiva is part of the Delonix family: **Delonix Engine** (containers and

@@ -1,7 +1,7 @@
 # Performance and cloud-native readiness
 
-Seiva's structural advantage over FastAPI and Django is that it is **native and
-compiled**: no interpreter, no GC, one binary. This page is where that cashes out.
+Seiva's structural advantage is that it is **native and compiled**: no
+interpreter, no GC, one binary. This page is where that cashes out.
 
 ## No GC, no runtime
 
@@ -37,21 +37,23 @@ drops a request nor serves one before the service is ready.
 ## Benchmarking
 
 The honest way to back the performance claim is a published, reproducible
-benchmark against FastAPI/Django on the same workload and hardware (throughput and
-p50/p95/p99). The architectural reasons above are *why* the numbers should favour
-Seiva, but the numbers themselves should be measured and published, not asserted.
+benchmark against equivalent services on the same workload and hardware
+(throughput and p50/p95/p99). The architectural reasons above are *why* the
+numbers should favour Seiva, but the numbers themselves should be measured and
+published, not asserted.
 
 ### Measured
 
 That harness now exists in [`benchmarks/`](https://github.com/ngolacloud/seiva/tree/main/benchmarks)
-(`cd benchmarks && ./run.sh`): a minimal Seiva service against equivalent FastAPI
-and Django services on the same trivial, **no-database** workload, so it isolates
-framework overhead. On the reference machine (20-core i9-13900H, loopback, `oha`
-at 50 connections, 20 s, 5 s warmup; Python servers at 20 workers) Seiva served
-roughly **3–5× the throughput of FastAPI and ~15× that of Django**, with p99 under
-**0.8 ms** on both `GET /health` and a validating `POST`. Full table, versions and
-caveats: [Benchmarks](../benchmarks.md). The figures are environment-dependent —
-re-run the harness to measure your own hardware.
+(`cd benchmarks && ./run.sh`): a minimal Seiva service against equivalent services
+in interpreted frameworks on the same trivial, **no-database** workload, so it
+isolates framework overhead. On the reference machine (20-core i9-13900H,
+loopback, `oha` at 50 connections, 20 s, 5 s warmup) Seiva served a multiple of
+their throughput, with p99 under **0.8 ms** on both `GET /health` and a validating
+`POST`. Full table, versions and caveats — including the exact comparison targets —
+are in [Benchmarks](../benchmarks.md) and the
+[competitive landscape](../competitive-landscape.md). The figures are
+environment-dependent — re-run the harness to measure your own hardware.
 
 ## Related
 

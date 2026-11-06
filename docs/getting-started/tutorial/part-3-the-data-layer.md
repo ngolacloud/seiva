@@ -1,9 +1,9 @@
 # Part 3: Persisting with the data layer
 
-So far `polls` keeps its questions and choices in memory. Django's
-[Part 2](https://docs.djangoproject.com/en/6.1/intro/tutorial02/) sets up the
-database, `migrate`s the models and uses the ORM. In this part we do the same with
-the DORM data layer — against PostgreSQL, MySQL or any PG-wire database.
+So far `polls` keeps its questions and choices in memory. In this part we move
+them to a real database with the DORM data layer — against PostgreSQL, MySQL or
+any PG-wire database. For the full data-layer story, see the
+[DORM section](../../dorm/index.md).
 
 ## Set up the data layer
 

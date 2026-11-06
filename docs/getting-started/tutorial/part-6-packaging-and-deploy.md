@@ -1,9 +1,8 @@
 # Part 6: Packaging and deployment
 
-Your polls project was born cloud-native. Where the Django tutorial ends with
-`runserver` and leaves production as an exercise, Seiva compiles the whole service
-to a single binary — so this part builds its image and shows how it runs in
-production.
+Your polls project was born cloud-native. Seiva compiles the whole service to a
+single binary — so this part builds its image and shows how it runs in
+production, instead of leaving deployment as an exercise.
 
 ## The image
 
@@ -56,9 +55,8 @@ platform injects secrets; nothing is baked into the image. See
 ## You have a service
 
 From `seiva project new` to a distroless, authenticated, database-backed,
-self-documenting polls service — the same app as the Django tutorial, as one
-compiled binary. It is a **modular monolith**: one deploy, with the `polls`
-module cleanly bounded inside it.
+self-documenting polls service — as one compiled binary. It is a **modular
+monolith**: one deploy, with the `polls` module cleanly bounded inside it.
 
 ## Next
 
@@ -66,7 +64,7 @@ module cleanly bounded inside it.
 promote `polls` to its own service with one command, the same module code
 running standalone. Or go deeper with the [topic guides](../../topics/index.md),
 or see the [competitive landscape](../../competitive-landscape.md) for where Seiva
-stands against Django and FastAPI.
+stands against other stacks.
 
 ---
 

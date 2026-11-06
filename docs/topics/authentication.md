@@ -1,10 +1,10 @@
 # Authentication
 
-> Seiva's equivalent of Django's **authentication system** — but verification-first
-> and transport-agnostic.
+> Seiva's built-in **authentication system** — verification-first and
+> transport-agnostic.
 
-Unlike FastAPI (which gives you OAuth2/JWT *primitives* and leaves the rest to
-you), Seiva ships a **deny-by-default** identity layer that turns a bearer token
+Rather than handing you OAuth2/JWT *primitives* and leaving the rest to you,
+Seiva ships a **deny-by-default** identity layer that turns a bearer token
 into a cryptographically verified `Principal` before any route's permission check
 runs. The design is recorded in [ADR 0006](../adr/0006-identity-and-authentication.md).
 

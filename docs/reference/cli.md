@@ -3,7 +3,7 @@
 `seiva` is the installable command-line tool (binary `seiva`, crate
 `seiva-cli`): it scaffolds projects and modules, runs the dev loop, drives the
 data layer, lints the architecture, and prints the generated contracts. It is
-Seiva's answer to both `django-admin`/`manage.py` and `fastapi-cli`.
+Seiva's single CLI for the whole project lifecycle.
 
 This page is a **tour in lifecycle order** — read top to bottom and you walk a
 project from nothing to a deployed, split service. Each step shows the shell. For
@@ -82,16 +82,16 @@ Created module `polls` (facade v1, 5 layers). Registered in the workspace, seiva
 
 ## 4. Run it — `seiva start`
 
-Runs the project's `apps/<name>-api` server in development — Seiva's
-`fastapi dev` / `runserver`. Add `--watch` for hot-reload (needs `cargo-watch`).
+Runs the project's `apps/<name>-api` server in development — Seiva's dev-server
+command. Add `--watch` for hot-reload (needs `cargo-watch`).
 
 ```console
 $ seiva start                 # or, directly: dx run -p polls-site-api / cargo run -p polls-site-api
 ```
 
 The service serves `/health`, `/openapi.json`, and the interactive docs:
-`/docs` (Swagger UI), `/redoc` (ReDoc) and `/scalar` (Scalar) — the FastAPI
-`/docs`+`/redoc` parity, generated from your facades with no annotations. Open
+`/docs` (Swagger UI), `/redoc` (ReDoc) and `/scalar` (Scalar) — all three
+generated from your facades with no annotations. Open
 <http://localhost:8080/docs> to try calls against the running service.
 
 ## 5. Inspect the contract — `seiva openapi` / `seiva proto`
@@ -117,7 +117,7 @@ $ export DELONIX_ORM_DSN="host=localhost user=me dbname=polls sslmode=disable"
 $ seiva db dev initial                # makemigrations + migrate (author + apply the next migration)
 $ seiva db migrate                    # migrate deploy (apply the recorded chain, in dependency order)
 $ seiva db pull                       # brownfield: introspect an existing DB into a schema
-$ seiva db studio                     # browse/edit data in the browser (Django/Prisma Studio)
+$ seiva db studio                     # browse/edit data in the browser (Prisma Studio-style)
 ```
 
 These delegate to the DORM CLI (`dorm`), found on `PATH` or via `SEIVA_DORM_BIN`.

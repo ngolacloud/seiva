@@ -31,7 +31,7 @@ authentication, write a fitness function, deploy distroless.
 
 The [internals](../internals/index.md) — [architecture](../architecture.md), the
 [contract and macros](../internals/the-contract-and-macros.md), and the
-[ADRs](../internals/adrs.md). For where Seiva stands versus FastAPI/Django/Prisma,
+[ADRs](../internals/adrs.md). For where Seiva stands against other stacks,
 the [competitive landscape](../competitive-landscape.md).
 
 ---

@@ -1,7 +1,7 @@
 # Multiple databases and backends
 
-> This is the Seiva equivalent of Django's **multiple databases** topic — but the
-> story is shaped by DORM, the data layer.
+> This is Seiva's **multiple databases** topic — the story is shaped by DORM, the
+> data layer.
 
 ## Seiva is database-agnostic at the seam
 

@@ -1,7 +1,7 @@
 # Validation and DTOs
 
-> Seiva's equivalent of Django's **forms** — validated input at the boundary, with
-> honest, machine-readable errors.
+> Seiva's **input validation** — validated input at the boundary, with honest,
+> machine-readable errors.
 
 A facade method's wire types are its own **DTOs** (never domain entities). A write
 DTO declares its shape with `serde`, its rules with `Validate`, and its schema with
@@ -31,8 +31,8 @@ DTO — there is no wrapper object. On failure:
 - a `ValidationError` from `validate()` → **`422 Unprocessable Entity`** as an RFC
   9457 `Problem` carrying your message.
 
-This is stricter than FastAPI's default: validation is a method on the type, run at
-the boundary, and the failure is a typed problem response.
+Validation is a method on the type, run at the boundary, and the failure is a typed
+problem response — not an afterthought bolted on per handler.
 
 ## Where validation lives
 

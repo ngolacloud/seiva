@@ -1,9 +1,8 @@
 # Part 2: Validation and DTOs
 
-The Django tutorial's [Part 2](https://docs.djangoproject.com/en/6.1/intro/tutorial02/)
-introduces the `Question` and `Choice` **models** and the admin. In Seiva the
-request/response shapes are **DTOs** on the facade, and this part shows how a body
-is validated and how that shows up — honestly — in the contract.
+The `polls` module has a `Question` and a `Choice`. In Seiva the request/response
+shapes are **DTOs** on the facade, and this part shows how a body is validated and
+how that shows up — honestly — in the contract.
 
 ## The DTOs
 
@@ -58,7 +57,7 @@ Because `CreateQuestion` derives `WireSchema`, `/openapi.json` shows the body as
 
 ## Add a field (optional exercise)
 
-Django's `Question` has a `pub_date`. Add `pub published_at: String` to
+Give a question a publication date. Add `pub published_at: String` to
 `QuestionDto` (and carry it on the domain `Question`), restart, and check
 `/openapi.json` — the new field appears in the response schema with no serializer
 to update by hand.

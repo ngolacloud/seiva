@@ -1,9 +1,9 @@
 # Seiva at a glance
 
-Seiva lets you write a backend the way FastAPI lets you write an API — fast, with
-one source of truth and generated docs — but as a **compiled Rust binary** with
-the *batteries* of a Django: a data layer, an auth system, security by default,
-and a project scaffolder.
+Seiva lets you write a backend as a **compiled Rust binary**: fast request
+handling with one source of truth and generated docs, plus the *batteries* you
+expect — a data layer, an auth system, security by default, and a project
+scaffolder.
 
 ## The one big idea
 
@@ -50,23 +50,20 @@ interface ─▶ application ─▶ domain
 - **infrastructure** — adapters (in-memory by default; DORM-backed via a feature).
 - **interface** — the `#[seiva::controller]` and the OpenAPI generation.
 
-## How it compares
+## What you get
 
-| | **FastAPI** | **Django** | **Seiva** |
-| --- | --- | --- | --- |
-| Language / runtime | Python / ASGI + GC | Python / WSGI + GC | **Rust / no GC, single binary** |
-| Auto OpenAPI + docs UI | ✅ | ✖ (DRF add-on) | ✅ (faithful, from the contract) |
-| Type-driven validation | ✅ Pydantic | forms | ✅ `serde` + `Validate` |
-| ORM / data layer | ✖ (bring your own) | ✅ | ✅ DORM (optional, feature-gated) |
-| Migrations | ✖ | ✅ | ⏳ via DORM |
-| Project scaffolding | ✖ | ✅ `startproject` | ✅ `seiva project new` |
-| Built-in auth (verified JWT/OIDC) | primitives only | ✅ | ✅ `seiva-identity`, deny-by-default |
-| Admin GUI | ✖ | ✅ | ✖ (roadmap) |
-| Cloud-native build | DIY | DIY | ✅ distroless, non-root, `/health` |
+- **Language / runtime** — Rust, no GC, a single compiled binary.
+- **Auto OpenAPI + docs UI** — faithful, generated from the contract.
+- **Type-driven validation** — `serde` + `Validate`, RFC 9457 problems.
+- **ORM / data layer** — DORM, optional and feature-gated.
+- **Project scaffolding** — `seiva project new` / `seiva module new`.
+- **Built-in auth** — verified JWT/OIDC via `seiva-identity`, deny-by-default.
+- **Cloud-native build** — distroless, non-root, `/health`.
+- **Migrations and an admin** — in progress (see [progress](../progress.md)).
 
-Seiva's bet: **FastAPI's developer experience + Django's completeness, without the
-GC, and deployed as one distroless binary.** See the honest scorecard in the
-[competitive landscape](../competitive-landscape.md).
+Seiva's bet: **an ergonomic, batteries-included developer experience, without a
+GC, deployed as one distroless binary.** For an honest, measured scorecard
+against other stacks, see the [competitive landscape](../competitive-landscape.md).
 
 ## What exists today
 

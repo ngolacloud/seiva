@@ -1,19 +1,18 @@
 # Topic guides ("Using Seiva")
 
 These guides are **understanding-oriented**: each one discusses a layer or concern
-in depth, explaining not just *how* but *why*. They are the Seiva equivalent of
-Django's "Using Django" topic guides.
+in depth, explaining not just *how* but *why*. They are the "Using Seiva" topic
+guides.
 
 ## The layers
 
 - **[The data layer (DORM)](data-layer/index.md)** — models, queries, migrations,
-  transactions, multiple databases. (Django's *model layer*.)
+  transactions, multiple databases.
 - **[The transport layer](transport/index.md)** — facades, controllers, routing,
-  requests/responses, the middleware stack, composition. (Django's *view layer*.)
+  requests/responses, the middleware stack, composition.
 - **[Validation and DTOs](validation.md)** — validated input and RFC 9457 errors.
-  (Django's *forms*.)
-- **[API documents](api-documents.md)** — OpenAPI, the docs UI and proto. (Where
-  Seiva, being API-first, differs from Django's *template layer*.)
+- **[API documents](api-documents.md)** — OpenAPI, the docs UI and proto. (Seiva is
+  API-first: it generates the API's own documents instead of HTML templates.)
 
 ## Identity, security, correctness
 

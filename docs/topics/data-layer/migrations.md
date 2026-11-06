@@ -2,8 +2,8 @@
 
 Seiva's migrations are DORM's, driven from your project's schema. Because a Seiva
 project is DORM-compatible (`seiva db init` sets up the data layer under `data/`),
-the workflow matches Prisma's `migrate dev`/`deploy` and Django's
-`makemigrations`/`migrate`.
+the workflow matches Prisma's `migrate dev`/`deploy`: an author step that
+generates the next migration and a deploy step that applies the recorded chain.
 
 ## Set up the data layer once
 

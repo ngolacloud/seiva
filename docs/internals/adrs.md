@@ -28,5 +28,5 @@ The index of ADRs.
 
 ---
 
-*Part of the [Seiva documentation](../index.md), organised like the Django
-docs (tutorials · topic guides · reference · how-to).*
+*Part of the [Seiva documentation](../index.md), organised by the four Diátaxis
+modes (tutorials · topic guides · reference · how-to).*

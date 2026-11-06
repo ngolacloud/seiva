@@ -1,7 +1,8 @@
 # The transport layer
 
-> This is the Seiva equivalent of Django's **view layer** — but you never write a
-> view or a URLconf. The transport is *generated* from the facade contract.
+> This is Seiva's **transport layer** — the HTTP/MCP surface, where you never write
+> a view or a URL route by hand. The transport is *generated* from the facade
+> contract.
 
 ## The flow
 
