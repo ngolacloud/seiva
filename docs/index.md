@@ -13,7 +13,7 @@ so you write behaviour, not boilerplate.
 > **New here?** Read [Seiva at a glance](getting-started/seiva-at-a-glance.md),
 > then the [Quick install guide](getting-started/quick-install.md). Coming from
 > a dynamic framework? Start with [your first day](first-day.md). Want to build something end
-> to end? The [tutorial](getting-started/tutorial/part-1-your-first-module.md)
+> to end? The [tutorial](getting-started/shop/part-1-the-modular-monolith.md)
 > builds a polls app as a monolith and then splits a module into a microservice.
 
 ## Why Seiva
@@ -59,7 +59,7 @@ together.)
     Learning-oriented, hand-held lessons that take you from an empty checkout to
     a running, authenticated, packaged service.
 
-    [:octicons-arrow-right-24: Start the tutorial](getting-started/tutorial/part-1-your-first-module.md)
+    [:octicons-arrow-right-24: Start the tutorial](getting-started/shop/part-1-the-modular-monolith.md)
 
 -   :material-book-open-variant: **[Topic guides](topics/index.md)**
 
@@ -114,13 +114,13 @@ together.)
 - [Seiva at a glance](getting-started/seiva-at-a-glance.md)
 - [Quick install guide](getting-started/quick-install.md) · the fuller
   [quickstart](quickstart.md)
-- The tutorial: [1 · Your first module](getting-started/tutorial/part-1-your-first-module.md)
-  → [2 · Validation](getting-started/tutorial/part-2-validation-and-dtos.md)
-  → [3 · Data layer](getting-started/tutorial/part-3-the-data-layer.md)
-  → [4 · Authentication](getting-started/tutorial/part-4-authentication.md)
-  → [5 · Testing](getting-started/tutorial/part-5-testing.md)
-  → [6 · Packaging & deploy](getting-started/tutorial/part-6-packaging-and-deploy.md)
-  → [7 · Monolith to microservice](getting-started/tutorial/part-7-monolith-to-microservice.md)
+- The tutorial: [1 · Your first module](getting-started/shop/part-1-the-modular-monolith.md)
+  → [2 · Validation](getting-started/shop/part-2-modules-own-their-data.md)
+  → [3 · Data layer](getting-started/shop/part-4-the-data-layer.md)
+  → [4 · Authentication](getting-started/shop/part-5-authorization.md)
+  → [5 · Testing](getting-started/shop/part-6-testing.md)
+  → [6 · Packaging & deploy](getting-started/shop/part-7-monolith-to-microservices.md)
+  → [7 · Monolith to microservice](getting-started/shop/part-7-monolith-to-microservices.md)
 - [Coming from a dynamic framework](first-day.md)
 
 ## The layers (topic guides)

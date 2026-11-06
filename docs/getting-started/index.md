@@ -13,20 +13,21 @@ authenticated and packaged service.
 3. [Coming from a dynamic framework](../first-day.md) — map each habit you bring
    to its Seiva equivalent, honestly marking what exists today and what is in progress.
 
-## The tutorial
+## The tutorial: building a shop
 
-A guided build of a **polls** app (questions, choices, voting, results) — one
-concern per part, learning-oriented from an empty checkout to a split-out
-microservice:
+A guided build of a five-module **e-commerce shop** (catalog · inventory · orders ·
+payments · notifications) — one concern per part, from an empty checkout to a
+backend that runs as a monolith *and* as microservices, plus a browser storefront.
+The modules cooperate through **events**, not calls.
 
-1. [Your first module](tutorial/part-1-your-first-module.md) — scaffold the polls module and meet the five layers
-2. [Validation and DTOs](tutorial/part-2-validation-and-dtos.md) — `Valid<T>`, RFC 9457, `WireSchema`
-3. [Persisting with the data layer](tutorial/part-3-the-data-layer.md) — swap in DORM
-4. [Authentication and permissions](tutorial/part-4-authentication.md) — verified `Principal`, `#[requires]`
-5. [Testing your module](tutorial/part-5-testing.md) — fakes, controller tests, fitness functions
-6. [Packaging and deployment](tutorial/part-6-packaging-and-deploy.md) — distroless, non-root, `/health/ready`
-7. [From monolith to microservice](tutorial/part-7-monolith-to-microservice.md) — `seiva module split`, the same code standalone
-8. [A browser frontend with dxjs](tutorial/part-8-a-dxjs-frontend.md) — a CSP-safe reactive UI consuming the polls API
+1. [A modular monolith](shop/part-1-the-modular-monolith.md) — scaffold the shop and its five modules
+2. [Modules own their data](shop/part-2-modules-own-their-data.md) — the five contracts and their permissions
+3. [Events between modules](shop/part-3-events-between-modules.md) — the order flow, wired by events
+4. [The data layer](shop/part-4-the-data-layer.md) — real tables per module with DORM
+5. [Authorization across modules](shop/part-5-authorization.md) — who may do what, enforced by the contract
+6. [Testing the shop](shop/part-6-testing.md) — fakes, the event flow, fitness functions
+7. [Monolith to microservices](shop/part-7-monolith-to-microservices.md) — split `payments` + `notifications`, the same code
+8. [A browser frontend with dxjs](shop/part-8-a-dxjs-frontend.md) — a CSP-safe storefront consuming the shop API
 
 ## Where to next
 

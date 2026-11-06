@@ -1,0 +1,13 @@
+# Interface layer of the `orders` shop example: the transport-facing shell.
+# Depends on the facade (the trait it exposes). Must not depend on
+# infrastructure or domain (ADR 0003). HTTP/gRPC wiring is a later phase; the
+# scaffold's `#[seiva::controller]` generates the routes from the same facade.
+[package]
+name = "shop-orders-interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+shop-orders-facade = { path = "../facade" }

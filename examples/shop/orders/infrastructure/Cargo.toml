@@ -1,0 +1,21 @@
+# Infrastructure layer of the `orders` shop example: the repository adapter.
+# Depends on application + domain + seiva-ports. Not on interface (ADR 0003).
+[package]
+name = "shop-orders-infrastructure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+shop-orders-application = { path = "../application" }
+shop-orders-domain = { path = "../domain" }
+seiva-ports = { workspace = true }
+
+[dev-dependencies]
+# Composition-level test: drive the module through the REAL in-memory adapter
+# (not the application's FakeRepo) via the public facade, the shape a running
+# composition root uses.
+shop-orders-facade = { path = "../facade" }
+seiva-testing = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

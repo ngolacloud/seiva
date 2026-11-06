@@ -1,0 +1,22 @@
+# Application layer of the `orders` shop example: the service (facade impl) and the
+# outbound port. Depends on domain, its own facade (DTOs + trait) and
+# seiva-ports. Not on infrastructure, interface, or delonix-seiva directly
+# (ADR 0003).
+[package]
+name = "shop-orders-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+shop-orders-domain = { path = "../domain" }
+shop-orders-facade = { path = "../facade" }
+seiva-ports = { workspace = true }
+# Domain events are published as a JSON envelope (the DORM outbox publisher
+# parses the payload as JSON).
+serde_json = "1"
+
+[dev-dependencies]
+seiva-testing = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }

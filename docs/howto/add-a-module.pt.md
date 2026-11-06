@@ -25,7 +25,7 @@ Assim a rota do módulo aparece de imediato — confirma com `seiva openapi`.
 
 ## Relacionado
 
-- [Tutorial parte 1](../getting-started/tutorial/part-1-your-first-module.md)
+- [Tutorial parte 1](../getting-started/shop/part-1-the-modular-monolith.md)
 
 ---
 

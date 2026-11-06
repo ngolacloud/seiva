@@ -1,0 +1,11 @@
+# Facade layer of the `orders` shop example module: the public, versioned contract
+# and DTOs. May depend only on shared/kernel and the Seiva macros (ADR 0003).
+[package]
+name = "shop-orders-facade"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+delonix-seiva = { workspace = true }
