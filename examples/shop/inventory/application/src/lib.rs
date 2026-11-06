@@ -42,7 +42,7 @@ pub struct InventoryService<R, G, U, E> {
 
 fn to_stock_dto(s: StockItem) -> StockDto {
     StockDto {
-        product_id: s.product_id,
+        product_id: s.product_id.to_string(),
         available: s.available,
     }
 }
@@ -54,21 +54,21 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn receive_stock(&self, cmd: ReceiveStock) -> PortResult<StockDto> {
+    async fn receive_stock(&self, product_id: u128, qty: u64) -> PortResult<StockDto> {
         let stock = self
             .uow
             .transaction(|| async {
                 let mut stock = self
                     .repository
-                    .get_stock(cmd.product_id)
+                    .get_stock(product_id)
                     .await?
-                    .unwrap_or_else(|| StockItem::new(cmd.product_id));
-                stock.receive(cmd.qty).map_err(BoxError::from)?;
+                    .unwrap_or_else(|| StockItem::new(product_id));
+                stock.receive(qty).map_err(BoxError::from)?;
                 self.repository.save_stock(&stock).await?;
 
                 let event = serde_json::to_vec(&serde_json::json!({
                     "product_id": stock.product_id.to_string(),
-                    "qty": cmd.qty,
+                    "qty": qty,
                     "available": stock.available,
                 }))
                 .map_err(BoxError::from)?;
@@ -81,23 +81,21 @@ where
         Ok(to_stock_dto(stock))
     }
 
-    async fn reserve_stock(&self, cmd: Reserve) -> PortResult<StockDto> {
+    async fn reserve_stock(&self, product_id: u128, qty: u64) -> PortResult<StockDto> {
         let stock = self
             .uow
             .transaction(|| async {
                 let mut stock = self
                     .repository
-                    .get_stock(cmd.product_id)
+                    .get_stock(product_id)
                     .await?
-                    .ok_or_else(|| {
-                        BoxError::from(format!("no stock for product {}", cmd.product_id))
-                    })?;
-                stock.reserve(cmd.qty).map_err(BoxError::from)?;
+                    .ok_or_else(|| BoxError::from(format!("no stock for product {product_id}")))?;
+                stock.reserve(qty).map_err(BoxError::from)?;
                 self.repository.save_stock(&stock).await?;
 
                 let event = serde_json::to_vec(&serde_json::json!({
                     "product_id": stock.product_id.to_string(),
-                    "qty": cmd.qty,
+                    "qty": qty,
                     "available": stock.available,
                 }))
                 .map_err(BoxError::from)?;
@@ -118,7 +116,7 @@ where
             .map(|s| s.available)
             .unwrap_or(0);
         Ok(StockDto {
-            product_id,
+            product_id: product_id.to_string(),
             available,
         })
     }
@@ -132,13 +130,21 @@ where
     E: EventPublisher,
 {
     async fn receive(&self, cmd: ReceiveStock) -> Result<StockDto, InventoryError> {
-        self.receive_stock(cmd)
+        let product_id: u128 = cmd
+            .product_id
+            .parse()
+            .map_err(|_| InventoryError::Invalid("product_id must be an integer".to_string()))?;
+        self.receive_stock(product_id, cmd.qty)
             .await
             .map_err(|err| InventoryError::Invalid(err.to_string()))
     }
 
     async fn reserve(&self, cmd: Reserve) -> Result<StockDto, InventoryError> {
-        self.reserve_stock(cmd)
+        let product_id: u128 = cmd
+            .product_id
+            .parse()
+            .map_err(|_| InventoryError::Invalid("product_id must be an integer".to_string()))?;
+        self.reserve_stock(product_id, cmd.qty)
             .await
             .map_err(|err| InventoryError::Invalid(err.to_string()))
     }
@@ -201,7 +207,7 @@ mod tests {
 
         let after_receipt = svc
             .receive(ReceiveStock {
-                product_id: 42,
+                product_id: "42".into(),
                 qty: 10,
             })
             .await
@@ -210,7 +216,7 @@ mod tests {
 
         let after_reserve = svc
             .reserve(Reserve {
-                product_id: 42,
+                product_id: "42".into(),
                 qty: 4,
             })
             .await
@@ -236,7 +242,7 @@ mod tests {
     async fn reserving_more_than_available_errors_and_commits_nothing() {
         let svc = service();
         svc.receive(ReceiveStock {
-            product_id: 42,
+            product_id: "42".into(),
             qty: 2,
         })
         .await
@@ -244,7 +250,7 @@ mod tests {
 
         let err = svc
             .reserve(Reserve {
-                product_id: 42,
+                product_id: "42".into(),
                 qty: 5,
             })
             .await;

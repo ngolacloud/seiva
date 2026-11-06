@@ -31,6 +31,16 @@ try {
   console.log("products rendered:", JSON.stringify(names));
   await page.screenshot({ path: SHOT, fullPage: true });
   console.log("wrote", SHOT);
+
+  // Navigate to a product detail (the dxjs router) and capture that view too.
+  const detailShot = SHOT.replace(/\.png$/, "-detail.png");
+  await page.locator("ul.products li .name").first().click();
+  await page.locator("main button", { hasText: "Order one" }).waitFor({ timeout: 10000 });
+  assert.match(page.url(), /\/product\//, "expected the router to navigate to /product/:id");
+  console.log("navigated to", page.url());
+  await page.screenshot({ path: detailShot, fullPage: true });
+  console.log("wrote", detailShot);
+
   if (violations.length) console.log("console errors:", violations.slice(0, 3));
 } finally {
   await browser.close();

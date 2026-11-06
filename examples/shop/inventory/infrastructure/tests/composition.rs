@@ -27,14 +27,14 @@ async fn full_flow_over_the_real_in_memory_adapter() {
     let svc = service();
 
     svc.receive(ReceiveStock {
-        product_id: 1,
+        product_id: "1".into(),
         qty: 20,
     })
     .await
     .expect("receive");
     let remaining = svc
         .reserve(Reserve {
-            product_id: 1,
+            product_id: "1".into(),
             qty: 8,
         })
         .await

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 /// (it is *declined*, not rejected), so there is no amount rule to validate here.
 #[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]
 pub struct Charge {
-    pub order_id: u128,
+    pub order_id: String,
     pub amount_cents: u64,
 }
 
@@ -41,8 +41,8 @@ pub struct PaymentId {
 /// a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct PaymentDto {
-    pub id: u128,
-    pub order_id: u128,
+    pub id: String,
+    pub order_id: String,
     pub amount_cents: u64,
     pub status: String,
 }

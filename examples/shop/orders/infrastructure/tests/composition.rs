@@ -31,11 +31,11 @@ async fn full_flow_over_the_real_in_memory_adapter() {
             customer: "Ada".into(),
             lines: vec![
                 LineDto {
-                    product_id: 10,
+                    product_id: "10".into(),
                     qty: 2,
                 },
                 LineDto {
-                    product_id: 11,
+                    product_id: "11".into(),
                     qty: 1,
                 },
             ],
@@ -43,7 +43,14 @@ async fn full_flow_over_the_real_in_memory_adapter() {
         .await
         .expect("place");
 
-    assert_eq!(svc.get(OrderId { id: order.id }).await.expect("get"), order);
+    assert_eq!(
+        svc.get(OrderId {
+            id: order.id.parse().unwrap()
+        })
+        .await
+        .expect("get"),
+        order
+    );
     assert_eq!(svc.list().await.expect("list"), vec![order.clone()]);
 
     // The adapter actually holds the row.

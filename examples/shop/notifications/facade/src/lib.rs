@@ -39,7 +39,7 @@ impl Validate for SendNotification {
 /// Response DTO for a notification. Never a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct NotificationDto {
-    pub id: u128,
+    pub id: String,
     pub to: String,
     pub subject: String,
     pub body: String,
