@@ -1,0 +1,22 @@
+# Application layer of the `inventory` shop example: the service (facade impl) and the
+# outbound port. Depends on domain, its own facade (DTOs + trait) and
+# seiva-ports. Not on infrastructure, interface, or delonix-seiva directly
+# (ADR 0003).
+[package]
+name = "shop-inventory-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+shop-inventory-domain = { path = "../domain" }
+shop-inventory-facade = { path = "../facade" }
+seiva-ports = { workspace = true }
+# Domain events are published as a JSON envelope (the DORM outbox publisher
+# parses the payload as JSON).
+serde_json = "1"
+
+[dev-dependencies]
+seiva-testing = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }

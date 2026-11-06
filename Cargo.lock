@@ -3012,6 +3012,216 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "shop-catalog-application"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "shop-catalog-domain",
+ "shop-catalog-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-catalog-domain"
+version = "0.1.0"
+
+[[package]]
+name = "shop-catalog-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "shop-catalog-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "shop-catalog-application",
+ "shop-catalog-domain",
+ "shop-catalog-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-catalog-interface"
+version = "0.1.0"
+dependencies = [
+ "shop-catalog-facade",
+]
+
+[[package]]
+name = "shop-inventory-application"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "shop-inventory-domain",
+ "shop-inventory-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-inventory-domain"
+version = "0.1.0"
+
+[[package]]
+name = "shop-inventory-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "shop-inventory-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "shop-inventory-application",
+ "shop-inventory-domain",
+ "shop-inventory-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-inventory-interface"
+version = "0.1.0"
+dependencies = [
+ "shop-inventory-facade",
+]
+
+[[package]]
+name = "shop-notifications-application"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "shop-notifications-domain",
+ "shop-notifications-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-notifications-domain"
+version = "0.1.0"
+
+[[package]]
+name = "shop-notifications-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "shop-notifications-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "shop-notifications-application",
+ "shop-notifications-domain",
+ "shop-notifications-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-notifications-interface"
+version = "0.1.0"
+dependencies = [
+ "shop-notifications-facade",
+]
+
+[[package]]
+name = "shop-orders-application"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "shop-orders-domain",
+ "shop-orders-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-orders-domain"
+version = "0.1.0"
+
+[[package]]
+name = "shop-orders-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "shop-orders-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "shop-orders-application",
+ "shop-orders-domain",
+ "shop-orders-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-orders-interface"
+version = "0.1.0"
+dependencies = [
+ "shop-orders-facade",
+]
+
+[[package]]
+name = "shop-payments-application"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "shop-payments-domain",
+ "shop-payments-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-payments-domain"
+version = "0.1.0"
+
+[[package]]
+name = "shop-payments-facade"
+version = "0.1.0"
+dependencies = [
+ "delonix-seiva",
+]
+
+[[package]]
+name = "shop-payments-infrastructure"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "seiva-testing",
+ "shop-payments-application",
+ "shop-payments-domain",
+ "shop-payments-facade",
+ "tokio",
+]
+
+[[package]]
+name = "shop-payments-interface"
+version = "0.1.0"
+dependencies = [
+ "shop-payments-facade",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

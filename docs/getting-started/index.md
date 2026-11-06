@@ -28,6 +28,14 @@ microservice:
 7. [From monolith to microservice](tutorial/part-7-monolith-to-microservice.md) — `seiva module split`, the same code standalone
 8. [A browser frontend with dxjs](tutorial/part-8-a-dxjs-frontend.md) — a CSP-safe reactive UI consuming the polls API
 
+## Advanced tutorial: building a shop
+
+Ready for a real system? The [**Building a shop**](shop/index.md) tutorial builds
+a five-module e-commerce shop (catalog · inventory · orders · payments ·
+notifications), shows how modules cooperate through **events** instead of calls,
+and ends by splitting `payments` and `notifications` into their own
+**microservices** — the same code, a deployment knob.
+
 ## Where to next
 
 [What to read next](what-to-read-next.md) — the topic guides, the reference, and

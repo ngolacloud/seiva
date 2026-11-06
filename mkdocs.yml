@@ -100,6 +100,13 @@ plugins:
             Coming from a dynamic framework: Vindo de uma framework dinâmica
             Your first day: O teu primeiro dia
             Tutorial: Tutorial
+            "Advanced tutorial: Building a shop": "Tutorial avançado: Construir uma loja"
+            A modular monolith: Um monólito modular
+            Modules own their data: Os módulos são donos dos seus dados
+            Events between modules: Eventos entre módulos
+            Authorization across modules: Autorização entre módulos
+            Testing the shop: Testar a loja
+            Monolith to microservices: Do monólito aos microserviços
             What to read next: O que ler a seguir
             Topic guides: Guias temáticos
             The data layer: A camada de dados
@@ -193,6 +200,15 @@ nav:
           - 6 · Packaging and deploy: getting-started/tutorial/part-6-packaging-and-deploy.md
           - 7 · From monolith to a microservice: getting-started/tutorial/part-7-monolith-to-microservice.md
           - 8 · A browser frontend with dxjs: getting-started/tutorial/part-8-a-dxjs-frontend.md
+      - "Advanced tutorial: Building a shop":
+          - getting-started/shop/index.md
+          - 1 · A modular monolith: getting-started/shop/part-1-the-modular-monolith.md
+          - 2 · Modules own their data: getting-started/shop/part-2-modules-own-their-data.md
+          - 3 · Events between modules: getting-started/shop/part-3-events-between-modules.md
+          - 4 · The data layer: getting-started/shop/part-4-the-data-layer.md
+          - 5 · Authorization across modules: getting-started/shop/part-5-authorization.md
+          - 6 · Testing the shop: getting-started/shop/part-6-testing.md
+          - 7 · Monolith to microservices: getting-started/shop/part-7-monolith-to-microservices.md
       - What to read next: getting-started/what-to-read-next.md
   - Topic guides:
       - topics/index.md
