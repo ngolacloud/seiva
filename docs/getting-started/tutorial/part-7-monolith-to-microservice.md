@@ -100,6 +100,8 @@ expose gRPC alongside HTTP for service-to-service calls. See
 You built a complete polls app (data, validation, auth, results, tested,
 packaged), then deployed it two ways from one codebase. Where next:
 
+- [Part 8: a browser frontend with dxjs](part-8-a-dxjs-frontend.md) — put a
+  CSP-safe reactive UI on the polls API and make it full-stack.
 - The [topic guides](../../topics/index.md) for depth on each layer.
 - [Add a module](../../howto/add-a-module.md) and
   [switch to DORM](../../howto/switch-to-dorm.md) how-tos.

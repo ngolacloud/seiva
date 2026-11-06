@@ -87,6 +87,7 @@ nav:
           - 5 · Testing: getting-started/tutorial/part-5-testing.md
           - 6 · Packaging and deploy: getting-started/tutorial/part-6-packaging-and-deploy.md
           - 7 · From monolith to a microservice: getting-started/tutorial/part-7-monolith-to-microservice.md
+          - 8 · A browser frontend with dxjs: getting-started/tutorial/part-8-a-dxjs-frontend.md
       - What to read next: getting-started/what-to-read-next.md
   - Topic guides:
       - topics/index.md
