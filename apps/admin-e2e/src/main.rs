@@ -25,7 +25,7 @@ async fn main() {
     let repo = accounts_infrastructure::InMemoryCredentialRepository::new();
     let modules =
         accounts_interface::accounts_router(accounts_interface::AccountsController::new(repo));
-    let modules = seiva_console_admin::mount(modules);
+    let modules = seiva_console_admin::mount_dx(modules);
 
     let health = Health::starting();
     health.set_ready();
