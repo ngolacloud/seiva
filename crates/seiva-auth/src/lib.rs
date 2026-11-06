@@ -27,7 +27,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use argon2::password_hash::{
-    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+    rand_core::OsRng, PasswordHash, PasswordHasher as _, PasswordVerifier as _, SaltString,
 };
 use argon2::Argon2;
 
@@ -67,11 +67,7 @@ impl std::error::Error for AuthError {}
 ///
 /// Returns [`AuthError::Hash`] if the underlying Argon2id computation fails.
 pub fn hash_password(password: &str) -> Result<String, AuthError> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|e| AuthError::Hash(e.to_string()))
+    Argon2idHasher.hash(password)
 }
 
 /// Verifies a password against a PHC string produced by [`hash_password`].
@@ -84,11 +80,250 @@ pub fn hash_password(password: &str) -> Result<String, AuthError> {
 ///
 /// Returns [`AuthError::Phc`] if `phc` is not a parseable PHC hash string.
 pub fn verify_password(password: &str, phc: &str) -> Result<bool, AuthError> {
-    let parsed = PasswordHash::new(phc).map_err(|e| AuthError::Phc(e.to_string()))?;
-    match Argon2::default().verify_password(password.as_bytes(), &parsed) {
-        Ok(()) => Ok(true),
-        Err(argon2::password_hash::Error::Password) => Ok(false),
-        Err(e) => Err(AuthError::Phc(e.to_string())),
+    Argon2idHasher.verify(password, phc)
+}
+
+/// A password hashing backend — one algorithm that can hash a new password and
+/// verify a stored PHC string it recognises. Implement this to add an algorithm
+/// (bcrypt, scrypt, …) to a [`PasswordHashers`] registry **without editing this
+/// crate** — the extension point modelled on Django's `PASSWORD_HASHERS`.
+pub trait PasswordHasher: Send + Sync {
+    /// The PHC algorithm identifier this backend produces and recognises, e.g.
+    /// `"argon2id"`.
+    fn id(&self) -> &'static str;
+
+    /// Hashes `password`, returning a storable PHC string.
+    ///
+    /// # Errors
+    /// Returns [`AuthError::Hash`] if the computation fails.
+    fn hash(&self, password: &str) -> Result<String, AuthError>;
+
+    /// Whether this backend recognises (and so can [`verify`](Self::verify)) `phc`.
+    fn identifies(&self, phc: &str) -> bool;
+
+    /// Verifies `password` against a PHC string this backend recognises.
+    ///
+    /// # Errors
+    /// Returns [`AuthError::Phc`] if `phc` is malformed for this backend.
+    fn verify(&self, password: &str, phc: &str) -> Result<bool, AuthError>;
+
+    /// Whether a hash this backend produced should be re-made because its
+    /// parameters drifted from the backend's current defaults. Defaults to `false`.
+    fn needs_rehash(&self, _phc: &str) -> bool {
+        false
+    }
+}
+
+/// The default, preferred hasher: Argon2id with the current library defaults.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Argon2idHasher;
+
+impl PasswordHasher for Argon2idHasher {
+    fn id(&self) -> &'static str {
+        "argon2id"
+    }
+
+    fn hash(&self, password: &str) -> Result<String, AuthError> {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+            .map_err(|e| AuthError::Hash(e.to_string()))
+    }
+
+    fn identifies(&self, phc: &str) -> bool {
+        PasswordHash::new(phc)
+            .map(|p| p.algorithm.as_str() == "argon2id")
+            .unwrap_or(false)
+    }
+
+    fn verify(&self, password: &str, phc: &str) -> Result<bool, AuthError> {
+        let parsed = PasswordHash::new(phc).map_err(|e| AuthError::Phc(e.to_string()))?;
+        match Argon2::default().verify_password(password.as_bytes(), &parsed) {
+            Ok(()) => Ok(true),
+            Err(argon2::password_hash::Error::Password) => Ok(false),
+            Err(e) => Err(AuthError::Phc(e.to_string())),
+        }
+    }
+
+    fn needs_rehash(&self, phc: &str) -> bool {
+        let Ok(parsed) = PasswordHash::new(phc) else {
+            return false;
+        };
+        let Ok(params) = argon2::Params::try_from(&parsed) else {
+            return false;
+        };
+        let def = argon2::Params::default();
+        params.m_cost() != def.m_cost()
+            || params.t_cost() != def.t_cost()
+            || params.p_cost() != def.p_cost()
+    }
+}
+
+/// An ordered list of [`PasswordHasher`]s — Seiva's take on Django's
+/// `PASSWORD_HASHERS`.
+///
+/// The first entry is **preferred**: it hashes new passwords. Verification tries
+/// the first entry that [`identifies`](PasswordHasher::identifies) the stored PHC
+/// string, so hashes made by any registered backend (including ones imported from
+/// another system) verify. [`needs_rehash`](Self::needs_rehash) reports when a
+/// stored hash should be upgraded on the next successful login.
+pub struct PasswordHashers {
+    hashers: Vec<Box<dyn PasswordHasher>>,
+}
+
+impl std::fmt::Debug for PasswordHashers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordHashers")
+            .field(
+                "ids",
+                &self.hashers.iter().map(|h| h.id()).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+impl Default for PasswordHashers {
+    /// Argon2id only — the same behaviour as the free [`hash_password`] /
+    /// [`verify_password`] functions.
+    fn default() -> Self {
+        Self {
+            hashers: vec![Box::new(Argon2idHasher)],
+        }
+    }
+}
+
+impl PasswordHashers {
+    /// A registry whose preferred (new-password) hasher is `preferred`.
+    pub fn new(preferred: impl PasswordHasher + 'static) -> Self {
+        Self {
+            hashers: vec![Box::new(preferred)],
+        }
+    }
+
+    /// Adds a fallback hasher used only to *verify* existing hashes (new hashes
+    /// always use the preferred one). Returns `self` so calls can be chained.
+    #[must_use]
+    pub fn with(mut self, fallback: impl PasswordHasher + 'static) -> Self {
+        self.hashers.push(Box::new(fallback));
+        self
+    }
+
+    fn preferred(&self) -> &dyn PasswordHasher {
+        // Invariant: the registry is never empty (every constructor seeds one).
+        self.hashers[0].as_ref()
+    }
+
+    /// Hashes a new password with the preferred hasher.
+    ///
+    /// # Errors
+    /// Returns [`AuthError::Hash`] if the computation fails.
+    pub fn hash(&self, password: &str) -> Result<String, AuthError> {
+        self.preferred().hash(password)
+    }
+
+    /// Verifies `password` against `phc`, routing to the first registered hasher
+    /// that recognises it.
+    ///
+    /// # Errors
+    /// Returns [`AuthError::Phc`] if no registered hasher recognises `phc` (or the
+    /// recognising hasher rejects it as malformed).
+    pub fn verify(&self, password: &str, phc: &str) -> Result<bool, AuthError> {
+        for hasher in &self.hashers {
+            if hasher.identifies(phc) {
+                return hasher.verify(password, phc);
+            }
+        }
+        Err(AuthError::Phc(
+            "no registered password hasher recognises this hash's algorithm".to_owned(),
+        ))
+    }
+
+    /// Whether `phc` should be re-hashed on the next successful login: true when it
+    /// was not made by the preferred hasher, or the preferred hasher reports its
+    /// parameters drifted.
+    pub fn needs_rehash(&self, phc: &str) -> bool {
+        let preferred = self.preferred();
+        if preferred.identifies(phc) {
+            preferred.needs_rehash(phc)
+        } else {
+            true
+        }
+    }
+}
+
+/// The outcome of a successful [`authenticate_password`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Authenticated {
+    /// The stored hash should be replaced with a fresh one (made by the preferred
+    /// hasher) because it is legacy or its parameters drifted. The caller re-hashes
+    /// the just-verified password and persists it.
+    pub needs_rehash: bool,
+}
+
+/// Why [`authenticate_password`] refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginError {
+    /// The key is locked out; the [`Duration`] is the time left on the lockout.
+    LockedOut(Duration),
+    /// The password did not match (the failure was recorded against the throttle).
+    BadCredentials,
+    /// The stored hash could not be used — a server/data error, not a wrong guess,
+    /// so it is **not** counted against the throttle.
+    Auth(AuthError),
+}
+
+impl std::fmt::Display for LoginError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoginError::LockedOut(d) => write!(f, "account locked out for {}s", d.as_secs()),
+            LoginError::BadCredentials => f.write_str("invalid credentials"),
+            LoginError::Auth(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for LoginError {}
+
+/// The reference credential-verification flow that puts [`LoginThrottle`] into
+/// service (OWASP API2) and drives upgrade-on-login.
+///
+/// It checks the lockout for `key`, verifies `password` against `stored_phc`
+/// through `hashers`, records the success or failure against `throttle`, and on
+/// success reports whether the stored hash
+/// [`needs_rehash`](PasswordHashers::needs_rehash). An application's login endpoint
+/// calls this, then (when `needs_rehash`) re-hashes with [`PasswordHashers::hash`]
+/// and persists, and maps [`LoginError::LockedOut`] to `429` with a `Retry-After`.
+///
+/// Time is passed in (`now`) so the flow is deterministic and clock-free, matching
+/// [`LoginThrottle`].
+///
+/// # Errors
+/// Returns [`LoginError::LockedOut`] when `key` is locked, [`LoginError::BadCredentials`]
+/// on a mismatch, or [`LoginError::Auth`] when `stored_phc` is unusable.
+pub fn authenticate_password(
+    throttle: &LoginThrottle,
+    hashers: &PasswordHashers,
+    key: &str,
+    password: &str,
+    stored_phc: &str,
+    now: SystemTime,
+) -> Result<Authenticated, LoginError> {
+    if let Err(remaining) = throttle.check(key, now) {
+        return Err(LoginError::LockedOut(remaining));
+    }
+    match hashers.verify(password, stored_phc) {
+        Ok(true) => {
+            throttle.record_success(key);
+            Ok(Authenticated {
+                needs_rehash: hashers.needs_rehash(stored_phc),
+            })
+        }
+        Ok(false) => {
+            throttle.record_failure(key, now);
+            Err(LoginError::BadCredentials)
+        }
+        Err(e) => Err(LoginError::Auth(e)),
     }
 }
 
@@ -404,6 +639,104 @@ mod tests {
         assert!(!set.contains(&Permission::new("notes.delete")));
         assert_eq!(set.len(), 2);
         assert!(!set.is_empty());
+    }
+
+    // --- Pluggable hashers + reference flow (ADR 0017) ----------------------
+
+    /// A legacy test hasher: PHC `$plain$<password>`, always wants a rehash. It
+    /// proves a non-Argon2id algorithm can be added by *extending* the registry.
+    struct PlainHasher;
+    impl PasswordHasher for PlainHasher {
+        fn id(&self) -> &'static str {
+            "plain"
+        }
+        fn hash(&self, password: &str) -> Result<String, AuthError> {
+            Ok(format!("$plain${password}"))
+        }
+        fn identifies(&self, phc: &str) -> bool {
+            phc.starts_with("$plain$")
+        }
+        fn verify(&self, password: &str, phc: &str) -> Result<bool, AuthError> {
+            Ok(phc == format!("$plain${password}"))
+        }
+        fn needs_rehash(&self, _phc: &str) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn free_functions_still_roundtrip_through_the_default_registry() {
+        let phc = hash_password("pw").unwrap();
+        assert!(phc.starts_with("$argon2id$"));
+        assert!(verify_password("pw", &phc).unwrap());
+        assert!(!PasswordHashers::default().needs_rehash(&phc));
+    }
+
+    #[test]
+    fn registry_verifies_a_legacy_algorithm_and_flags_it_for_rehash() {
+        let hashers = PasswordHashers::default().with(PlainHasher);
+        // New hashes use the preferred (argon2id) backend.
+        let fresh = hashers.hash("pw").unwrap();
+        assert!(fresh.starts_with("$argon2id$"));
+        assert!(!hashers.needs_rehash(&fresh));
+        // A legacy "$plain$" hash still verifies through the fallback…
+        assert!(hashers.verify("pw", "$plain$pw").unwrap());
+        assert!(!hashers.verify("wrong", "$plain$pw").unwrap());
+        // …and is flagged to be upgraded on the next login.
+        assert!(hashers.needs_rehash("$plain$pw"));
+    }
+
+    #[test]
+    fn registry_rejects_an_unknown_algorithm() {
+        let err = PasswordHashers::default()
+            .verify("pw", "$bcrypt$whatever")
+            .unwrap_err();
+        assert!(matches!(err, AuthError::Phc(_)));
+    }
+
+    #[test]
+    fn authenticate_succeeds_clears_throttle_and_reports_rehash() {
+        let throttle = LoginThrottle::new(policy());
+        let hashers = PasswordHashers::default().with(PlainHasher);
+        let t0 = SystemTime::UNIX_EPOCH;
+        // A fresh argon2id hash: authenticates, no rehash.
+        let phc = hashers.hash("pw").unwrap();
+        let ok = authenticate_password(&throttle, &hashers, "alice", "pw", &phc, t0).unwrap();
+        assert!(!ok.needs_rehash);
+        // A legacy hash: authenticates and asks for an upgrade-on-login.
+        let up = authenticate_password(&throttle, &hashers, "bob", "pw", "$plain$pw", t0).unwrap();
+        assert!(up.needs_rehash);
+    }
+
+    #[test]
+    fn authenticate_locks_out_after_repeated_bad_passwords() {
+        let throttle = LoginThrottle::new(policy()); // 3 failures → lockout
+        let hashers = PasswordHashers::default();
+        let phc = hashers.hash("right").unwrap();
+        let t0 = SystemTime::UNIX_EPOCH;
+        for _ in 0..3 {
+            assert_eq!(
+                authenticate_password(&throttle, &hashers, "mallory", "wrong", &phc, t0),
+                Err(LoginError::BadCredentials)
+            );
+        }
+        // Now locked out — even the correct password is refused until it elapses.
+        match authenticate_password(&throttle, &hashers, "mallory", "right", &phc, t0) {
+            Err(LoginError::LockedOut(_)) => {}
+            other => panic!("expected LockedOut, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticate_surfaces_a_bad_stored_hash_without_throttling() {
+        let throttle = LoginThrottle::new(policy());
+        let hashers = PasswordHashers::default();
+        let t0 = SystemTime::UNIX_EPOCH;
+        let err =
+            authenticate_password(&throttle, &hashers, "dave", "pw", "not-a-phc", t0).unwrap_err();
+        assert!(matches!(err, LoginError::Auth(_)));
+        // A data error, not a guess: no failure recorded, the key is still allowed.
+        assert!(throttle.check("dave", t0).is_ok());
     }
 
     // --- LoginThrottle (API2: account lockout) ------------------------------
