@@ -14,7 +14,7 @@ não boilerplate.
 > **Novo por aqui?** Lê o [Seiva num relance](getting-started/seiva-at-a-glance.md),
 > e depois o [Guia de instalação rápida](getting-started/quick-install.md). Vens
 > de uma framework dinâmica? Começa pelo [teu primeiro dia](first-day.md). Queres
-> construir algo ponta-a-ponta? O [tutorial](getting-started/tutorial/part-1-your-first-module.md)
+> construir algo ponta-a-ponta? O [tutorial](getting-started/shop/part-1-the-modular-monolith.md)
 > constrói uma app de sondagens como monólito e depois separa um módulo num
 > microserviço.
 
@@ -63,7 +63,7 @@ secções se encaixam.)
     Lições orientadas à aprendizagem, guiadas passo a passo, que te levam de um
     checkout vazio a um serviço a correr, autenticado e empacotado.
 
-    [:octicons-arrow-right-24: Começar o tutorial](getting-started/tutorial/part-1-your-first-module.md)
+    [:octicons-arrow-right-24: Começar o tutorial](getting-started/shop/part-1-the-modular-monolith.md)
 
 -   :material-book-open-variant: **[Guias temáticos](topics/index.md)**
 
@@ -119,13 +119,13 @@ secções se encaixam.)
 - [Seiva num relance](getting-started/seiva-at-a-glance.md)
 - [Guia de instalação rápida](getting-started/quick-install.md) · o
   [quickstart](quickstart.md) mais completo
-- O tutorial: [1 · O teu primeiro módulo](getting-started/tutorial/part-1-your-first-module.md)
-  → [2 · Validação](getting-started/tutorial/part-2-validation-and-dtos.md)
-  → [3 · Camada de dados](getting-started/tutorial/part-3-the-data-layer.md)
-  → [4 · Autenticação](getting-started/tutorial/part-4-authentication.md)
-  → [5 · Testes](getting-started/tutorial/part-5-testing.md)
-  → [6 · Empacotamento & implantação](getting-started/tutorial/part-6-packaging-and-deploy.md)
-  → [7 · Do monólito ao microserviço](getting-started/tutorial/part-7-monolith-to-microservice.md)
+- O tutorial: [1 · O teu primeiro módulo](getting-started/shop/part-1-the-modular-monolith.md)
+  → [2 · Validação](getting-started/shop/part-2-modules-own-their-data.md)
+  → [3 · Camada de dados](getting-started/shop/part-4-the-data-layer.md)
+  → [4 · Autenticação](getting-started/shop/part-5-authorization.md)
+  → [5 · Testes](getting-started/shop/part-6-testing.md)
+  → [6 · Empacotamento & implantação](getting-started/shop/part-7-monolith-to-microservices.md)
+  → [7 · Do monólito ao microserviço](getting-started/shop/part-7-monolith-to-microservices.md)
 - [A vir de uma framework dinâmica](first-day.md)
 
 ## As camadas (guias temáticos)

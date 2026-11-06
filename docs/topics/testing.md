@@ -50,7 +50,7 @@ cannot silently diverge from what the server accepts (see
 
 ## Related
 
-- [Architecture](../architecture.md) · [Tutorial part 5](../getting-started/tutorial/part-5-testing.md)
+- [Architecture](../architecture.md) · [Tutorial part 5](../getting-started/shop/part-6-testing.md)
 - [Contributing](../internals/contributing.md)
 
 ---

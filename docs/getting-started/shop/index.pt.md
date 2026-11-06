@@ -1,10 +1,11 @@
-# Construir uma loja — um tutorial maior
+# O tutorial: construir uma loja
 
-O [primeiro tutorial](../tutorial/part-1-your-first-module.md) construiu um único
-módulo. Este constrói uma **pequena loja de comércio electrónico** a partir de
+Este tutorial constrói uma **pequena loja de comércio electrónico** a partir de
 **cinco módulos** e mostra a recompensa da fronteira de módulo do Seiva: o mesmo
 código corre como **um monólito modular** e, quando precisas, como
-**microserviços independentes** — por composição, não por reescrita.
+**microserviços independentes** — por composição, não por reescrita. Começas com
+um checkout vazio e terminas com um backend que escala de um binário a uma frota
+de serviços, mais uma montra de browser.
 
 O código terminado é o
 [`examples/shop`](https://github.com/ngolacloud/seiva/tree/main/examples/shop) no
@@ -35,6 +36,7 @@ contrato; o fluxo é ligação, não acoplamento.
 5. [Autorização entre módulos](part-5-authorization.md) — quem pode fazer o quê, imposto pelo contrato.
 6. [Testar a loja](part-6-testing.md) — testes unitários, o fluxo de eventos, funções de aptidão.
 7. [Do monólito aos microserviços](part-7-monolith-to-microservices.md) — separar `payments` e `notifications` nos seus próprios serviços.
+8. [Um frontend de browser com dxjs](part-8-a-dxjs-frontend.md) — uma montra segura sob CSP que consome a API da loja.
 
 ---
 

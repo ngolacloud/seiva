@@ -1,10 +1,11 @@
-# Building a shop — a bigger tutorial
+# The tutorial: building a shop
 
-The [first tutorial](../tutorial/part-1-your-first-module.md) built a single
-module. This one builds a **small e-commerce shop** out of **five modules** and
-shows the payoff of Seiva's module boundary: the same code runs as **one modular
+This tutorial builds a **small e-commerce shop** out of **five modules** and shows
+the payoff of Seiva's module boundary: the same code runs as **one modular
 monolith** and, when you need it, as **independent microservices** — by
-composition, not a rewrite.
+composition, not a rewrite. You start with an empty checkout and end with a
+backend that scales from one binary to a fleet of services, plus a browser
+storefront.
 
 The finished code is
 [`examples/shop`](https://github.com/ngolacloud/seiva/tree/main/examples/shop) in
@@ -35,6 +36,7 @@ wiring, not coupling.
 5. [Authorization across modules](part-5-authorization.md) — who may do what, enforced by the contract.
 6. [Testing the shop](part-6-testing.md) — unit tests, the event flow, fitness functions.
 7. [Monolith to microservices](part-7-monolith-to-microservices.md) — split `payments` and `notifications` into their own services.
+8. [A browser frontend with dxjs](part-8-a-dxjs-frontend.md) — a CSP-safe storefront that consumes the shop API.
 
 ---
 

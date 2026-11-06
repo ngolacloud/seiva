@@ -192,15 +192,6 @@ nav:
       - Coming from a dynamic framework: getting-started/coming-from-a-dynamic-framework.md
       - Your first day: first-day.md
       - Tutorial:
-          - 1 · Your first module: getting-started/tutorial/part-1-your-first-module.md
-          - 2 · Validation and DTOs: getting-started/tutorial/part-2-validation-and-dtos.md
-          - 3 · The data layer: getting-started/tutorial/part-3-the-data-layer.md
-          - 4 · Authentication: getting-started/tutorial/part-4-authentication.md
-          - 5 · Testing: getting-started/tutorial/part-5-testing.md
-          - 6 · Packaging and deploy: getting-started/tutorial/part-6-packaging-and-deploy.md
-          - 7 · From monolith to a microservice: getting-started/tutorial/part-7-monolith-to-microservice.md
-          - 8 · A browser frontend with dxjs: getting-started/tutorial/part-8-a-dxjs-frontend.md
-      - "Advanced tutorial: Building a shop":
           - getting-started/shop/index.md
           - 1 · A modular monolith: getting-started/shop/part-1-the-modular-monolith.md
           - 2 · Modules own their data: getting-started/shop/part-2-modules-own-their-data.md
@@ -209,6 +200,7 @@ nav:
           - 5 · Authorization across modules: getting-started/shop/part-5-authorization.md
           - 6 · Testing the shop: getting-started/shop/part-6-testing.md
           - 7 · Monolith to microservices: getting-started/shop/part-7-monolith-to-microservices.md
+          - 8 · A browser frontend with dxjs: getting-started/shop/part-8-a-dxjs-frontend.md
       - What to read next: getting-started/what-to-read-next.md
   - Topic guides:
       - topics/index.md

@@ -25,7 +25,7 @@ So the module's route appears immediately — confirm with `seiva openapi`.
 
 ## Related
 
-- [Tutorial part 1](../getting-started/tutorial/part-1-your-first-module.md)
+- [Tutorial part 1](../getting-started/shop/part-1-the-modular-monolith.md)
 
 ---
 

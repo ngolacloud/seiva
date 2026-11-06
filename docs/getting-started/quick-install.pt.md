@@ -49,7 +49,7 @@ a chamada `POST /v1/notes` contra o serviço em execução.
 
 ## A seguir
 
-Segue o [tutorial](tutorial/part-1-your-first-module.md), ou, se chegas de uma
+Segue o [tutorial](shop/part-1-the-modular-monolith.md), ou, se chegas de uma
 framework dinâmica, começa pelo [teu primeiro dia](../first-day.md). O percurso
 mais completo é o [quickstart](../quickstart.md).
 

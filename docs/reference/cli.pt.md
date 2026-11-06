@@ -141,7 +141,7 @@ $ cargo run -p polls-service          # or dx run -p polls-service — serves ON
 $ seiva module merge polls            # fold it back: removes the service, resets mode = "library"
 ```
 
-Ver o [monólito → microserviço](../getting-started/tutorial/part-7-monolith-to-microservice.md)
+Ver o [monólito → microserviço](../getting-started/shop/part-7-monolith-to-microservices.md)
 do tutorial.
 
 ## 8. Adicionar uma extensão opcional — `seiva ext add <name>`
