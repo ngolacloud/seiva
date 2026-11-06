@@ -1,7 +1,11 @@
-# API documents: OpenAPI, the docs UI, admin and proto
+# API documents: OpenAPI, the docs UIs, admin and proto
 
 Seiva is API-first, so where Django has a template layer, Seiva **generates the
-API's own documents** from the facade contracts — no hand-maintained spec.
+API's own documents** from the facade contracts — no hand-maintained spec, no
+per-handler annotations. The `async fn` on the facade *is* the source: its
+request DTO, its response DTO and its permission become the path, the schemas
+and the security requirement. This is the FastAPI promise — interactive docs you
+never wrote — delivered from a compiled contract.
 
 ## OpenAPI 3.1 (`/openapi.json`)
 
@@ -21,10 +25,24 @@ $ seiva openapi            # builds+runs the project, emits its OpenAPI; --compa
 Inside a project this documents *your* modules (via `SEIVA_EMIT=openapi` on the
 composition root); outside a project it shows the built-in demo facade.
 
-## The docs UI (`/docs`)
+## The interactive docs UIs (`/docs`, `/redoc`, `/scalar`)
 
-`GET /docs` serves an interactive API reference (Scalar) over the service's own
-`/openapi.json` — the FastAPI `/docs` parity piece.
+Every running service serves three interactive reference pages over its own
+`/openapi.json`, mounted by default — the FastAPI `/docs` + `/redoc` parity, plus
+a bonus renderer:
+
+| Route      | Renderer     | FastAPI analogue |
+| ---------- | ------------ | ---------------- |
+| `/docs`    | Swagger UI   | `/docs`          |
+| `/redoc`   | ReDoc        | `/redoc`         |
+| `/scalar`  | Scalar       | — (bonus)        |
+
+A FastAPI developer reaches Swagger UI at `/docs`; so do you, with the same
+*Try it out* panel — and you wrote no spec, no annotations, no page. The viewer
+bundles load from a CDN (as FastAPI's Swagger/ReDoc assets do); each page sets
+its own scoped Content-Security-Policy so the strict `default-src 'none'` of the
+data plane does not blank it out, while every API/JSON response keeps that strict
+default.
 
 ## The admin console (`/admin`) — an optional extension
 

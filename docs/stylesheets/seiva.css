@@ -1,0 +1,554 @@
+/* =============================================================================
+ * seiva.css — Delonix Seiva documentation theme
+ *
+ * Seiva's own identity: a petrol/indigo palette, not the Django green. Material
+ * provides the structure (search, nav, TOC, scroll-spy); this file repaints the
+ * chrome and ships a strong, neutral dark mode (graphite, not dark-green).
+ *
+ * Brand tokens
+ *   indigo-navy   #16304a  header / footer / h1-h2 (light)
+ *   petrol        #0e7490  links, accents, active nav (light)
+ *   petrol-light  #14a3b8  hovers
+ *   graphite      #0d1117  dark-mode canvas
+ *   sky           #38bdf8  links / accents (dark)
+ *   ink           #1b1f24  body text (light)
+ * ========================================================================== */
+
+:root {
+  --seiva-indigo: #16304a;
+  --seiva-indigo-deep: #0f2236;
+  --seiva-petrol: #0e7490;
+  --seiva-petrol-light: #14a3b8;
+  --seiva-sky: #38bdf8;
+  --seiva-sky-soft: #7cc6e0;
+  --seiva-ink: #1b1f24;
+}
+
+/* `primary: custom` / `accent: custom` in mkdocs.yml route to these. */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: #16304a;
+  --md-primary-fg-color--light: #0e7490;
+  --md-primary-fg-color--dark: #0f2236;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: #e7eef4;
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: #0e7490;
+  --md-accent-fg-color--transparent: rgba(14, 116, 144, 0.1);
+  --md-accent-bg-color: #ffffff;
+}
+
+/* Light scheme: petrol links, dark ink, calm surfaces. */
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: #0e7490;
+  --md-default-fg-color: #1b1f24;
+  --md-default-fg-color--light: rgba(27, 31, 36, 0.7);
+  --md-code-bg-color: #f4f6f8;
+  --md-code-fg-color: #0b3c4a;
+}
+
+/* Dark scheme: a true neutral graphite — not a tinted green/blue wash. */
+[data-md-color-scheme="slate"] {
+  --md-hue: 215;
+  --md-default-bg-color: #0d1117;
+  --md-default-bg-color--light: #11161d;
+  --md-default-fg-color: #c9d4e0;
+  --md-default-fg-color--light: rgba(201, 212, 224, 0.72);
+  --md-typeset-a-color: #56c7e0;
+  --md-code-bg-color: #161b22;
+  --md-code-fg-color: #cdd9e5;
+  --md-footer-bg-color: #0a0e14;
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-primary-fg-color: #11161d;
+  --md-primary-bg-color: #e8eef4;
+}
+
+/* --- Typography --------------------------------------------------------- */
+
+body,
+.md-typeset {
+  font-family: "Fira Sans", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.md-typeset code,
+.md-typeset pre,
+.md-typeset kbd {
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono",
+    Menlo, monospace;
+}
+
+.md-typeset {
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+/* Comfortable reading measure. */
+.md-grid {
+  max-width: 68rem;
+}
+
+.md-typeset h1 {
+  font-weight: 600;
+  color: var(--seiva-indigo);
+  letter-spacing: -0.01em;
+  margin-bottom: 0.6em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h1 {
+  color: var(--seiva-sky-soft);
+}
+
+.md-typeset h2 {
+  font-weight: 600;
+  color: var(--seiva-indigo);
+  border-bottom: 1px solid rgba(22, 48, 74, 0.16);
+  padding-bottom: 0.2em;
+  margin-top: 1.6em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  color: var(--seiva-sky-soft);
+  border-bottom-color: rgba(86, 199, 224, 0.22);
+}
+
+.md-typeset h3 {
+  font-weight: 600;
+  color: #223;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h3 {
+  color: #a7c5dc;
+}
+
+/* --- Header bar: Seiva indigo-navy ------------------------------------- */
+
+.md-header {
+  background-color: var(--seiva-indigo);
+  color: #ffffff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18);
+}
+
+[data-md-color-scheme="slate"] .md-header {
+  background-color: #0a0e14;
+  border-bottom: 1px solid rgba(86, 199, 224, 0.14);
+}
+
+.md-header__title,
+.md-header__topic {
+  font-weight: 600;
+}
+
+.md-tabs {
+  background-color: var(--seiva-indigo);
+  color: #ffffff;
+}
+
+.md-search__form {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+.md-search__form:hover {
+  background-color: rgba(255, 255, 255, 0.24);
+}
+
+/* --- Links -------------------------------------------------------------- */
+
+.md-typeset a {
+  color: var(--md-typeset-a-color);
+  text-decoration: none;
+}
+
+.md-typeset a:hover {
+  color: var(--seiva-petrol-light);
+  text-decoration: underline;
+}
+
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: var(--seiva-sky);
+}
+
+/* --- Left sidebar navigation ------------------------------------------- */
+
+.md-nav {
+  font-size: 0.72rem;
+}
+
+.md-nav__title {
+  color: var(--seiva-indigo);
+  font-weight: 700;
+}
+
+[data-md-color-scheme="slate"] .md-nav__title {
+  color: var(--seiva-sky-soft);
+}
+
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--seiva-petrol);
+  font-weight: 600;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: var(--seiva-sky);
+}
+
+.md-nav__link:hover {
+  color: var(--seiva-petrol-light);
+}
+
+.md-nav__item--section > .md-nav__link {
+  color: var(--seiva-indigo);
+  font-weight: 700;
+  text-transform: none;
+  font-size: 0.72rem;
+}
+
+[data-md-color-scheme="slate"] .md-nav__item--section > .md-nav__link {
+  color: var(--seiva-sky-soft);
+}
+
+.md-nav--secondary .md-nav__link--active {
+  color: var(--seiva-petrol);
+}
+
+/* --- Code --------------------------------------------------------------- */
+
+.md-typeset code {
+  background-color: var(--md-code-bg-color);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+  font-size: 0.85em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset code {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.md-typeset a code {
+  color: var(--md-typeset-a-color);
+}
+
+.md-typeset pre > code {
+  border: none;
+  padding: 0.7rem 1rem;
+}
+
+.md-typeset .highlight {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* --- Admonitions: bordered box with a tinted title, Django-shaped ------- */
+
+.md-typeset .admonition,
+.md-typeset details {
+  border: 1px solid rgba(14, 116, 144, 0.4);
+  border-left-width: 4px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+  box-shadow: none;
+  background-color: rgba(14, 116, 144, 0.05);
+}
+
+.md-typeset .admonition-title,
+.md-typeset summary {
+  font-weight: 700;
+}
+
+.md-typeset .admonition-title::before,
+.md-typeset summary::before {
+  opacity: 0.8;
+}
+
+/* note / info → indigo-blue */
+.md-typeset .admonition.note,
+.md-typeset details.note {
+  border-color: rgba(43, 108, 176, 0.45);
+  border-left-color: #2b6cb0;
+  background-color: rgba(43, 108, 176, 0.07);
+}
+.md-typeset .note > .admonition-title,
+.md-typeset .note > summary {
+  background-color: rgba(43, 108, 176, 0.12);
+}
+
+/* tip / hint → petrol */
+.md-typeset .admonition.tip,
+.md-typeset .admonition.hint,
+.md-typeset details.tip {
+  border-color: rgba(14, 116, 144, 0.5);
+  border-left-color: var(--seiva-petrol);
+  background-color: rgba(14, 116, 144, 0.07);
+}
+.md-typeset .tip > .admonition-title,
+.md-typeset .hint > .admonition-title {
+  background-color: rgba(14, 116, 144, 0.14);
+}
+
+/* warning / caution → amber */
+.md-typeset .admonition.warning,
+.md-typeset .admonition.caution,
+.md-typeset details.warning {
+  border-color: rgba(214, 158, 46, 0.5);
+  border-left-color: #d69e2e;
+  background-color: rgba(214, 158, 46, 0.08);
+}
+.md-typeset .warning > .admonition-title,
+.md-typeset .caution > .admonition-title {
+  background-color: rgba(214, 158, 46, 0.16);
+}
+
+/* danger / error → red */
+.md-typeset .admonition.danger,
+.md-typeset .admonition.error,
+.md-typeset details.danger {
+  border-color: rgba(197, 48, 48, 0.45);
+  border-left-color: #c53030;
+  background-color: rgba(197, 48, 48, 0.07);
+}
+.md-typeset .danger > .admonition-title,
+.md-typeset .error > .admonition-title {
+  background-color: rgba(197, 48, 48, 0.14);
+}
+
+/* --- Blockquotes -------------------------------------------------------- */
+
+.md-typeset blockquote {
+  border-left: 4px solid var(--seiva-petrol);
+  color: inherit;
+  background-color: rgba(14, 116, 144, 0.04);
+}
+
+/* --- Tables ------------------------------------------------------------- */
+
+.md-typeset table:not([class]) {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  font-size: 0.76rem;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: #eaf1f5;
+  color: var(--seiva-indigo);
+  font-weight: 600;
+  border-bottom: 2px solid rgba(22, 48, 74, 0.25);
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background-color: #141b24;
+  color: var(--seiva-sky-soft);
+}
+
+.md-typeset table:not([class]) td {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.md-typeset table:not([class]) tr:hover {
+  background-color: rgba(14, 116, 144, 0.05);
+}
+
+/* --- Footer prev/next --------------------------------------------------- */
+
+.md-footer {
+  background-color: var(--seiva-indigo);
+}
+
+.md-footer-meta {
+  background-color: var(--seiva-indigo-deep);
+}
+
+[data-md-color-scheme="slate"] .md-footer {
+  background-color: #0a0e14;
+}
+
+[data-md-color-scheme="slate"] .md-footer-meta {
+  background-color: #070a0f;
+}
+
+.md-footer__inner {
+  padding: 0.6rem 0.2rem;
+}
+
+.md-footer__link {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+  opacity: 0.95;
+}
+
+.md-footer__link:hover {
+  opacity: 0.85;
+}
+
+.md-footer__title {
+  font-size: 0.8rem;
+}
+
+.md-footer__direction {
+  font-size: 0.62rem;
+  opacity: 0.7;
+}
+
+/* --- Home page: section cards ------------------------------------------ */
+
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid.cards > :is(ul, ol) > li {
+  border: 1px solid rgba(22, 48, 74, 0.16);
+  border-radius: 6px;
+  transition: border-color 160ms, box-shadow 160ms;
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--seiva-petrol);
+  box-shadow: 0 2px 10px rgba(22, 48, 74, 0.12);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li {
+  border-color: rgba(86, 199, 224, 0.22);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--seiva-sky);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.5);
+}
+
+/* The hero on the landing page (rendered by an `.seiva-hero` block). */
+.seiva-hero {
+  margin: 0 0 1.6rem;
+  padding: 1.6rem 1.8rem;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #0f2236 0%, #0e7490 100%);
+  color: #ffffff;
+}
+
+[data-md-color-scheme="slate"] .seiva-hero {
+  background: linear-gradient(135deg, #0a1a2b 0%, #0b5d73 100%);
+  border: 1px solid rgba(86, 199, 224, 0.18);
+}
+
+.seiva-hero h1 {
+  color: #ffffff !important;
+  border: none;
+  margin: 0 0 0.3rem;
+  font-size: 1.9rem;
+}
+
+.seiva-hero p {
+  margin: 0;
+  font-size: 0.95rem;
+  opacity: 0.95;
+  max-width: 48rem;
+}
+
+/* --- Breadcrumbs: the "Documentation » … »" sub-header strip ------------ */
+
+.md-path {
+  margin: 0;
+  padding: 0.5rem 0.8rem;
+  background-color: #eef3f7;
+  border-bottom: 1px solid rgba(22, 48, 74, 0.14);
+  font-size: 0.68rem;
+}
+
+.md-path__list {
+  max-width: 68rem;
+  margin: 0 auto;
+}
+
+.md-path__link {
+  color: var(--seiva-indigo);
+}
+
+[data-md-color-scheme="slate"] .md-path {
+  background-color: #10161e;
+  border-bottom-color: rgba(86, 199, 224, 0.18);
+}
+
+[data-md-color-scheme="slate"] .md-path__link {
+  color: var(--seiva-sky-soft);
+}
+
+/* --- Brand wordmark ----------------------------------------------------- */
+
+.md-header__title .md-header__topic > .md-ellipsis {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.md-header__button.md-logo {
+  position: relative;
+}
+
+/* --- Right TOC box: "In this document" ---------------------------------- */
+
+.md-nav--secondary > .md-nav__title {
+  color: var(--seiva-indigo);
+  font-weight: 700;
+  text-transform: none;
+  box-shadow: none;
+  border-bottom: 2px solid rgba(22, 48, 74, 0.16);
+}
+
+[data-md-color-scheme="slate"] .md-nav--secondary > .md-nav__title {
+  color: var(--seiva-sky-soft);
+  border-bottom-color: rgba(86, 199, 224, 0.22);
+}
+
+/* --- First paragraph after an h1 reads as lead text --------------------- */
+
+.md-typeset h1 + p {
+  color: var(--md-default-fg-color--light);
+  font-size: 0.9rem;
+}
+
+/* =============================================================================
+ * DORM .schema highlighting — tokens emitted by the custom Pygments lexer
+ * (docs/_ext/dorm_lexer.py, alias `dorm`/`schema`). Material's syntax CSS
+ * colours most tokens; these rules give the DSL its own calm accents and make
+ * the block keywords (datasource/namespace/model/enum) and @attributes stand
+ * out in both schemes.
+ * ========================================================================== */
+
+/* Block keywords: datasource / namespace / model / enum / generator */
+.md-typeset .highlight .k,
+.md-typeset .highlight .kd,
+.md-typeset .highlight .kn {
+  color: #0e7490;
+  font-weight: 600;
+}
+
+/* @id / @version / @default(...) field attributes → petrol, italic */
+.md-typeset .highlight .nd {
+  color: #b45309;
+  font-style: italic;
+}
+
+/* Scalar/model types: String, Int, Uuid, DateTime … */
+.md-typeset .highlight .kt,
+.md-typeset .highlight .nc {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight .k,
+[data-md-color-scheme="slate"] .md-typeset .highlight .kd,
+[data-md-color-scheme="slate"] .md-typeset .highlight .kn {
+  color: #38bdf8;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight .nd {
+  color: #fbbf24;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight .kt,
+[data-md-color-scheme="slate"] .md-typeset .highlight .nc {
+  color: #c4b5fd;
+}

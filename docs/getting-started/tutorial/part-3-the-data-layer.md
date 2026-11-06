@@ -16,6 +16,30 @@ binaries), writes `data/dorm.schema` from your project's
 `schema/polls-site.schema` — so the module `namespace`s and their models drive it —
 and sets the datasource provider for the chosen backend.
 
+The schema is a small, Prisma-shaped DSL — a `datasource` block plus one
+`namespace` per module. By the end of this part the `polls` namespace reads like
+this:
+
+```schema
+datasource db {
+  provider = "postgresql"
+}
+
+namespace polls {
+  model Question {
+    id    Uuid   @id @default(uuid())
+    text  String
+  }
+
+  model Choice {
+    id          Uuid   @id @default(uuid())
+    question_id Uuid
+    text        String
+    votes       Int    @default(0)
+  }
+}
+```
+
 ## Author and apply a migration
 
 Point `DELONIX_ORM_DSN` at your database and run the dev loop (the Seiva

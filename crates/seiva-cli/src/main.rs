@@ -149,9 +149,14 @@ enum ModuleAction {
         #[arg(long)]
         admin: bool,
     },
-    /// Move a module to `mode = "service"` with its own schema and history.
+    /// Promote a module to a microservice: scaffold a standalone
+    /// `apps/<name>-service` binary that mounts only this module, register it in
+    /// the workspace and set `mode = "service"`. The module still runs inside the
+    /// monolith — this adds a deployment shape, it moves no code.
     Split { name: String },
-    /// Fold a service module back into the project schema.
+    /// Fold a split module's service back into the monolith: remove
+    /// `apps/<name>-service`, drop its workspace member and reset
+    /// `mode = "library"`. The module's five crates are untouched.
     Merge { name: String },
 }
 
@@ -393,6 +398,128 @@ fn project_name(seiva: &str) -> Option<String> {
         .lines()
         .find_map(|line| line.trim().strip_prefix("name = "))
         .map(|v| v.trim().trim_matches('"').to_owned())
+}
+
+/// `seiva module split <name>`: promote a module to its own microservice by
+/// scaffolding a standalone `apps/<name>-service` composition root that mounts
+/// only that module, registering it as a workspace member and recording
+/// `mode = "service"` in the module's `module.toml`. The module keeps running
+/// inside the monolith too — this adds a second deployment shape, it moves no
+/// code. Idempotent-friendly: refuses to clobber an existing service binary.
+fn module_split(name: &str) -> ExitCode {
+    if let Err(err) = scaffold::validate_name(name) {
+        eprintln!("seiva: {err}");
+        return ExitCode::FAILURE;
+    }
+    let root = Path::new(".");
+    if !root.join("seiva.toml").is_file() {
+        eprintln!(
+            "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+        );
+        return ExitCode::FAILURE;
+    }
+    let module_dir = root.join(format!("modules/{name}"));
+    if !module_dir.join("interface").is_dir() {
+        eprintln!("seiva: no module `{name}` here (looked for modules/{name}/interface). Create it with `seiva module new {name}`.");
+        return ExitCode::FAILURE;
+    }
+    if root.join(scaffold::service_member_path(name)).exists() {
+        eprintln!("seiva: `{name}` is already split (apps/{name}-service exists).");
+        return ExitCode::from(64);
+    }
+
+    let files = match scaffold::service_files(name) {
+        Ok(files) => files,
+        Err(err) => {
+            eprintln!("seiva: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = write_files(root, &files) {
+        eprintln!("seiva: {err}");
+        return ExitCode::FAILURE;
+    }
+
+    // Registration edits: workspace member + module mode. Each is a pure transform.
+    let apply = |path: PathBuf,
+                 transform: &dyn Fn(&str) -> Result<String, scaffold::ScaffoldError>|
+     -> Result<(), String> {
+        let current = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let next = transform(&current).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::write(&path, next).map_err(|e| format!("writing {}: {e}", path.display()))
+    };
+    let member = scaffold::service_member_path(name);
+    if let Err(err) = apply(root.join("Cargo.toml"), &|s| {
+        scaffold::add_app_member(s, &member)
+    }) {
+        eprintln!("seiva: service files written, but workspace registration failed: {err}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = apply(module_dir.join("module.toml"), &|s| {
+        scaffold::set_module_mode(s, "service")
+    }) {
+        eprintln!("seiva: {err}");
+        return ExitCode::FAILURE;
+    }
+
+    println!("Split module `{name}` into a service. Created apps/{name}-service (mounts only `{name}`), registered it in the workspace and set mode = \"service\".");
+    println!("Run the microservice: `cargo run -p {name}-service` (or `dx run -p {name}-service`). The monolith still serves `{name}` too; `seiva module merge {name}` undoes this.");
+    ExitCode::SUCCESS
+}
+
+/// `seiva module merge <name>`: fold a split module's service back into the
+/// monolith — remove `apps/<name>-service`, drop its workspace member and reset
+/// `mode = "library"`. The module itself (its five crates) is untouched and keeps
+/// serving inside the monolith. A no-op reports so rather than failing.
+fn module_merge(name: &str) -> ExitCode {
+    if let Err(err) = scaffold::validate_name(name) {
+        eprintln!("seiva: {err}");
+        return ExitCode::FAILURE;
+    }
+    let root = Path::new(".");
+    if !root.join("seiva.toml").is_file() {
+        eprintln!(
+            "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+        );
+        return ExitCode::FAILURE;
+    }
+    let service_dir = root.join(scaffold::service_member_path(name));
+    if !service_dir.exists() {
+        eprintln!("seiva: `{name}` is not split (no apps/{name}-service). Nothing to merge.");
+        return ExitCode::from(64);
+    }
+    if let Err(err) = std::fs::remove_dir_all(&service_dir) {
+        eprintln!("seiva: removing {}: {err}", service_dir.display());
+        return ExitCode::FAILURE;
+    }
+
+    let member = scaffold::service_member_path(name);
+    let cargo_path = root.join("Cargo.toml");
+    match std::fs::read_to_string(&cargo_path) {
+        Ok(current) => {
+            let next = scaffold::remove_app_member(&current, &member);
+            if let Err(err) = std::fs::write(&cargo_path, next) {
+                eprintln!("seiva: writing {}: {err}", cargo_path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+        Err(err) => {
+            eprintln!("seiva: reading {}: {err}", cargo_path.display());
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // Reset the module mode (best-effort: the module may predate the mode key).
+    let module_toml = root.join(format!("modules/{name}/module.toml"));
+    if let Ok(current) = std::fs::read_to_string(&module_toml) {
+        if let Ok(next) = scaffold::set_module_mode(&current, "library") {
+            let _ = std::fs::write(&module_toml, next);
+        }
+    }
+
+    println!("Merged `{name}` back into the monolith: removed apps/{name}-service and reset mode = \"library\". The module still serves inside apps/<project>-api.");
+    ExitCode::SUCCESS
 }
 
 /// `seiva ext add <name>`: integrate an optional extension into the composition
@@ -1335,8 +1462,8 @@ fn main() -> ExitCode {
             ModuleAction::New { name, data, admin } => {
                 module_new(&name, data.as_deref() == Some("external"), admin)
             }
-            ModuleAction::Split { .. } => not_yet("module split", "the module-mode phase"),
-            ModuleAction::Merge { .. } => not_yet("module merge", "the module-mode phase"),
+            ModuleAction::Split { name } => module_split(&name),
+            ModuleAction::Merge { name } => module_merge(&name),
         },
         Command::Ext { action } => match action {
             ExtAction::Add { name } => ext_add(&name),

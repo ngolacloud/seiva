@@ -48,7 +48,7 @@ use axum::{Json, Router};
 pub use audit::audit;
 pub use authn::authn;
 pub use ctx::Ctx;
-pub use docs::{docs_handler, DOCS_HTML};
+pub use docs::{docs_handler, redoc_handler, scalar_handler, DOCS_HTML};
 pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
 pub use health::{
     health_router, health_router_with_dependency, Health, HealthState, ReadinessCheck,
@@ -194,7 +194,10 @@ pub fn router_with_modules_distributed(
     )
 }
 
-/// The framework's own routes, unlayered: health, `/openapi.json` and `/docs`.
+/// The framework's own routes, unlayered: health, `/openapi.json`, and the three
+/// interactive reference pages (`/docs` = Swagger UI, `/redoc` = ReDoc,
+/// `/scalar` = Scalar) — the FastAPI `/docs` + `/redoc` parity, served by default
+/// with no annotations from the developer (see [`docs`]).
 ///
 /// There is deliberately **no** `/admin` here: the admin console is an optional
 /// extension (`seiva-console-admin`, ADR 0008), not part of the base. A backend
@@ -205,6 +208,8 @@ fn framework_routes(health: Health) -> Router {
         .merge(health_router(health))
         .route("/openapi.json", get(openapi_handler))
         .route("/docs", get(docs::docs_handler))
+        .route("/redoc", get(docs::redoc_handler))
+        .route("/scalar", get(docs::scalar_handler))
 }
 
 /// Wraps `app` (framework routes, and any merged module routes) in the transport

@@ -11,3 +11,11 @@ publish = false
 polls-application = { path = "../application" }
 polls-domain = { path = "../domain" }
 seiva-ports = { workspace = true }
+
+[dev-dependencies]
+# Composition-level test: drive the module through the REAL in-memory adapter
+# (not the application's FakeRepo) via the public facade, the shape a running
+# composition root uses.
+polls-facade = { path = "../facade" }
+seiva-testing = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

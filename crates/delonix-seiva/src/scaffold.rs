@@ -315,6 +315,220 @@ pub fn wire_module_in_main(main_rs: &str, module: &str) -> Result<String, Scaffo
     Ok(main_rs.replacen(anchor_line, &format!("{merge}{anchor_line}"), 1))
 }
 
+// =============================================================================
+// Module split / merge — promoting a module to its own microservice and back.
+//
+// A module is already five independent crates; "splitting" it does not move any
+// code, it adds a *second* composition root — a standalone binary that mounts
+// only that module — so the same module runs both inside the monolith
+// (`apps/<project>-api`) and on its own (`apps/<module>-service`). `module.toml`
+// records the chosen mode. Merging removes the service binary and resets the mode.
+// This is the deployment knob behind "one codebase, monolith or microservices".
+// =============================================================================
+
+/// The workspace member path of a module's standalone service binary.
+#[must_use]
+pub fn service_member_path(module: &str) -> String {
+    format!("apps/{module}-service")
+}
+
+/// Files for a module's standalone service binary, relative to the project root.
+///
+/// Emits `apps/<module>-service/` — a composition root over the runtime serve
+/// loop that mounts **only** this module's generated router (the same in-memory
+/// adapters the monolith wires by default), plus the framework routes
+/// (`/health`, `/openapi.json`, `/docs`, `/redoc`, `/scalar`) and a distroless
+/// `Delonixfile`. It links the module by path, so `seiva openapi` run against the
+/// service documents exactly this module's contract.
+pub fn service_files(module: &str) -> Result<Vec<GeneratedFile>, ScaffoldError> {
+    validate_name(module)?;
+    let app = format!("{module}-service");
+    let base = format!("apps/{app}");
+    let file = |path: String, contents: String| GeneratedFile { path, contents };
+    Ok(vec![
+        file(format!("{base}/Cargo.toml"), service_cargo_toml(module)),
+        file(format!("{base}/src/main.rs"), service_main_rs(module)),
+        file(format!("{base}/Delonixfile"), delonixfile(&app)),
+    ])
+}
+
+/// The service binary's `Cargo.toml`: the framework crates plus this one module's
+/// `interface`/`infrastructure` crates, linked by path. No managed anchors — a
+/// single-module service mounts exactly one module, baked in.
+fn service_cargo_toml(module: &str) -> String {
+    format!(
+        "[package]\nname = \"{module}-service\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\n\
+         # The service runtime: the serve loop, 12-factor config, structured logging\n\
+         # and the shutdown signal — shared with the monolith composition root.\n\
+         seiva-server = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-http = \"{FRAMEWORK_VERSION}\"\n\
+         axum = \"0.8\"\n\
+         # Emitting THIS service's contract (`seiva openapi`/`proto`, via SEIVA_EMIT).\n\
+         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
+         seiva-grpc = \"{FRAMEWORK_VERSION}\"\n\
+         serde_json = \"1\"\n\
+         tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
+         tracing = \"0.1\"\n\
+         # The one module this service owns, linked by path:\n\
+         {module}-interface = {{ path = \"../../modules/{module}/interface\" }}\n\
+         {module}-infrastructure = {{ path = \"../../modules/{module}/infrastructure\" }}\n"
+    )
+}
+
+/// The service binary's `main.rs`: a real Seiva server that mounts only this
+/// module. Mirrors the monolith's composition root but with a single, baked-in
+/// module merge instead of the managed anchor.
+fn service_main_rs(module: &str) -> String {
+    let pascal = to_pascal_case(module);
+    let app = format!("{module}-service");
+    format!(
+        "//! Standalone service for the `{module}` module — its own composition root\n\
+         //! and `main`. Produced by `seiva module split {module}`. It mounts only the\n\
+         //! `{module}` module; the same module still runs inside the monolith\n\
+         //! (`apps/<project>-api`). Keep business logic out of here.\n\n\
+         use axum::Router;\n\
+         use seiva_http::{{router_with_modules, Health, HttpSecurity}};\n\
+         use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
+         use std::process::ExitCode;\n\n\
+         #[tokio::main(flavor = \"multi_thread\")]\n\
+         async fn main() -> ExitCode {{\n\
+         \x20   // `seiva openapi` / `seiva proto` run this binary with SEIVA_EMIT set to\n\
+         \x20   // print this service's contract (just the `{module}` facade) and exit.\n\
+         \x20   if let Ok(kind) = std::env::var(\"SEIVA_EMIT\") {{\n\
+         \x20       return emit_contract(&kind);\n\
+         \x20   }}\n\n\
+         \x20   observability::init();\n\n\
+         \x20   let config = match ServerConfig::from_process_env() {{\n\
+         \x20       Ok(config) => config,\n\
+         \x20       Err(error) => {{\n\
+         \x20           tracing::error!(%error, \"invalid configuration\");\n\
+         \x20           return ExitCode::FAILURE;\n\
+         \x20       }}\n\
+         \x20   }};\n\n\
+         \x20   let health = Health::starting();\n\
+         \x20   let security = HttpSecurity::default();\n\
+         \x20   let auth = None;\n\
+         \x20   // This service mounts ONLY the `{module}` module (in-memory adapters).\n\
+         \x20   let modules = Router::new().merge({module}_interface::{module}_router(\n\
+         \x20       {module}_interface::{pascal}Controller::new(\n\
+         \x20           {module}_infrastructure::InMemoryRecordRepository::new(),\n\
+         \x20           {module}_infrastructure::CounterIdGenerator::default(),\n\
+         \x20       ),\n\
+         \x20   ));\n\
+         \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
+         \x20   tracing::info!(env = %config.env, http = %config.http_addr, \"{app} starting\");\n\
+         \x20   match serve_router(config.http_addr, app, health, shutdown_signal()).await {{\n\
+         \x20       Ok(()) => ExitCode::SUCCESS,\n\
+         \x20       Err(error) => {{\n\
+         \x20           tracing::error!(%error, \"serve failed\");\n\
+         \x20           ExitCode::FAILURE\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n\n\
+         /// Emits this service's contract from the `{module}` facade, then exits.\n\
+         fn emit_contract(kind: &str) -> ExitCode {{\n\
+         \x20   let facades = delonix_seiva::contract::registered_facades();\n\
+         \x20   match kind {{\n\
+         \x20       \"openapi\" => {{\n\
+         \x20           let doc = seiva_openapi::openapi_document(\n\
+         \x20               seiva_openapi::ApiInfo {{\n\
+         \x20                   title: \"{module} service API\".to_string(),\n\
+         \x20                   version: \"0.1.0\".to_string(),\n\
+         \x20               }},\n\
+         \x20               &facades,\n\
+         \x20           );\n\
+         \x20           match serde_json::to_string_pretty(&doc) {{\n\
+         \x20               Ok(json) => {{\n\
+         \x20                   println!(\"{{json}}\");\n\
+         \x20                   ExitCode::SUCCESS\n\
+         \x20               }}\n\
+         \x20               Err(error) => {{\n\
+         \x20                   eprintln!(\"seiva: {{error}}\");\n\
+         \x20                   ExitCode::FAILURE\n\
+         \x20               }}\n\
+         \x20           }}\n\
+         \x20       }}\n\
+         \x20       \"proto\" => {{\n\
+         \x20           for facade in &facades {{\n\
+         \x20               println!(\"{{}}\", seiva_grpc::proto_document(facade));\n\
+         \x20           }}\n\
+         \x20           ExitCode::SUCCESS\n\
+         \x20       }}\n\
+         \x20       other => {{\n\
+         \x20           eprintln!(\"seiva: unknown SEIVA_EMIT kind `{{other}}`\");\n\
+         \x20           ExitCode::FAILURE\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n"
+    )
+}
+
+/// Adds a single workspace member `path` before the managed members anchor,
+/// idempotently (a no-op if already listed). Pure.
+pub fn add_app_member(cargo: &str, path: &str) -> Result<String, ScaffoldError> {
+    if cargo.contains(&format!("\"{path}\"")) {
+        return Err(ScaffoldError::AlreadyPresent(format!("member `{path}`")));
+    }
+    let anchor_line = cargo
+        .lines()
+        .find(|line| line.trim() == MEMBERS_ANCHOR)
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: MEMBERS_ANCHOR.to_owned(),
+            what: "Cargo.toml".to_owned(),
+        })?;
+    let indent: String = anchor_line
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    Ok(cargo.replacen(
+        anchor_line,
+        &format!("{indent}\"{path}\",\n{anchor_line}"),
+        1,
+    ))
+}
+
+/// Removes a single workspace member line for `path` (the inverse of
+/// [`add_app_member`]). Pure; a no-op if the member is absent.
+pub fn remove_app_member(cargo: &str, path: &str) -> String {
+    cargo
+        .lines()
+        .filter(|line| line.trim().trim_end_matches(',').trim_matches('"') != path)
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
+/// Sets the module's deployment mode in its `module.toml`, inserting a
+/// `mode = "<mode>"` line under `[module]` or replacing the existing one. Pure.
+pub fn set_module_mode(module_toml: &str, mode: &str) -> Result<String, ScaffoldError> {
+    let line = format!("mode = \"{mode}\"");
+    if module_toml
+        .lines()
+        .any(|l| l.trim_start().starts_with("mode ="))
+    {
+        return Ok(module_toml
+            .lines()
+            .map(|l| {
+                if l.trim_start().starts_with("mode =") {
+                    let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
+                    format!("{indent}{line}\n")
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect());
+    }
+    let anchor = module_toml
+        .lines()
+        .find(|l| l.trim() == "[module]")
+        .ok_or_else(|| ScaffoldError::MissingAnchor {
+            anchor: "[module]".to_owned(),
+            what: "module.toml".to_owned(),
+        })?;
+    Ok(module_toml.replacen(anchor, &format!("{anchor}\n{line}"), 1))
+}
+
 /// The declarative integration contract for an optional Seiva extension (ADR
 /// 0010): pure data describing how a composition root wires the extension in — a
 /// dependency to add and a mount statement to insert at the managed composition
@@ -707,7 +921,11 @@ fn lib_cargo_toml(pkg: &str, deps: &[&(String, String)]) -> String {
 
 fn module_toml(module: &str) -> String {
     format!(
-        "[module]\nname = \"{module}\"\nfacade = \"v1\"\nowners = []\n\n\
+        "[module]\nname = \"{module}\"\nfacade = \"v1\"\nowners = []\n\
+         # Deployment mode: \"library\" (runs inside the monolith) or \"service\"\n\
+         # (also runs standalone as apps/{module}-service). Toggled by\n\
+         # `seiva module split {module}` / `seiva module merge {module}`.\n\
+         mode = \"library\"\n\n\
          # Facades this module calls. Each needs a matching [[allow]] on the provider.\n\
          # [[uses]]\n# module = \"identity\"\n# facade = \"v1\"\n# methods = [\"user_exists\"]\n\n\
          # Callers this module permits. Anything not listed is denied.\n\
@@ -1636,6 +1854,63 @@ mod tests {
         assert!(out.contains(MODULE_MERGES_ANCHOR));
         assert!(out.contains("let modules = modules.merge("));
         assert!(wire_module_in_main(&out, "order_items").is_err());
+    }
+
+    #[test]
+    fn split_scaffolds_a_single_module_service_binary() {
+        let files = service_files("catalog").expect("service files");
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"apps/catalog-service/Cargo.toml"));
+        assert!(paths.contains(&"apps/catalog-service/src/main.rs"));
+        assert!(paths.contains(&"apps/catalog-service/Delonixfile"));
+
+        let main = &files
+            .iter()
+            .find(|f| f.path.ends_with("src/main.rs"))
+            .unwrap()
+            .contents;
+        // Mounts exactly this module, with the generated router/controller/adapters.
+        assert!(main.contains("catalog_interface::catalog_router("));
+        assert!(main.contains("catalog_interface::CatalogController::new("));
+        assert!(main.contains("router_with_modules("));
+
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .unwrap()
+            .contents;
+        assert!(cargo.contains("name = \"catalog-service\""));
+        assert!(
+            cargo.contains("catalog-interface = { path = \"../../modules/catalog/interface\" }")
+        );
+    }
+
+    #[test]
+    fn workspace_member_add_and_remove_round_trips() {
+        let cargo = workspace_cargo_toml("shop-api");
+        let added = add_app_member(&cargo, "apps/catalog-service").expect("add member");
+        assert!(added.contains("\"apps/catalog-service\","));
+        // Idempotence guard: a second add is refused.
+        assert!(add_app_member(&added, "apps/catalog-service").is_err());
+        // Removing it returns the member list to its prior shape.
+        let removed = remove_app_member(&added, "apps/catalog-service");
+        assert!(!removed.contains("apps/catalog-service"));
+        assert!(removed.contains("\"apps/shop-api\","));
+    }
+
+    #[test]
+    fn module_mode_is_inserted_then_replaced() {
+        // A fresh module.toml carries mode = "library"; split flips it to service.
+        let toml = module_toml("catalog");
+        assert!(toml.contains("mode = \"library\""));
+        let as_service = set_module_mode(&toml, "service").expect("set service");
+        assert!(as_service.contains("mode = \"service\""));
+        assert!(!as_service.contains("mode = \"library\""));
+        // A legacy module.toml without a mode key gets one inserted under [module].
+        let legacy = "[module]\nname = \"catalog\"\nfacade = \"v1\"\n";
+        let fixed = set_module_mode(legacy, "service").expect("insert mode");
+        assert!(fixed.contains("[module]"));
+        assert!(fixed.contains("mode = \"service\""));
     }
 
     /// Fitness for P0-3 (runtime facade discovery): a scaffolded project, with a

@@ -100,7 +100,11 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
         "another tenant cannot read the row"
     );
     assert!(
-        catalog.list(&globex, ListQuery::default()).await.expect("globex list").is_empty(),
+        catalog
+            .list(&globex, ListQuery::default())
+            .await
+            .expect("globex list")
+            .is_empty(),
         "globex sees no acme rows"
     );
     // globex has its own, separate row.
@@ -116,11 +120,22 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
         .await
         .expect("globex create");
     assert_eq!(
-        catalog.list(&acme, ListQuery::default()).await.expect("acme list").len(),
+        catalog
+            .list(&acme, ListQuery::default())
+            .await
+            .expect("acme list")
+            .len(),
         1,
         "acme still sees only its own"
     );
-    assert_eq!(catalog.list(&globex, ListQuery::default()).await.expect("globex list").len(), 1);
+    assert_eq!(
+        catalog
+            .list(&globex, ListQuery::default())
+            .await
+            .expect("globex list")
+            .len(),
+        1
+    );
 
     // UPDATE + DELETE within acme.
     let updated = catalog
@@ -138,7 +153,11 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
         .expect("update");
     assert_eq!(updated.name, "widget2");
     assert_eq!(updated.cost, Some(70));
-    assert_eq!(updated.version, created.version + 1, "update bumps the version");
+    assert_eq!(
+        updated.version,
+        created.version + 1,
+        "update bumps the version"
+    );
 
     // OPTIMISTIC CONCURRENCY: a second update with the now-stale version is a 409.
     let stale = catalog
@@ -161,7 +180,10 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
     );
     // The rejected update did not change the row.
     let current = catalog.get(&acme, id).await.expect("get after conflict");
-    assert_eq!(current.name, "widget2", "the conflicting update did not apply");
+    assert_eq!(
+        current.name, "widget2",
+        "the conflicting update did not apply"
+    );
     // globex cannot delete acme's row (tenant scope): the delete affects nothing,
     // so acme's row survives.
     catalog
@@ -235,8 +257,11 @@ async fn live_catalog_create_is_idempotent() {
     .expect("table setup");
 
     let catalog = CatalogController::new(Arc::clone(&uow), Arc::new(DormIdempotencyStore));
-    let principal =
-        Principal::in_tenant("clerk", "acme", ["catalog.create", "catalog.read", "catalog.cost.view"]);
+    let principal = Principal::in_tenant(
+        "clerk",
+        "acme",
+        ["catalog.create", "catalog.read", "catalog.cost.view"],
+    );
     let key = IdempotencyKey::parse("order-42").expect("valid key");
     let ctx = Ctx::new(principal).with_request("POST", "/v1/catalogs", Some(key.clone()));
 
@@ -247,16 +272,26 @@ async fn live_catalog_create_is_idempotent() {
     };
 
     // First call inserts.
-    let first = catalog.create(&ctx, body.clone()).await.expect("first create");
+    let first = catalog
+        .create(&ctx, body.clone())
+        .await
+        .expect("first create");
     // Retry with the SAME key and SAME content replays the stored response.
     let replay = catalog
         .create(&ctx, body.clone())
         .await
         .expect("retry replays");
-    assert_eq!(first, replay, "a retry returns the identical stored response");
+    assert_eq!(
+        first, replay,
+        "a retry returns the identical stored response"
+    );
 
     // Exactly one row exists for the tenant.
-    let count = catalog.list(&ctx, ListQuery::default()).await.expect("list").len();
+    let count = catalog
+        .list(&ctx, ListQuery::default())
+        .await
+        .expect("list")
+        .len();
     assert_eq!(count, 1, "the retried create inserted exactly once");
 
     // Reusing the key with DIFFERENT content is a 409 conflict (not a second row).
@@ -275,7 +310,11 @@ async fn live_catalog_create_is_idempotent() {
         "a key reused with different content is a 409"
     );
     assert_eq!(
-        catalog.list(&ctx, ListQuery::default()).await.expect("list after mismatch").len(),
+        catalog
+            .list(&ctx, ListQuery::default())
+            .await
+            .expect("list after mismatch")
+            .len(),
         1,
         "the rejected mismatch did not insert"
     );
@@ -389,7 +428,11 @@ async fn live_catalog_list_search_order_paginate() {
         )
         .await
         .expect("search list");
-    assert_eq!(names(&found), ["avocado"], "search matches a substring, case-insensitively");
+    assert_eq!(
+        names(&found),
+        ["avocado"],
+        "search matches a substring, case-insensitively"
+    );
 
     // PAGINATION: page_size 2, ordered by name.
     let page0 = catalog
