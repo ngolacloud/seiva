@@ -49,7 +49,7 @@ produz `orders.placed`, depois `inventory.reserved`, depois `payments.captured`,
 depois `notifications.sent` — por ordem, com nada emitido quando um passo falha
 (uma encomenda sem stock nunca chega a `payments`).
 
-## Funções de aptidão de arquitectura
+## Funções de fitness de arquitectura
 
 `seiva lint` corre os invariantes que impedem cinco módulos de silenciosamente
 ganharem dependências uns dos outros:
