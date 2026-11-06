@@ -552,3 +552,117 @@ body,
 [data-md-color-scheme="slate"] .md-typeset .highlight .nc {
   color: #c4b5fd;
 }
+
+/* =============================================================================
+ * DJANGO-STYLE CHROME (override block)
+ * -----------------------------------------------------------------------------
+ * Requested 2026-11-06: move the chrome toward the djangoproject.com docs look
+ * — a green header bar, green links, a "You are here" breadcrumb strip — while
+ * keeping both side panels (left nav + right "In this document" TOC).
+ *
+ * This is an OVERRIDE layer at the end of the cascade so it is trivial to drop:
+ * delete from this banner to EOF to return to the petrol/indigo identity above.
+ *
+ *   django-green        #0C4B33  header / footer bar
+ *   django-green-mid    #20AA76  links / accents / active nav (light)
+ *   django-green-light  #44B78B  links / accents (dark)
+ * ========================================================================== */
+
+:root {
+  --dj-green: #0C4B33;
+  --dj-green-deep: #093826;
+  --dj-green-mid: #20AA76;
+  --dj-green-light: #44B78B;
+}
+
+/* Header + footer bar → Django dark green, in both schemes. */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: #0C4B33;
+  --md-primary-fg-color--light: #20AA76;
+  --md-primary-fg-color--dark: #093826;
+}
+.md-header,
+.md-tabs {
+  background-color: var(--dj-green);
+}
+.md-footer {
+  background-color: var(--dj-green);
+}
+.md-footer-meta {
+  background-color: var(--dj-green-deep);
+}
+
+/* Links / accents → Django green (light) and the lighter green (dark). */
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: #20AA76;
+  --md-accent-fg-color--transparent: rgba(32, 170, 118, 0.1);
+}
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: #0C4B33;
+}
+[data-md-color-scheme="default"] .md-typeset a:hover {
+  color: var(--dj-green-mid);
+}
+[data-md-color-scheme="slate"] {
+  --md-typeset-a-color: #44B78B;
+}
+
+/* Headings pick up the Django green accent (light scheme). */
+[data-md-color-scheme="default"] .md-typeset h1,
+[data-md-color-scheme="default"] .md-typeset h2 {
+  color: var(--dj-green);
+}
+[data-md-color-scheme="slate"] .md-typeset h1,
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  color: var(--dj-green-light);
+}
+
+/* Left-nav active item + section labels → Django green. */
+[data-md-color-scheme="default"] .md-nav__link--active,
+[data-md-color-scheme="default"] .md-nav__item--section > .md-nav__link {
+  color: var(--dj-green-mid);
+}
+
+/* "You are here" breadcrumb strip (navigation.path) — Django's doc sub-header:
+   a pale band with a label, sitting above the page title. */
+.md-path {
+  margin: 0;
+  padding: 0.55rem 0.8rem;
+  background-color: #eef5f1;
+  border-bottom: 1px solid rgba(12, 75, 51, 0.16);
+  font-size: 0.68rem;
+}
+.md-path__list {
+  max-width: 100%;
+  margin: 0 auto;
+}
+.md-path::before {
+  content: "You are here: ";
+  opacity: 0.7;
+}
+.md-path__link {
+  color: var(--dj-green);
+}
+[data-md-color-scheme="slate"] .md-path {
+  background-color: #10211a;
+  border-bottom-color: rgba(68, 183, 139, 0.22);
+}
+[data-md-color-scheme="slate"] .md-path__link {
+  color: var(--dj-green-light);
+}
+
+/* Right-hand "In this document" box title in Django green. */
+[data-md-color-scheme="default"] .md-nav--secondary > .md-nav__title {
+  color: var(--dj-green);
+}
+
+/* Admonition accents re-tinted to the green family (the generic note box). */
+.md-typeset .admonition,
+.md-typeset details {
+  border-left-color: var(--dj-green-mid);
+}
+
+/* Localized "you are here" label (the i18n plugin sets <html lang>). */
+html[lang="pt"] .md-path::before {
+  content: "Estás aqui: ";
+}

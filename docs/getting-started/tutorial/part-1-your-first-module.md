@@ -80,6 +80,38 @@ the module into the composition root (its router is merged and its deps added):
 The compiler enforces the dependency direction, so the architecture cannot rot
 (see [Architecture](../../architecture.md)).
 
+## The project layout
+
+After scaffolding the project and adding the module, your workspace looks like
+this:
+
+```text
+polls-site/
+├── Cargo.toml                   # the cargo workspace
+├── seiva.toml                   # project configuration
+├── apps/
+│   └── polls-site-api/          # the composition root (the binary)
+│       └── src/main.rs
+├── shared/
+│   └── kernel/                  # the shared kernel (ids, errors, time)
+├── modules/
+│   └── polls/                   # your module — five layers, one crate each
+│       ├── facade/              #   the versioned contract + wire DTOs
+│       ├── domain/              #   entities (Question, Choice) and rules
+│       ├── application/         #   use cases over ports (transport/DB-free)
+│       ├── infrastructure/      #   adapters (in-memory now, DORM in Part 3)
+│       └── interface/           #   the controller + the module's OpenAPI
+├── schema/
+│   └── polls-site.schema        # the DORM schema (Part 3)
+├── Delonixfile                  # the distroless image (Part 6)
+└── compose.yaml                 # local run (Part 6)
+```
+
+Everything under `modules/` is yours; `apps/polls-site-api` is the thin root that
+composes the modules into one binary. Adding another module with
+`seiva module new <name>` creates another `modules/<name>/` and wires it in — the
+project grows by *adding* folders, never by editing a central registry.
+
 ## The contract you are building
 
 By the end of the tutorial the `polls` facade reads like this (the full file is
