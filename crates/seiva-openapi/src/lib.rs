@@ -188,16 +188,22 @@ pub fn openapi_document(info: ApiInfo, facades: &[FacadeDescriptor]) -> Value {
     serde_json::to_value(&document).expect("the typed OpenAPI model always serialises to JSON")
 }
 
-/// The resource segment for a facade: its name lowercased, then pluralised by
-/// appending `s` unless it already ends in `s`.
+/// The resource segment for a facade: its name lowercased, then pluralised.
 ///
-/// The rule is deliberately naive — it is a path convention, not a linguistics
-/// engine. `Notes` → `notes` (already ends in `s`); `Account` → `accounts`;
-/// `Invoice` → `invoices`.
+/// A path convention, not a linguistics engine, but it must match the route the
+/// `#[seiva::controller]` macro generates: a name already ending in `s` is taken
+/// as plural (`Notes` → `notes`), a consonant + `y` becomes `ies` (`Inventory` →
+/// `inventories`), otherwise `s` is appended (`Account` → `accounts`).
 pub fn resource_of(facade_name: &str) -> String {
     let lower = facade_name.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
     if lower.ends_with('s') {
         lower
+    } else if lower.ends_with('y')
+        && bytes.len() >= 2
+        && !matches!(bytes[bytes.len() - 2], b'a' | b'e' | b'i' | b'o' | b'u')
+    {
+        format!("{}ies", &lower[..lower.len() - 1])
     } else {
         format!("{lower}s")
     }
@@ -851,9 +857,12 @@ mod tests {
     }
 
     #[test]
-    fn resource_pluralisation_follows_the_naive_rule() {
-        assert_eq!(resource_of("Notes"), "notes");
-        assert_eq!(resource_of("Account"), "accounts");
-        assert_eq!(resource_of("Invoice"), "invoices");
+    fn resource_pluralisation_follows_the_rule() {
+        assert_eq!(resource_of("Notes"), "notes"); // already plural
+        assert_eq!(resource_of("Account"), "accounts"); // + s
+        assert_eq!(resource_of("Invoice"), "invoices"); // + s
+        assert_eq!(resource_of("Inventory"), "inventories"); // consonant + y → ies
+        assert_eq!(resource_of("Category"), "categories");
+        assert_eq!(resource_of("Day"), "days"); // vowel + y → + s
     }
 }
