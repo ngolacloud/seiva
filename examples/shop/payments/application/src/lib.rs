@@ -42,8 +42,8 @@ pub struct PaymentsService<R, G, U, E> {
 
 fn to_payment_dto(p: Payment) -> PaymentDto {
     PaymentDto {
-        id: p.id,
-        order_id: p.order_id,
+        id: p.id.to_string(),
+        order_id: p.order_id.to_string(),
         amount_cents: p.amount_cents,
         status: p.status,
     }
@@ -58,16 +58,20 @@ where
 {
     async fn charge_an_order(&self, cmd: Charge) -> PortResult<PaymentDto> {
         let id = u128::from_be_bytes(self.ids.new_id().0);
+        let order_id: u128 = cmd
+            .order_id
+            .parse()
+            .map_err(|_| BoxError::from("order_id must be an integer"))?;
 
         // The demo policy: a zero amount is declined, anything else captured.
         let (payment, topic) = if cmd.amount_cents == 0 {
             (
-                Payment::declined(id, cmd.order_id, cmd.amount_cents),
+                Payment::declined(id, order_id, cmd.amount_cents),
                 "payments.declined",
             )
         } else {
             let captured =
-                Payment::captured(id, cmd.order_id, cmd.amount_cents).map_err(BoxError::from)?;
+                Payment::captured(id, order_id, cmd.amount_cents).map_err(BoxError::from)?;
             (captured, "payments.captured")
         };
 
@@ -166,13 +170,20 @@ mod tests {
 
         let p = svc
             .charge(Charge {
-                order_id: 7,
+                order_id: "7".into(),
                 amount_cents: 2500,
             })
             .await
             .unwrap();
         assert_eq!(p.status, "captured");
-        assert_eq!(svc.get(PaymentId { id: p.id }).await.unwrap(), p);
+        assert_eq!(
+            svc.get(PaymentId {
+                id: p.id.parse().unwrap()
+            })
+            .await
+            .unwrap(),
+            p
+        );
 
         assert_eq!(svc.uow.outcomes(), [TxOutcome::Committed]);
         assert_eq!(svc.events.topics(), ["payments.captured"]);
@@ -184,7 +195,7 @@ mod tests {
 
         let p = svc
             .charge(Charge {
-                order_id: 7,
+                order_id: "7".into(),
                 amount_cents: 0,
             })
             .await

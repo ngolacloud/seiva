@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// Command DTO: receive stock for a product (a delivery arriving).
 #[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]
 pub struct ReceiveStock {
-    pub product_id: u128,
+    pub product_id: String,
     pub qty: u64,
 }
 
@@ -36,7 +36,7 @@ impl Validate for ReceiveStock {
 /// Command DTO: reserve stock for a product (an order claiming units).
 #[derive(Debug, Clone, Deserialize, Serialize, WireSchema)]
 pub struct Reserve {
-    pub product_id: u128,
+    pub product_id: String,
     pub qty: u64,
 }
 
@@ -65,7 +65,7 @@ impl Validate for ProductId {
 /// Response DTO: the stock on hand for a product. Never a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct StockDto {
-    pub product_id: u128,
+    pub product_id: String,
     pub available: u64,
 }
 

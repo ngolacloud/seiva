@@ -220,7 +220,7 @@ mod tests {
         let response = app.clone().oneshot(add).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let created = json_body(response.into_body()).await;
-        let id = created["id"].as_u64().unwrap();
+        let id = created["id"].as_str().unwrap();
 
         let get = Request::builder()
             .method("GET")

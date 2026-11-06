@@ -44,9 +44,11 @@ async fn full_flow_over_the_real_in_memory_adapter() {
     // The index view reads back the real stored state.
     assert_eq!(svc.list().await.expect("list").len(), 2);
     assert_eq!(
-        svc.get(ProductId { id: teapot.id })
-            .await
-            .expect("get teapot"),
+        svc.get(ProductId {
+            id: teapot.id.parse().unwrap()
+        })
+        .await
+        .expect("get teapot"),
         teapot
     );
 

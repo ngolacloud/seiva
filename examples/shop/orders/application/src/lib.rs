@@ -40,14 +40,14 @@ pub struct OrdersService<R, G, U, E> {
 
 fn to_line_dto(l: &Line) -> LineDto {
     LineDto {
-        product_id: l.product_id,
+        product_id: l.product_id.to_string(),
         qty: l.qty,
     }
 }
 
 fn to_order_dto(o: Order) -> OrderDto {
     OrderDto {
-        id: o.id,
+        id: o.id.to_string(),
         customer: o.customer,
         lines: o.lines.iter().map(to_line_dto).collect(),
         status: o.status,
@@ -66,11 +66,17 @@ where
         let lines = cmd
             .lines
             .into_iter()
-            .map(|l| Line {
-                product_id: l.product_id,
-                qty: l.qty,
+            .map(|l| {
+                let product_id: u128 = l
+                    .product_id
+                    .parse()
+                    .map_err(|_| BoxError::from("product_id must be an integer"))?;
+                Ok(Line {
+                    product_id,
+                    qty: l.qty,
+                })
             })
-            .collect();
+            .collect::<PortResult<Vec<Line>>>()?;
         let order = Order::new(id, cmd.customer, lines).map_err(BoxError::from)?;
 
         let event = serde_json::to_vec(&serde_json::json!({
@@ -183,8 +189,11 @@ mod tests {
         }
     }
 
-    fn line(product_id: u128, qty: u64) -> LineDto {
-        LineDto { product_id, qty }
+    fn line(product_id: &str, qty: u64) -> LineDto {
+        LineDto {
+            product_id: product_id.into(),
+            qty,
+        }
     }
 
     #[tokio::test]
@@ -194,15 +203,22 @@ mod tests {
         let o = svc
             .place(PlaceOrder {
                 customer: "Ada".into(),
-                lines: vec![line(10, 2), line(11, 1)],
+                lines: vec![line("10", 2), line("11", 1)],
             })
             .await
             .unwrap();
-        assert_eq!(o.id, 1);
+        assert_eq!(o.id, "1");
         assert_eq!(o.status, "placed");
         assert_eq!(o.lines.len(), 2);
 
-        assert_eq!(svc.get(OrderId { id: o.id }).await.unwrap(), o);
+        assert_eq!(
+            svc.get(OrderId {
+                id: o.id.parse().unwrap()
+            })
+            .await
+            .unwrap(),
+            o
+        );
         assert_eq!(svc.list().await.unwrap(), vec![o]);
 
         assert_eq!(svc.uow.outcomes(), [TxOutcome::Committed]);

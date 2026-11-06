@@ -160,7 +160,7 @@ mod tests {
             .method("POST")
             .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
-            .body(Body::from(r#"{"product_id":42,"qty":10}"#))
+            .body(Body::from(r#"{"product_id":"42","qty":10}"#))
             .unwrap();
 
         let response = demo_router().oneshot(request).await.unwrap();
@@ -179,7 +179,7 @@ mod tests {
             .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
             .extension(Principal::new("mgr", ["inventory.manage"]))
-            .body(Body::from(r#"{"product_id":42,"qty":0}"#))
+            .body(Body::from(r#"{"product_id":"42","qty":0}"#))
             .unwrap();
 
         let response = demo_router().oneshot(request).await.unwrap();
@@ -196,7 +196,7 @@ mod tests {
             .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
             .extension(Principal::new("mgr", ["inventory.manage"]))
-            .body(Body::from(r#"{"product_id":42,"qty":10}"#))
+            .body(Body::from(r#"{"product_id":"42","qty":10}"#))
             .unwrap();
         assert_eq!(
             app.clone().oneshot(receive).await.unwrap().status(),
@@ -208,7 +208,7 @@ mod tests {
             .uri("/v1/inventories/reserve")
             .header("content-type", "application/json")
             .extension(Principal::new("mgr", ["inventory.manage"]))
-            .body(Body::from(r#"{"product_id":42,"qty":4}"#))
+            .body(Body::from(r#"{"product_id":"42","qty":4}"#))
             .unwrap();
         assert_eq!(
             app.clone().oneshot(reserve).await.unwrap().status(),

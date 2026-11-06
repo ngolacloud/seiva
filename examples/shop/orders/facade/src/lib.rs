@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// A single line of an order: a quantity of one product.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct LineDto {
-    pub product_id: u128,
+    pub product_id: String,
     pub qty: u64,
 }
 
@@ -57,7 +57,7 @@ pub struct OrderId {
 /// Response DTO for an order. Never a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct OrderDto {
-    pub id: u128,
+    pub id: String,
     pub customer: String,
     pub lines: Vec<LineDto>,
     pub status: String,

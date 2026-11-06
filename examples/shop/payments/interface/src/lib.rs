@@ -155,7 +155,7 @@ mod tests {
             .method("POST")
             .uri("/v1/payments/charge")
             .header("content-type", "application/json")
-            .body(Body::from(r#"{"order_id":7,"amount_cents":2500}"#))
+            .body(Body::from(r#"{"order_id":"7","amount_cents":2500}"#))
             .unwrap();
 
         let response = demo_router().oneshot(request).await.unwrap();
@@ -173,13 +173,13 @@ mod tests {
             .uri("/v1/payments/charge")
             .header("content-type", "application/json")
             .extension(Principal::new("biller", ["payments.charge"]))
-            .body(Body::from(r#"{"order_id":7,"amount_cents":2500}"#))
+            .body(Body::from(r#"{"order_id":"7","amount_cents":2500}"#))
             .unwrap();
         let response = app.clone().oneshot(charge).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let created = json_body(response.into_body()).await;
         assert_eq!(created["status"], "captured");
-        let id = created["id"].as_u64().unwrap();
+        let id = created["id"].as_str().unwrap();
 
         let get = Request::builder()
             .method("GET")

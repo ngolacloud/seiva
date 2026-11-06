@@ -11,14 +11,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 5173);
 const TYPES = { ".html": "text/html", ".js": "text/javascript" };
 
+async function send(res, file, type) {
+  const body = await readFile(file);
+  res.writeHead(200, { "content-type": type });
+  res.end(body);
+}
+
 createServer(async (req, res) => {
   const path = req.url === "/" || !req.url ? "/index.html" : req.url.split("?")[0];
-  const file = join(here, path === "/app.js" ? "dist/app.js" : path.replace(/^\//, ""));
   try {
-    const body = await readFile(file);
+    if (path === "/app.js") return await send(res, join(here, "dist/app.js"), TYPES[".js"]);
     const ext = path.slice(path.lastIndexOf("."));
-    res.writeHead(200, { "content-type": TYPES[ext] || "application/octet-stream" });
-    res.end(body);
+    if (TYPES[ext]) return await send(res, join(here, path.replace(/^\//, "")), TYPES[ext]);
+    // No extension → a client-side route (History API); serve the SPA shell so
+    // deep links like /product/1 load and the dxjs router resolves them.
+    return await send(res, join(here, "index.html"), TYPES[".html"]);
   } catch {
     res.writeHead(404);
     res.end("not found");

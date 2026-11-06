@@ -159,7 +159,7 @@ mod tests {
             .uri("/v1/orders/place")
             .header("content-type", "application/json")
             .body(Body::from(
-                r#"{"customer":"Ada","lines":[{"product_id":10,"qty":2}]}"#,
+                r#"{"customer":"Ada","lines":[{"product_id":"10","qty":2}]}"#,
             ))
             .unwrap();
 
@@ -194,13 +194,13 @@ mod tests {
             .header("content-type", "application/json")
             .extension(Principal::new("mgr", ["orders.manage"]))
             .body(Body::from(
-                r#"{"customer":"Ada","lines":[{"product_id":10,"qty":2}]}"#,
+                r#"{"customer":"Ada","lines":[{"product_id":"10","qty":2}]}"#,
             ))
             .unwrap();
         let response = app.clone().oneshot(place).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let created = json_body(response.into_body()).await;
-        let id = created["id"].as_u64().unwrap();
+        let id = created["id"].as_str().unwrap();
 
         let get = Request::builder()
             .method("GET")

@@ -50,7 +50,7 @@ pub struct ProductId {
 /// Response DTO for a product. Never a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct ProductDto {
-    pub id: u128,
+    pub id: String,
     pub name: String,
     pub price_cents: u64,
 }

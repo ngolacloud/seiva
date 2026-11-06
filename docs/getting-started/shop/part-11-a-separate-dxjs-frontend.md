@@ -107,6 +107,40 @@ API and rendered by dxjs; you can add a product and place an order.
 
 ![The dxjs storefront rendering the shop catalogue over CORS](img/storefront.png)
 
+## Client-side routing
+
+A storefront has more than one screen. `@dxjs/component` ships a small History-API
+router; the storefront uses it for a catalogue view (`/`) and a product-detail view
+(`/product/:id`), swapping the mounted component in an outlet on navigation:
+
+```ts
+import { createRouter } from "@dxjs/component";
+
+const router = createRouter(
+  [
+    { path: "/", component: Catalogue },
+    { path: "/product/:id", component: ProductView }, // ctx.params.id
+  ],
+  { fallback: "/" },
+);
+router.outlet(document.querySelector("#app")!);
+```
+
+Clicking a product calls `router.navigate("/product/" + id)`; the detail view reads
+`ctx.params.id`, fetches `GET /v1/catalogs/{id}` and renders it:
+
+![The product-detail view, reached through the dxjs router](img/storefront-detail.png)
+
+!!! note "Ids cross the wire as strings"
+    A product id is a 128-bit value — larger than JavaScript's safe integer range
+    (2⁵³). The shop's DTOs therefore serialize ids as **JSON strings**, so the
+    browser keeps them intact and a deep link like `/product/1794005853720908638`
+    resolves exactly. (The URL path parameter is still parsed as a `u128`
+    server-side.)
+
+Serving the SPA, the static server falls back to `index.html` for extension-less
+paths so a deep link into `/product/:id` loads and the router resolves it.
+
 ## Live-reload, both sides
 
 `seiva start --watch` reloads the API on save; `node --watch` reloads the SPA. Edit

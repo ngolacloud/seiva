@@ -109,6 +109,40 @@ renderizado pelo dxjs; podes adicionar um produto e colocar uma encomenda.
 
 ![A montra dxjs a renderizar o catálogo da loja via CORS](img/storefront.png)
 
+## Routing no cliente
+
+Uma montra tem mais do que um ecrã. O `@dxjs/component` traz um pequeno router de
+History-API; a montra usa-o para uma vista de catálogo (`/`) e uma vista de detalhe
+de produto (`/product/:id`), trocando o componente montado num outlet ao navegar:
+
+```ts
+import { createRouter } from "@dxjs/component";
+
+const router = createRouter(
+  [
+    { path: "/", component: Catalogue },
+    { path: "/product/:id", component: ProductView }, // ctx.params.id
+  ],
+  { fallback: "/" },
+);
+router.outlet(document.querySelector("#app")!);
+```
+
+Clicar num produto chama `router.navigate("/product/" + id)`; a vista de detalhe lê
+`ctx.params.id`, busca `GET /v1/catalogs/{id}` e renderiza-o:
+
+![A vista de detalhe do produto, alcançada pelo router do dxjs](img/storefront-detail.png)
+
+!!! note "Os ids viajam no fio como strings"
+    Um id de produto é um valor de 128 bits — maior do que o inteiro seguro do
+    JavaScript (2⁵³). Por isso os DTOs da loja serializam os ids como **strings
+    JSON**, para o browser os manter intactos e um deep link como
+    `/product/1794005853720908638` resolver exactamente. (O parâmetro de caminho do
+    URL continua a ser parseado como `u128` no servidor.)
+
+A servir a SPA, o servidor estático faz fallback para `index.html` em caminhos sem
+extensão, para um deep link em `/product/:id` carregar e o router o resolver.
+
 ## Live-reload, dos dois lados
 
 `seiva start --watch` recarrega a API ao gravar; `node --watch` recarrega a SPA.
