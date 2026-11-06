@@ -130,19 +130,22 @@ secções se encaixam.)
 
 ## As camadas (guias temáticos)
 
-| Preocupação | Tema do Seiva |
+Um guia por preocupação que um backend tem de resolver:
+
+| O que precisas | Guia |
 | --- | --- |
-| A camada de modelo | [A camada de dados (DORM)](topics/data-layer/index.md) |
-| A camada de vista | [A camada de transporte](topics/transport/index.md) |
-| Formulários | [Validação e DTOs](topics/validation.md) |
-| A camada de template | [Documentos da API (OpenAPI / UI de docs / proto)](topics/api-documents.md) |
-| Sistema de auth | [Autenticação](topics/authentication.md) · [Autorização](topics/authorization.md) |
-| Segurança | [Segurança](topics/security.md) |
-| Logging | [Observabilidade](topics/observability.md) |
-| Sinais / tarefas | [Mensagens & eventos](topics/messaging-and-events.md) · [Workers de fundo](topics/background-workers.md) |
-| Testes | [Testes](topics/testing.md) |
-| Definições | [Configuração](topics/configuration.md) |
-| Desempenho | [Desempenho & cloud-native](topics/performance.md) |
+| Guardar e consultar dados | [A camada de dados (DORM)](topics/data-layer/index.md) |
+| Expor HTTP & gRPC | [A camada de transporte](topics/transport/index.md) |
+| Validar dados de entrada | [Validação e DTOs](topics/validation.md) |
+| Documentar a API | [Documentos da API (OpenAPI / UI de docs / proto)](topics/api-documents.md) |
+| Autenticar & autorizar | [Autenticação](topics/authentication.md) · [Autorização](topics/authorization.md) |
+| Endurecer por omissão | [Segurança](topics/security.md) |
+| Ver o que se passa | [Observabilidade](topics/observability.md) |
+| Reagir a eventos & correr trabalho | [Mensagens & eventos](topics/messaging-and-events.md) · [Workers em segundo plano](topics/background-workers.md) |
+| Separar leituras de escritas | [Despacho CQRS](topics/cqrs.md) |
+| Testar sem servidor nem BD | [Testes](topics/testing.md) |
+| Configurar para produção | [Configuração](topics/configuration.md) |
+| Correr rápido & cloud-native | [Desempenho & cloud-native](topics/performance.md) |
 
 ## Referência
 

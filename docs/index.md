@@ -125,19 +125,22 @@ together.)
 
 ## The layers (topic guides)
 
-| Concern | Seiva topic |
+One guide per concern a backend has to solve:
+
+| What you need | Guide |
 | --- | --- |
-| The model layer | [The data layer (DORM)](topics/data-layer/index.md) |
-| The view layer | [The transport layer](topics/transport/index.md) |
-| Forms | [Validation and DTOs](topics/validation.md) |
-| The template layer | [API documents (OpenAPI / docs UI / proto)](topics/api-documents.md) |
-| Auth system | [Authentication](topics/authentication.md) · [Authorization](topics/authorization.md) |
-| Security | [Security](topics/security.md) |
-| Logging | [Observability](topics/observability.md) |
-| Signals / tasks | [Messaging & events](topics/messaging-and-events.md) · [Background workers](topics/background-workers.md) |
-| Testing | [Testing](topics/testing.md) |
-| Settings | [Configuration](topics/configuration.md) |
-| Performance | [Performance & cloud-native](topics/performance.md) |
+| Store and query data | [The data layer (DORM)](topics/data-layer/index.md) |
+| Expose HTTP & gRPC | [The transport layer](topics/transport/index.md) |
+| Validate incoming data | [Validation and DTOs](topics/validation.md) |
+| Document the API | [API documents (OpenAPI / docs UI / proto)](topics/api-documents.md) |
+| Authenticate & authorize | [Authentication](topics/authentication.md) · [Authorization](topics/authorization.md) |
+| Harden by default | [Security](topics/security.md) |
+| See what's happening | [Observability](topics/observability.md) |
+| React to events & run work | [Messaging & events](topics/messaging-and-events.md) · [Background workers](topics/background-workers.md) |
+| Separate reads from writes | [CQRS dispatch](topics/cqrs.md) |
+| Test without a server or DB | [Testing](topics/testing.md) |
+| Configure for production | [Configuration](topics/configuration.md) |
+| Run fast & cloud-native | [Performance & cloud-native](topics/performance.md) |
 
 ## Reference
 
