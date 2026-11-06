@@ -49,6 +49,9 @@ theme:
 extra_css:
   - stylesheets/seiva.css
 
+extra_javascript:
+  - javascripts/search-shortcut.js
+
 markdown_extensions:
   - admonition
   - attr_list
@@ -86,6 +89,91 @@ plugins:
         - locale: pt
           name: Português (Angola)
           build: true
+          # Translate the nav section/page titles (they come from mkdocs.yml, not
+          # from the page files, so i18n cannot translate them automatically).
+          nav_translations:
+            Home: Início
+            Getting started: Começar
+            Seiva at a glance: Seiva num relance
+            Quick install: Instalação rápida
+            Quickstart: Arranque rápido
+            Coming from a dynamic framework: Vindo de uma framework dinâmica
+            Your first day: O teu primeiro dia
+            Tutorial: Tutorial
+            What to read next: O que ler a seguir
+            Topic guides: Guias temáticos
+            The data layer: A camada de dados
+            Models and schema: Modelos e schema
+            Making queries: Fazer consultas
+            Migrations: Migrações
+            Transactions: Transacções
+            Raw SQL: SQL cru
+            Multiple databases: Múltiplas bases de dados
+            The transport layer: A camada de transporte
+            Application and composition: Aplicação e composição
+            Controllers and routing: Controladores e rotas
+            Facades, the contract: Fachadas, o contrato
+            Middleware layers: Camadas de middleware
+            Requests and responses: Pedidos e respostas
+            API documents: Documentos de API
+            Validation and DTOs: Validação e DTOs
+            Authentication: Autenticação
+            Authorization: Autorização
+            Security: Segurança
+            Observability: Observabilidade
+            Messaging and events: Mensagens e eventos
+            Background workers: Workers em segundo plano
+            CQRS dispatch: Despacho CQRS
+            Caching: Cache
+            Pagination: Paginação
+            Sending email: Enviar email
+            Sessions: Sessões
+            Serialization: Serialização
+            Configuration: Configuração
+            Testing: Testes
+            Performance and cloud-native: Desempenho e cloud-native
+            LLVM release profile: Perfil de release LLVM
+            Production-path load: Carga no caminho de produção
+            Admin console migration: Migração da consola de admin
+            DORM (the data layer): DORM (a camada de dados)
+            Schema and models: Schema e modelos
+            Relations: Relações
+            Backends: Backends
+            CLI and Studio: CLI e Studio
+            Using DORM from Seiva: Usar o DORM a partir do Seiva
+            dx (the package manager): dx (o gestor de pacotes)
+            Package management: Gestão de pacotes
+            dx vs Cargo: dx vs Cargo
+            Using dx with Seiva: Usar o dx com o Seiva
+            Reference: Referência
+            The seiva CLI: O CLI seiva
+            Settings and environment: Definições e ambiente
+            Contract descriptor: Descritor do contrato
+            Wire schema: Wire schema
+            The crates: Os crates
+            How-to guides: Guias how-to
+            Add a module: Adicionar um módulo
+            Add authentication: Adicionar autenticação
+            Switch to DORM: Mudar para o DORM
+            Deploy distroless: Fazer deploy distroless
+            Publish the crates: Publicar os crates
+            Write a fitness function: Escrever uma função de fitness
+            FAQ: FAQ
+            Glossary: Glossário
+            Release notes: Notas de release
+            Engineering log: Registo de engenharia
+            Roadmap: Roadmap
+            Benchmarks: Benchmarks
+            Competitive landscape: Panorama competitivo
+            Publishing status: Estado de publicação
+            Internals: Interioridades
+            Architecture: Arquitectura
+            The contract and the macros: O contrato e as macros
+            Evolution evidence: Evidência de evolução
+            Release process: Processo de release
+            Contributing: Contribuir
+            Documentation structure: Estrutura da documentação
+            ADRs: ADRs
 
 nav:
   - Home: index.md

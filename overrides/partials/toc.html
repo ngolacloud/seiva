@@ -7,6 +7,9 @@
   Material's scroll-spy and anchor behaviour.
 -#}
 {% set title = "In this document" %}
+{% if config.theme.language == "pt" %}
+  {% set title = "Neste documento" %}
+{% endif %}
 {% if config.mdx_configs.toc and config.mdx_configs.toc.title %}
   {% set title = config.mdx_configs.toc.title %}
 {% endif %}
