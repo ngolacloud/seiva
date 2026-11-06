@@ -26,6 +26,7 @@ microservice:
 5. [Testing your module](tutorial/part-5-testing.md) — fakes, controller tests, fitness functions
 6. [Packaging and deployment](tutorial/part-6-packaging-and-deploy.md) — distroless, non-root, `/health/ready`
 7. [From monolith to microservice](tutorial/part-7-monolith-to-microservice.md) — `seiva module split`, the same code standalone
+8. [A browser frontend with dxjs](tutorial/part-8-a-dxjs-frontend.md) — a CSP-safe reactive UI consuming the polls API
 
 ## Where to next
 
