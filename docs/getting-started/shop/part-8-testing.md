@@ -1,4 +1,4 @@
-# Part 6: Testing the shop
+# Part 8: Testing the shop
 
 Five modules, and the whole thing still tests without a server or a database. The
 shop's modules code against ports, so their use cases run against in-memory fakes
@@ -65,7 +65,7 @@ Part 2 is enforced, not hoped for.
 
 ## Next
 
-[Part 7: Monolith to microservices](part-7-monolith-to-microservices.md).
+[Part 9: Monolith to microservices](part-9-monolith-to-microservices.md).
 
 ---
 

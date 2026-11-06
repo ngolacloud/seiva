@@ -19,7 +19,7 @@ binário e as suas bibliotecas de runtime, sem shell, sem gestor de pacotes, a c
 como uid 65532. Implementar é "copiar um binário", não "entregar um runtime
 Python/Node e a sua árvore de dependências". Imagem mais pequena, superfície de
 ataque menor, arranque a frio mais rápido. Ver
-[tutorial parte 6](../getting-started/shop/part-7-monolith-to-microservices.md).
+[tutorial parte 6](../getting-started/shop/part-9-monolith-to-microservices.md).
 
 ## Prontidão e drenagem graciosa
 

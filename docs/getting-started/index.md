@@ -25,9 +25,12 @@ The modules cooperate through **events**, not calls.
 3. [Events between modules](shop/part-3-events-between-modules.md) — the order flow, wired by events
 4. [The data layer](shop/part-4-the-data-layer.md) — real tables per module with DORM
 5. [Authorization across modules](shop/part-5-authorization.md) — who may do what, enforced by the contract
-6. [Testing the shop](shop/part-6-testing.md) — fakes, the event flow, fitness functions
-7. [Monolith to microservices](shop/part-7-monolith-to-microservices.md) — split `payments` + `notifications`, the same code
-8. [A browser frontend with dxjs](shop/part-8-a-dxjs-frontend.md) — a CSP-safe storefront consuming the shop API
+6. [CQRS](shop/part-6-cqrs.md) — separate reads from writes with `seiva-cqrs`
+7. [Auto-generated API docs & Swagger](shop/part-7-api-docs-and-swagger.md) — every flow documented, no spec written
+8. [Testing the shop](shop/part-8-testing.md) — fakes, the event flow, fitness functions
+9. [Monolith to microservices](shop/part-9-monolith-to-microservices.md) — split `payments` + `notifications`, the same code
+10. [An admin console](shop/part-10-admin-console.md) — `seiva-console-admin` as an extension, no frontend written
+11. [A separate dxjs frontend, over CORS](shop/part-11-a-separate-dxjs-frontend.md) — a decoupled storefront on its own origin
 
 ## Where to next
 

@@ -1,4 +1,4 @@
-# Part 7: Monolith to microservices
+# Part 9: Monolith to microservices
 
 The shop has shipped as one binary. Now two concerns need to move out on their
 own: **payments** must run in an isolated deployment (its own secrets, its own
@@ -48,15 +48,13 @@ module has a *reason* to move: isolation (payments), independent scaling
 decision because the boundary is real from day one; splitting is cheap precisely
 because you did not have to predict it.
 
-## You built a shop
+The shop now runs as a modular monolith and, where it earns its keep, as a fleet of
+services — the same code, a deployment knob. Two parts remain: giving the back
+office a UI with no frontend code, and a customer-facing SPA on its own origin.
 
-From `seiva project new` to a five-module shop that runs as a modular monolith and
-then as a fleet of services — the same code, a deployment knob. Where next:
+## Next
 
-- The [topic guides](../../topics/index.md) for depth on each layer.
-- The [DORM section](../../dorm/index.md) and the [dx section](../../dx/index.md).
-- The [competitive landscape](../../competitive-landscape.md) for where Seiva
-  stands against other stacks.
+[Part 10: An admin console, with no frontend written](part-10-admin-console.md).
 
 ---
 

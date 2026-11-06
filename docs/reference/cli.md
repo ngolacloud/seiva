@@ -139,7 +139,7 @@ $ seiva module merge polls            # fold it back: removes the service, reset
 ```
 
 See the tutorial's
-[monolith → microservice](../getting-started/shop/part-7-monolith-to-microservices.md).
+[monolith → microservice](../getting-started/shop/part-9-monolith-to-microservices.md).
 
 ## 8. Add an optional extension — `seiva ext add <name>`
 
