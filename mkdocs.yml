@@ -1,8 +1,8 @@
 site_name: Delonix Seiva
 site_url: https://ngolacloud.github.io/seiva/
 site_description: >-
-  A Rust backend framework for robust, high-criticality systems — the
-  ergonomics of FastAPI and the batteries of Django, as one compiled binary.
+  A Rust backend framework for robust, high-criticality systems — ergonomic and
+  batteries-included, as one compiled, no-GC binary.
 repo_url: https://github.com/ngolacloud/seiva
 repo_name: ngolacloud/seiva
 docs_dir: docs
