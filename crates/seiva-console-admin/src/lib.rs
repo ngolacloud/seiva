@@ -57,9 +57,9 @@
 use std::sync::OnceLock;
 
 use axum::extract::FromRequestParts;
-use axum::http::header::CONTENT_SECURITY_POLICY;
+use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE};
 use axum::http::request::Parts;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -77,6 +77,14 @@ pub const ADMIN_PATH: &str = "/admin";
 /// decide which resources to show. Mounted alongside [`ADMIN_PATH`] by
 /// [`admin_router`].
 pub const REGISTRY_PATH: &str = "/admin/registry.json";
+
+/// The opt-in dxjs console page (ADR 0016). Served only when a composition root
+/// calls [`mount_dx`]; the default [`ADMIN_PATH`] is the inline hash-pinned page.
+pub const ADMIN_DX_PATH: &str = "/admin/dx";
+
+/// The vendored dxjs bundle served to the [`ADMIN_DX_PATH`] page as an external
+/// same-origin module (so its `script-src` is `'self'`, not a per-byte hash).
+pub const ADMIN_DX_JS_PATH: &str = "/admin/dx.js";
 
 /// The console's stylesheet — the exact bytes that go between `<style>` and
 /// `</style>`, so the CSP's `style-src` hash is computed over this verbatim.
@@ -615,6 +623,80 @@ pub fn mount(router: Router) -> Router {
     router.merge(admin_router())
 }
 
+// --- ADR 0016: the opt-in dxjs console -----------------------------------
+
+/// The vendored dxjs console bundle, built from `examples/seiva-console` in the
+/// dxjs repo (`github.com/ngolacloud/dxjs`) and checked in here. Embedded with
+/// `include_str!` so the bytes served are exactly the committed artifact (ADR
+/// 0016 drift guard). Rebuild + re-vendor when the dxjs console changes.
+const ADMIN_DX_JS: &str = include_str!("../assets/dx.js");
+
+/// The dxjs page shell: an external same-origin module, no inline script/style,
+/// so the page runs under `script-src 'self'` with no hash and no `unsafe-*`.
+const ADMIN_DX_SHELL: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Delonix Seiva — Admin (dxjs)</title>
+</head>
+<body>
+<div id="app"></div>
+<script type="module" src="/admin/dx.js"></script>
+</body>
+</html>
+"#;
+
+/// The `Content-Security-Policy` for the dxjs console page: same-origin only, the
+/// console loaded as an external `'self'` module (dxjs is CSP-clean by
+/// construction — no `eval`, no inline handlers — so no hash/nonce is needed),
+/// no remote origin, navigation/embedding locked down.
+pub fn admin_dx_csp() -> &'static str {
+    "default-src 'none'; \
+     script-src 'self'; \
+     style-src 'self'; \
+     connect-src 'self'; \
+     img-src 'self' data:; \
+     base-uri 'none'; \
+     form-action 'none'; \
+     frame-ancestors 'none'"
+}
+
+/// `GET /admin/dx` — the opt-in dxjs console page under [`admin_dx_csp`].
+pub async fn admin_dx_handler() -> Response {
+    (
+        [(CONTENT_SECURITY_POLICY, admin_dx_csp())],
+        Html(ADMIN_DX_SHELL),
+    )
+        .into_response()
+}
+
+/// `GET /admin/dx.js` — the vendored dxjs bundle, served byte-for-byte.
+pub async fn admin_dx_js_handler() -> Response {
+    let mut res = ADMIN_DX_JS.into_response();
+    res.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/javascript; charset=utf-8"),
+    );
+    res
+}
+
+/// A `Router` serving the opt-in dxjs console at [`ADMIN_DX_PATH`] and its bundle
+/// at [`ADMIN_DX_JS_PATH`]. The dxjs page reads the SAME [`REGISTRY_PATH`] and
+/// `/openapi.json` endpoints the inline console uses.
+pub fn admin_dx_router() -> Router {
+    Router::new()
+        .route(ADMIN_DX_PATH, get(admin_dx_handler))
+        .route(ADMIN_DX_JS_PATH, get(admin_dx_js_handler))
+}
+
+/// Opt-in: mount the inline console ([`mount`]) **and** the dxjs console. Use
+/// this instead of [`mount`] when a composition root wants the richer dxjs page
+/// at `/admin/dx` while keeping `/admin` as the zero-build fallback (ADR 0016).
+pub fn mount_dx(router: Router) -> Router {
+    mount(router).merge(admin_dx_router())
+}
+
 #[cfg(test)]
 mod registry_tests {
     use super::*;
@@ -695,5 +777,20 @@ mod registry_tests {
         let caller = Principal::new("root", ["shop.read", "shop.create"]);
         let (_, body) = build_registry(&caller, &resources, &[]);
         assert_eq!(body["resources"].as_array().unwrap().len(), 0);
+    }
+
+    // ADR 0016 drift guard: the vendored dxjs bundle must match its recorded
+    // SHA-256. `cargo test` is the CI check — if the bundle is re-vendored, the
+    // recorded hash in `assets/dx.js.sha256` must be updated in the same change,
+    // so the served payload can never drift from a recorded, reviewable value.
+    #[test]
+    fn dx_bundle_matches_its_recorded_sha256() {
+        let recorded = include_str!("../assets/dx.js.sha256").trim();
+        assert_eq!(
+            sha256_b64(ADMIN_DX_JS),
+            recorded,
+            "vendored dxjs bundle drifted from assets/dx.js.sha256 — re-vendor from the \
+             dxjs repo (examples/seiva-console) and update the recorded hash (ADR 0016)"
+        );
     }
 }
