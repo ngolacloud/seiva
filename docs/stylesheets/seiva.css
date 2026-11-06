@@ -1,9 +1,9 @@
 /* =============================================================================
  * seiva.css — Delonix Seiva documentation theme
  *
- * Seiva's own identity: a petrol/indigo palette, not the Django green. Material
- * provides the structure (search, nav, TOC, scroll-spy); this file repaints the
- * chrome and ships a strong, neutral dark mode (graphite, not dark-green).
+ * Seiva's own identity: a petrol/indigo palette. Material provides the structure
+ * (search, nav, TOC, scroll-spy); this file repaints the chrome and ships a
+ * strong, neutral dark mode (graphite).
  *
  * Brand tokens
  *   indigo-navy   #16304a  header / footer / h1-h2 (light)
@@ -248,7 +248,7 @@ body,
   border-color: rgba(255, 255, 255, 0.08);
 }
 
-/* --- Admonitions: bordered box with a tinted title, Django-shaped ------- */
+/* --- Admonitions: bordered box with a tinted title --------------------- */
 
 .md-typeset .admonition,
 .md-typeset details {

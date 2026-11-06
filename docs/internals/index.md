@@ -1,7 +1,7 @@
 # Seiva internals
 
-How Seiva works under the hood, and how to work on it — the equivalent of Django's
-*internals* and *open-source project* sections.
+How Seiva works under the hood, and how to work on it — the *internals* and
+*open-source project* material.
 
 - [Architecture](../architecture.md) — the dependency rule, the contract, how the
   pieces fit

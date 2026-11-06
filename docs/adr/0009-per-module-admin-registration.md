@@ -15,8 +15,8 @@ in the contract was enough to appear in the console. Two problems:
    facade must not put it in an operator UI. A module should decide, explicitly,
    whether it is administrable, and under which permissions.
 2. **No module-owned metadata.** Labels, list columns, searchable/orderable
-   fields and per-operation permissions have nowhere to live. Django modules
-   declare this in an `admin.py`; Seiva had no equivalent.
+   fields and per-operation permissions have nowhere to live. Mature frameworks
+   let a module declare this in a dedicated admin manifest; Seiva had no equivalent.
 
 Constraints from the owner's brief:
 

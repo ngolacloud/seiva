@@ -50,8 +50,8 @@ Then open <http://localhost:8080/docs> for the Swagger UI, where you can try the
 ## Next
 
 Follow the [tutorial](tutorial/part-1-your-first-module.md), or if you come from
-FastAPI start with [your first day](../first-day.md). The fuller walk-through is
-the [quickstart](../quickstart.md).
+a dynamic framework start with [your first day](../first-day.md). The fuller
+walk-through is the [quickstart](../quickstart.md).
 
 ---
 

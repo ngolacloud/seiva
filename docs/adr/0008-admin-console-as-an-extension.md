@@ -29,8 +29,8 @@ Three problems with that placement:
    widened them for the whole page. `unsafe-inline` defeats the point of a CSP:
    any injected `<script>` runs.
 
-3. **Honesty.** Shipping `/admin` in the base reads as "Seiva has a Django-style
-   admin out of the box". It does not: this first cut drives the module
+3. **Honesty.** Shipping `/admin` in the base reads as "Seiva has a full
+   auto-CRUD admin out of the box". It does not: this first cut drives the module
    *operations* the contract declares, not generic model-row CRUD, and it has no
    per-module registration, server-side field masking or per-operation
    authorization of its own.

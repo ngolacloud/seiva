@@ -3,8 +3,8 @@
 The polls facade declares a permission on every method — `polls.manage` to create
 questions and choices, `polls.vote` to vote, `polls.read` to list and read
 results. In this part we see what those guards mean and how to admit real callers.
-(Django reaches for `@login_required` and the admin's permissions here; Seiva's
-equivalent is declared on the contract and enforced by the transport.)
+(Where other frameworks bolt auth on per route, Seiva's permission is declared on
+the contract and enforced by the transport.)
 
 ## The routes are guarded by default
 

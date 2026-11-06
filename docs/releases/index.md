@@ -54,9 +54,10 @@ rationale. `seiva-cli` installs with
 
 On a 20-core i9-13900H over loopback (measured 2026-11-05, caveats in
 [benchmarks](../benchmarks.md)), the Rust server served roughly **3.4× the
-throughput of FastAPI** and **16× that of Django** on `GET /health`, and **~4.8×
-FastAPI / ~15× Django** on a validating JSON `POST`, with a p99 below **0.8 ms**
-on both endpoints. Re-measure on your own hardware before quoting a ratio.
+throughput of an interpreted Python framework** and **16× that of a Python WSGI
+stack** on `GET /health`, and **~4.8× / ~15×** respectively on a validating JSON
+`POST`, with a p99 below **0.8 ms** on both endpoints. Re-measure on your own
+hardware before quoting a ratio.
 
 ### Links
 
@@ -71,5 +72,5 @@ on both endpoints. Re-measure on your own hardware before quoting a ratio.
 
 ---
 
-*Part of the [Seiva documentation](../index.md), organised like the Django
-docs (tutorials · topic guides · reference · how-to).*
+*Part of the [Seiva documentation](../index.md), organised by the four Diátaxis
+modes (tutorials · topic guides · reference · how-to).*

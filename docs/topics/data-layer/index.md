@@ -1,6 +1,6 @@
 # The data layer (DORM)
 
-> This is the Seiva equivalent of Django's **model layer**.
+> This is Seiva's **data layer** — where models, queries and persistence live.
 
 Seiva's default data layer is **DORM** (the Delonix ORM), an **independent
 product** wired into Seiva only through the optional `seiva-data-dorm` gateway,

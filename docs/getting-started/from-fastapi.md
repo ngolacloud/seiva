@@ -1,8 +1,9 @@
-# Coming from FastAPI
+# Coming from a dynamic framework
 
 > **Status: published.** This content lives in a dedicated page — follow the link below.
 
-Map every FastAPI habit to its Seiva equivalent.
+Map each habit you bring from a dynamic, interpreted backend framework to its
+Seiva equivalent.
 
 ## On this page
 
@@ -10,9 +11,9 @@ Map every FastAPI habit to its Seiva equivalent.
 
 ## Related
 
-- [Your first day (from FastAPI)](../first-day.md)
+- [Your first day](../first-day.md)
 
 ---
 
-*Part of the [Seiva documentation](../index.md), organised like the Django
-docs (tutorials · topic guides · reference · how-to).*
+*Part of the [Seiva documentation](../index.md), organised by the four Diátaxis
+modes (tutorials · topic guides · reference · how-to).*

@@ -1,9 +1,9 @@
-# Benchmarks: Seiva vs FastAPI vs Django
+# Benchmarks: Seiva vs interpreted Python stacks
 
 This page backs the "native, not interpreted" claim with **measured** numbers,
-not assertions. It compares a minimal Seiva service against equivalent FastAPI
-and Django services on the same trivial workload, with no database, so the
-measurement isolates *framework overhead*.
+not assertions. It compares a minimal Seiva service against equivalent
+interpreted-Python services — one ASGI, one WSGI — on the same trivial workload,
+with no database, so the measurement isolates *framework overhead*.
 
 The harness that produces these numbers lives in
 [`benchmarks/`](https://github.com/ngolacloud/seiva/tree/main/benchmarks) —
@@ -28,8 +28,8 @@ repository — the Seiva scaffold's in-memory default, mirrored in Python):
 | Service | Runtime | Server |
 |---|---|---|
 | Seiva | Rust, compiled `--release` | tokio multi-thread (all cores), built-in |
-| FastAPI | CPython 3.12, interpreted | uvicorn (uvloop+httptools), 20 workers |
-| Django | CPython 3.12, interpreted | gunicorn WSGI, 20 sync workers |
+| Interpreted ASGI | CPython 3.12, interpreted | uvicorn (uvloop+httptools), 20 workers |
+| Interpreted WSGI | CPython 3.12, interpreted | gunicorn, 20 sync workers |
 
 Two Seiva security controls were switched off for the run so the comparison is
 like-for-like with the no-auth Python apps: the per-IP **rate limiter** (its
@@ -44,24 +44,25 @@ Measured 2026-11-05. **Numbers apply only to this configuration:**
 - Host: 20 logical CPUs, 13th Gen Intel(R) Core(TM) i9-13900H, Linux.
 - Load: `oha` 1.16.0, **50 connections, 20 s measured, 5 s warmup discarded**,
   HTTP/1.1 keep-alive, over **loopback** (generator shares CPU with the server).
-- Versions: FastAPI 0.115, uvicorn 0.32, Django 5.1, gunicorn 23, Python 3.12.
-- Python workers: 20 (= CPU count) for both FastAPI and Django.
+- Versions: uvicorn 0.32, gunicorn 23, CPython 3.12 (the ASGI and WSGI
+  frameworks at their then-current releases).
+- Python workers: 20 (= CPU count) for both Python services.
 
 ### GET /health (trivial liveness; no body)
 
 | Framework | Requests/sec | p50 (ms) | p95 (ms) | p99 (ms) |
 |---|---:|---:|---:|---:|
 | **Seiva (Rust)** | **271,132** | **0.148** | **0.415** | **0.708** |
-| FastAPI (uvicorn) | 79,128 | 0.488 | 1.542 | 2.738 |
-| Django (gunicorn WSGI) | 17,086 | 2.485 | 5.622 | 7.929 |
+| Interpreted ASGI (uvicorn) | 79,128 | 0.488 | 1.542 | 2.738 |
+| Interpreted WSGI (gunicorn) | 17,086 | 2.485 | 5.622 | 7.929 |
 
 ### POST /v1/notes (validate non-empty title, assign id, echo JSON)
 
 | Framework | Requests/sec | p50 (ms) | p95 (ms) | p99 (ms) |
 |---|---:|---:|---:|---:|
 | **Seiva (Rust)** | **249,475** | **0.163** | **0.443** | **0.779** |
-| FastAPI (uvicorn) | 51,763 | 0.772 | 2.230 | 3.749 |
-| Django (gunicorn WSGI) | 16,217 | 2.647 | 5.788 | 8.107 |
+| Interpreted ASGI (uvicorn) | 51,763 | 0.772 | 2.230 | 3.749 |
+| Interpreted WSGI (gunicorn) | 16,217 | 2.647 | 5.788 | 8.107 |
 
 All runs completed with essentially zero non-2xx responses (a few dozen
 requests out of several million were aborted at the measurement deadline).
@@ -71,12 +72,12 @@ requests out of several million were aborted at the measurement deadline).
 On this box, in this configuration:
 
 - On the trivial `GET /health`, Seiva served about **3.4×** the throughput of
-  FastAPI and about **16×** that of Django.
-- On the JSON `POST /v1/notes`, Seiva served about **4.8×** FastAPI and about
-  **15×** Django.
+  the ASGI stack and about **16×** that of the WSGI stack.
+- On the JSON `POST /v1/notes`, Seiva served about **4.8×** the ASGI stack and
+  about **15×** the WSGI stack.
 - The tail-latency gap is larger than the throughput gap: Seiva's p99 stayed
-  below **0.8 ms** on both endpoints, while FastAPI's p99 was **2.7–3.7 ms**
-  and Django's **7.9–8.1 ms**.
+  below **0.8 ms** on both endpoints, while the ASGI stack's p99 was
+  **2.7–3.7 ms** and the WSGI stack's **7.9–8.1 ms**.
 
 This is the expected shape of "compiled native code vs. an interpreted runtime
 with a GIL": the framework overhead per request — not the business logic, which
@@ -95,8 +96,8 @@ here is nil — is what differs.
 - **Worker count and versions matter.** Python throughput scales with worker
   processes (20 here); the ratios would change with a different count or newer
   releases. Always report the configuration with the number.
-- **Not a universal ratio.** "~3–5× vs FastAPI, ~15× vs Django" is *this
-  machine, this workload*. Re-run `benchmarks/run.sh` to measure yours.
+- **Not a universal ratio.** "~3–5× vs the ASGI stack, ~15× vs the WSGI stack"
+  is *this machine, this workload*. Re-run `benchmarks/run.sh` to measure yours.
 
 ## Reproduce it
 

@@ -7,7 +7,7 @@
 ## Context
 
 Delonix Seiva is a Rust backend framework for robust, high-criticality systems:
-backend only, with the ease of FastAPI and NestJS, a production- and
+backend only, ergonomic and batteries-included, a production- and
 cluster-ready server, and DORM (the Delonix ORM) as the default data layer. It
 is a new product in its own repository, distinct from DORM, which stays an
 independent ORM (DORM ADR 0073).

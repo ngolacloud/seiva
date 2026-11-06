@@ -1,8 +1,7 @@
 # Security
 
-Seiva aims for Django's reputation — **secure by default** — mapped onto the
-OWASP **API Security Top 10 (2023)**, the right checklist for an API-first
-framework. Security is enforced by construction (the type system and the layer
+Seiva's posture is **secure by default** — mapped onto the OWASP **API Security
+Top 10 (2023)**, the right checklist for an API-first framework. Security is enforced by construction (the type system and the layer
 stack), not left to each team.
 
 ## Secure by default

@@ -7,10 +7,10 @@ data source. The data source by default is **DORM** (the Delonix ORM), an
 independent product, wired in only through the optional `dorm` feature. The
 framework core never depends on DORM.
 
-### How is this different from FastAPI?
+### What does Seiva give me beyond routing and validation?
 
-FastAPI gives you routing + validation + auto-OpenAPI and stops there (no ORM, no
-migrations, no auth system, no scaffolding, no admin). Seiva matches the
+A thin service layer stops at routing + validation + auto-OpenAPI (no ORM, no
+migrations, no auth system, no scaffolding, no admin). Seiva keeps the
 auto-OpenAPI + validation developer experience and adds the batteries — an
 optional data layer, a verified-JWT auth system, project/module scaffolding,
 security-by-default — as a **compiled, no-GC, single binary**. See
@@ -30,10 +30,10 @@ the bottleneck — not Rust itself. A native-Rust consumer (DORM, Seiva) has no 
 boundary: no GC, no FFI, compile-time safety to the binary, single-binary deploy.
 See [the data layer](../topics/data-layer/index.md).
 
-### Is there an admin site like Django's?
+### Is there a built-in admin console?
 
-Not yet — an auto-CRUD admin is a roadmap item. It is one of the gaps called out in
-the [competitive landscape](../competitive-landscape.md).
+Not yet — a full auto-CRUD admin is a roadmap item. It is one of the gaps called
+out in the [competitive landscape](../competitive-landscape.md).
 
 ### What works today vs what is planned?
 

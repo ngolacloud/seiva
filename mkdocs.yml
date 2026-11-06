@@ -77,7 +77,7 @@ nav:
       - Seiva at a glance: getting-started/seiva-at-a-glance.md
       - Quick install: getting-started/quick-install.md
       - Quickstart: quickstart.md
-      - Coming from FastAPI: getting-started/from-fastapi.md
+      - Coming from a dynamic framework: getting-started/from-fastapi.md
       - Your first day: first-day.md
       - Tutorial:
           - 1 · Your first module: getting-started/tutorial/part-1-your-first-module.md
@@ -126,6 +126,22 @@ nav:
           - LLVM release profile: topics/performance/llvm-profile.md
           - Production-path load: topics/performance/production-load.md
       - Admin console migration: topics/admin-console-migration.md
+  - DORM (the data layer):
+      - dorm/index.md
+      - Schema and models: dorm/schema-and-models.md
+      - Making queries: dorm/queries.md
+      - Relations: dorm/relations.md
+      - Migrations: dorm/migrations.md
+      - Transactions: dorm/transactions.md
+      - Raw SQL: dorm/raw-sql.md
+      - Backends: dorm/backends.md
+      - CLI and Studio: dorm/cli-and-studio.md
+      - Using DORM from Seiva: dorm/using-from-seiva.md
+  - dx (the package manager):
+      - dx/index.md
+      - Package management: dx/package-management.md
+      - dx vs Cargo: dx/dx-vs-cargo.md
+      - Using dx with Seiva: dx/with-seiva.md
   - Reference:
       - reference/index.md
       - The seiva CLI: reference/cli.md

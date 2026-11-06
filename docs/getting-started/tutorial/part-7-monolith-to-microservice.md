@@ -97,7 +97,7 @@ expose gRPC alongside HTTP for service-to-service calls. See
 
 ## The end — and the beginning
 
-You built a polls app the Django way (models, views, results, admin-ready, tested,
+You built a complete polls app (data, validation, auth, results, tested,
 packaged), then deployed it two ways from one codebase. Where next:
 
 - The [topic guides](../../topics/index.md) for depth on each layer.

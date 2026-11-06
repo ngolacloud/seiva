@@ -1,11 +1,11 @@
 # API documents: OpenAPI, the docs UIs, admin and proto
 
-Seiva is API-first, so where Django has a template layer, Seiva **generates the
+Seiva is API-first: instead of rendering HTML templates, it **generates the
 API's own documents** from the facade contracts — no hand-maintained spec, no
 per-handler annotations. The `async fn` on the facade *is* the source: its
 request DTO, its response DTO and its permission become the path, the schemas
-and the security requirement. This is the FastAPI promise — interactive docs you
-never wrote — delivered from a compiled contract.
+and the security requirement. The result is interactive docs you never wrote —
+delivered from a compiled contract.
 
 ## OpenAPI 3.1 (`/openapi.json`)
 
@@ -28,18 +28,17 @@ composition root); outside a project it shows the built-in demo facade.
 ## The interactive docs UIs (`/docs`, `/redoc`, `/scalar`)
 
 Every running service serves three interactive reference pages over its own
-`/openapi.json`, mounted by default — the FastAPI `/docs` + `/redoc` parity, plus
-a bonus renderer:
+`/openapi.json`, mounted by default — Swagger UI and ReDoc, plus a bonus
+renderer:
 
-| Route      | Renderer     | FastAPI analogue |
-| ---------- | ------------ | ---------------- |
-| `/docs`    | Swagger UI   | `/docs`          |
-| `/redoc`   | ReDoc        | `/redoc`         |
-| `/scalar`  | Scalar       | — (bonus)        |
+| Route      | Renderer     | Notes    |
+| ---------- | ------------ | -------- |
+| `/docs`    | Swagger UI   |          |
+| `/redoc`   | ReDoc        |          |
+| `/scalar`  | Scalar       | bonus    |
 
-A FastAPI developer reaches Swagger UI at `/docs`; so do you, with the same
-*Try it out* panel — and you wrote no spec, no annotations, no page. The viewer
-bundles load from a CDN (as FastAPI's Swagger/ReDoc assets do); each page sets
+Reach Swagger UI at `/docs` for the full *Try it out* panel — and you wrote no
+spec, no annotations, no page. The viewer bundles load from a CDN; each page sets
 its own scoped Content-Security-Policy so the strict `default-src 'none'` of the
 data plane does not blank it out, while every API/JSON response keeps that strict
 default.

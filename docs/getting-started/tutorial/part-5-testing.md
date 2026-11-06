@@ -1,7 +1,6 @@
 # Part 5: Testing your module
 
-The Django tutorial's [Part 5](https://docs.djangoproject.com/en/6.1/intro/tutorial05/)
-adds tests for the polls app. The `polls` module ships with tests too; this part
+A polls app deserves tests. The `polls` module ships with them, and this part
 shows the three levels Seiva makes easy: use-case unit tests, the architecture
 fitness functions, and how to run them.
 

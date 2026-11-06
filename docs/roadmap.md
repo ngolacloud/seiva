@@ -29,12 +29,12 @@ waits on P0-1. P2 runs continuously.
 
 ---
 
-## Phase 0 — table stakes (be taken seriously vs FastAPI/Django)
+## Phase 0 — table stakes (be taken seriously in the category)
 
 ### P0-1 · Ship the data layer (DORM cutover) — **XL**
 
 - **Goal:** a generated module can persist through DORM, not just the in-memory
-  adapter — the single biggest credibility gap vs Django.
+  adapter — the single biggest credibility gap for a batteries-included framework.
 - **Approach:**
   1. Bring the `seiva-data-dorm` gateway into a buildable state behind the `dorm`
      feature (it is currently workspace-excluded because it needs the private DORM
@@ -55,7 +55,7 @@ waits on P0-1. P2 runs continuously.
 
 ### P0-2 · Hot-reload dev loop (`seiva start --watch`) — **M**
 
-- **Goal:** edit-and-see parity with `fastapi dev` / `runserver`.
+- **Goal:** edit-and-see parity with a dynamic framework's dev server.
 - **Approach:** add a file-watcher (notify/cargo-watch-style) to `seiva start` that
   rebuilds and restarts the `apps/<name>-api` process on change; debounce; stream
   logs; keep the port. Invest in incremental build speed (workspace `profile.dev`
@@ -95,12 +95,12 @@ waits on P0-1. P2 runs continuously.
 
 ---
 
-## Phase 1 — the batteries that define the Django category
+## Phase 1 — the batteries that define the batteries-included category
 
 ### P1-5 · Admin / auto-CRUD surface — **L** (the signature differentiator)
 
-- **Goal:** the one thing no FastAPI/Prisma competitor matches — auto-CRUD from the
-  model/contract. We already have the facade **descriptors**; use them.
+- **Goal:** the signature feature few competitors in this space match — auto-CRUD
+  from the model/contract. We already have the facade **descriptors**; use them.
 - **Approach (incremental):**
   1. Generate a read/write **admin API** from the facade descriptors + DORM models
      (list/get/create/update/delete per model), guarded by an `admin.*` permission.
@@ -156,23 +156,24 @@ waits on P0-1. P2 runs continuously.
 
 ### P2-9 · Fill the documentation content — **L (continuous)**
 
-- **Goal:** move the "planned"/"draft" pages (this tree already mirrors Django) to
-  "published" — the cheapest adoption lever.
+- **Goal:** move the "planned"/"draft" pages (this tree already follows the full
+  Diátaxis layout) to "published" — the cheapest adoption lever.
 - **Done:** every tutorial part and every topic index is written and runnable; a
   link/anchor check and a "no stub left in getting-started/topics" fitness pass.
 
 ### P2-10 · VS Code extension — **M**
 
-- **Goal:** schema + facade autocompletion/validation to rival Prisma's and FastAPI's.
+- **Goal:** schema + facade autocompletion/validation to rival Prisma's best-in-class editor tooling.
 - **Done:** an extension that highlights the schema DSL and surfaces facade/`requires`
   diagnostics; published to the marketplace (or VSIX).
 
 ### P2-11 · Examples, templates and a published benchmark — **M**
 
-- **Goal:** a real-world template (the thing that pulled FastAPI adoption) + a
-  reproducible benchmark backing the "native, not interpreted" claim.
+- **Goal:** a real-world template (the kind of starter that drives framework
+  adoption) + a reproducible benchmark backing the "native, not interpreted" claim.
 - **Done:** a `seiva project new --template <x>` that scaffolds a non-trivial app;
-  a committed benchmark harness + numbers vs FastAPI/Django in `docs/benchmarks.md`.
+  a committed benchmark harness + numbers vs equivalent interpreted-framework
+  services in `docs/benchmarks.md`.
 
 ### P2-12 · Scaffold / proto / DX polish — **S/M**
 
@@ -186,7 +187,7 @@ waits on P0-1. P2 runs continuously.
 ## Milestone sequence (suggested)
 
 - **M1 (quick credibility):** P0-3 + P0-4 + P0-2 — the project documents itself, the
-  crates are installable, and the dev loop feels like FastAPI. (Parallel, ~2–3 weeks.)
+  crates are installable, and the dev loop feels as fluid as a dynamic framework's. (Parallel, ~2–3 weeks.)
 - **M2 (the data layer):** P0-1 — the long pole. Unblocks all of P1.
 - **M3 (batteries):** P1-7 + P1-6 + P1-8, then P1-5 (admin) as the headline.
 - **M4 (reach):** P2-9 continuous throughout; P2-10/11/12 as capacity allows.
