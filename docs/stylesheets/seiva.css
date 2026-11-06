@@ -86,9 +86,14 @@ body,
   line-height: 1.7;
 }
 
-/* Comfortable reading measure. */
+/* Wider content column — fill the screen like the Django docs, so the content
+   and the right-hand TOC use the space instead of leaving a large empty margin. */
 .md-grid {
-  max-width: 68rem;
+  max-width: 80rem;
+}
+/* Give the prose itself more room inside the wider grid. */
+.md-content {
+  max-width: none;
 }
 
 .md-typeset h1 {
