@@ -15,7 +15,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::{facade, WireSchema};
+use delonix_seiva::{facade, WireId, WireSchema};
 use seiva_http::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +50,7 @@ pub struct ProductId {
 /// Response DTO for a product. Never a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct ProductDto {
-    pub id: String,
+    pub id: WireId,
     pub name: String,
     pub price_cents: u64,
 }

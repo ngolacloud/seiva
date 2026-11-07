@@ -40,7 +40,7 @@ pub struct NotificationsService<R, G, U, E> {
 
 fn to_notification_dto(n: Notification) -> NotificationDto {
     NotificationDto {
-        id: n.id.to_string(),
+        id: n.id.into(),
         to: n.to,
         subject: n.subject,
         body: n.body,
@@ -155,7 +155,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(n.id, "1");
+        assert_eq!(n.id.to_string(), "1");
         assert_eq!(svc.list().await.unwrap(), vec![n]);
 
         assert_eq!(svc.uow.outcomes(), [TxOutcome::Committed]);

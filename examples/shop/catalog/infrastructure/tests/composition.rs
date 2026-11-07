@@ -45,7 +45,7 @@ async fn full_flow_over_the_real_in_memory_adapter() {
     assert_eq!(svc.list().await.expect("list").len(), 2);
     assert_eq!(
         svc.get(ProductId {
-            id: teapot.id.parse().unwrap()
+            id: teapot.id.get()
         })
         .await
         .expect("get teapot"),
