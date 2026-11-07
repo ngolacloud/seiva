@@ -13,7 +13,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::{facade, WireSchema};
+use delonix_seiva::{facade, WireId, WireSchema};
 use seiva_http::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +39,7 @@ impl Validate for SendNotification {
 /// Response DTO for a notification. Never a domain type.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, WireSchema)]
 pub struct NotificationDto {
-    pub id: String,
+    pub id: WireId,
     pub to: String,
     pub subject: String,
     pub body: String,

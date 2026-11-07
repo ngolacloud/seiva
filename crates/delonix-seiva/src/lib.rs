@@ -26,11 +26,16 @@ pub mod ports {
 
 pub mod admin;
 pub mod contract;
+pub mod id;
 pub mod lint;
 pub mod manifest;
 pub mod scaffold;
 pub mod schema;
 pub mod worker;
+
+/// A 128-bit identifier that crosses the wire as a JSON string (ADR 0018), so no
+/// client loses precision above 2^53. Use it for id fields on wire DTOs.
+pub use id::WireId;
 
 /// Marks a trait as a module's versioned public contract (ADR 0001). See
 /// [`contract`] for what it generates and the hand-written equivalent.

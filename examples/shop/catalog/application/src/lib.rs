@@ -41,7 +41,7 @@ pub struct CatalogService<R, G, U, E> {
 
 fn to_product_dto(p: Product) -> ProductDto {
     ProductDto {
-        id: p.id.to_string(),
+        id: p.id.into(),
         name: p.name,
         price_cents: p.price_cents,
     }
@@ -174,17 +174,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!((p.id.as_str(), p.price_cents), ("1", 1299));
+        assert_eq!((p.id.get(), p.price_cents), (1, 1299));
 
         assert_eq!(svc.list().await.unwrap(), vec![p.clone()]);
-        assert_eq!(
-            svc.get(ProductId {
-                id: p.id.parse().unwrap()
-            })
-            .await
-            .unwrap(),
-            p
-        );
+        assert_eq!(svc.get(ProductId { id: p.id.get() }).await.unwrap(), p);
 
         assert_eq!(svc.uow.outcomes(), [TxOutcome::Committed]);
         assert_eq!(svc.events.topics(), ["catalog.product_added"]);

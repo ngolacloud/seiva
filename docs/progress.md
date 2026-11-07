@@ -4,6 +4,13 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-07) — ids no fio como strings (ADR 0018)
+
+- **`delonix_seiva::WireId`** — um `u128` que serializa no fio como **string** JSON
+  (`WireSchema`=string), para nenhum cliente JS perder precisão acima de 2^53.
+  Decisão em [ADR 0018](adr/0018-wire-ids-as-strings.md); adoptado pelo
+  `examples/shop` (DTOs de id usam `WireId`; path params ficam `u128`).
+
 ## Estado (2026-11-04) — transportes · CQRS · server · módulos · docs
 
 **Framework ligado ponta-a-ponta e verde no CI. 14 crates por agentes, 54 grupos de testes.**

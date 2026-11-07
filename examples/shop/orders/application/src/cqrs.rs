@@ -144,18 +144,18 @@ mod tests {
             .send(PlaceOrderCommand(PlaceOrder {
                 customer: "Ada".into(),
                 lines: vec![LineDto {
-                    product_id: "10".into(),
+                    product_id: 10u128.into(),
                     qty: 2,
                 }],
             }))
             .await
             .expect("place order");
         assert_eq!(placed.status, "placed");
-        assert_eq!(placed.id, "1");
+        assert_eq!(placed.id.to_string(), "1");
 
         // Read: query it back. First call misses the cache (hits the repository),
         // the second is served from the cache.
-        let order_id: u128 = placed.id.parse().unwrap();
+        let order_id: u128 = placed.id.get();
         let first = mediator.query(GetOrder { id: order_id }).await.unwrap();
         let second = mediator.query(GetOrder { id: order_id }).await.unwrap();
         assert_eq!(first, placed);

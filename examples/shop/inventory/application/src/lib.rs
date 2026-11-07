@@ -42,7 +42,7 @@ pub struct InventoryService<R, G, U, E> {
 
 fn to_stock_dto(s: StockItem) -> StockDto {
     StockDto {
-        product_id: s.product_id.to_string(),
+        product_id: s.product_id.into(),
         available: s.available,
     }
 }
@@ -116,7 +116,7 @@ where
             .map(|s| s.available)
             .unwrap_or(0);
         Ok(StockDto {
-            product_id: product_id.to_string(),
+            product_id: product_id.into(),
             available,
         })
     }
@@ -130,21 +130,13 @@ where
     E: EventPublisher,
 {
     async fn receive(&self, cmd: ReceiveStock) -> Result<StockDto, InventoryError> {
-        let product_id: u128 = cmd
-            .product_id
-            .parse()
-            .map_err(|_| InventoryError::Invalid("product_id must be an integer".to_string()))?;
-        self.receive_stock(product_id, cmd.qty)
+        self.receive_stock(cmd.product_id.get(), cmd.qty)
             .await
             .map_err(|err| InventoryError::Invalid(err.to_string()))
     }
 
     async fn reserve(&self, cmd: Reserve) -> Result<StockDto, InventoryError> {
-        let product_id: u128 = cmd
-            .product_id
-            .parse()
-            .map_err(|_| InventoryError::Invalid("product_id must be an integer".to_string()))?;
-        self.reserve_stock(product_id, cmd.qty)
+        self.reserve_stock(cmd.product_id.get(), cmd.qty)
             .await
             .map_err(|err| InventoryError::Invalid(err.to_string()))
     }
@@ -207,7 +199,7 @@ mod tests {
 
         let after_receipt = svc
             .receive(ReceiveStock {
-                product_id: "42".into(),
+                product_id: 42u128.into(),
                 qty: 10,
             })
             .await
@@ -216,7 +208,7 @@ mod tests {
 
         let after_reserve = svc
             .reserve(Reserve {
-                product_id: "42".into(),
+                product_id: 42u128.into(),
                 qty: 4,
             })
             .await
@@ -242,7 +234,7 @@ mod tests {
     async fn reserving_more_than_available_errors_and_commits_nothing() {
         let svc = service();
         svc.receive(ReceiveStock {
-            product_id: "42".into(),
+            product_id: 42u128.into(),
             qty: 2,
         })
         .await
@@ -250,7 +242,7 @@ mod tests {
 
         let err = svc
             .reserve(Reserve {
-                product_id: "42".into(),
+                product_id: 42u128.into(),
                 qty: 5,
             })
             .await;

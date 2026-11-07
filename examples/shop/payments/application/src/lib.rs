@@ -42,8 +42,8 @@ pub struct PaymentsService<R, G, U, E> {
 
 fn to_payment_dto(p: Payment) -> PaymentDto {
     PaymentDto {
-        id: p.id.to_string(),
-        order_id: p.order_id.to_string(),
+        id: p.id.into(),
+        order_id: p.order_id.into(),
         amount_cents: p.amount_cents,
         status: p.status,
     }
@@ -58,10 +58,7 @@ where
 {
     async fn charge_an_order(&self, cmd: Charge) -> PortResult<PaymentDto> {
         let id = u128::from_be_bytes(self.ids.new_id().0);
-        let order_id: u128 = cmd
-            .order_id
-            .parse()
-            .map_err(|_| BoxError::from("order_id must be an integer"))?;
+        let order_id = cmd.order_id.get();
 
         // The demo policy: a zero amount is declined, anything else captured.
         let (payment, topic) = if cmd.amount_cents == 0 {
@@ -170,20 +167,13 @@ mod tests {
 
         let p = svc
             .charge(Charge {
-                order_id: "7".into(),
+                order_id: 7u128.into(),
                 amount_cents: 2500,
             })
             .await
             .unwrap();
         assert_eq!(p.status, "captured");
-        assert_eq!(
-            svc.get(PaymentId {
-                id: p.id.parse().unwrap()
-            })
-            .await
-            .unwrap(),
-            p
-        );
+        assert_eq!(svc.get(PaymentId { id: p.id.get() }).await.unwrap(), p);
 
         assert_eq!(svc.uow.outcomes(), [TxOutcome::Committed]);
         assert_eq!(svc.events.topics(), ["payments.captured"]);
@@ -195,7 +185,7 @@ mod tests {
 
         let p = svc
             .charge(Charge {
-                order_id: "7".into(),
+                order_id: 7u128.into(),
                 amount_cents: 0,
             })
             .await

@@ -28,7 +28,7 @@ async fn full_flow_over_the_real_in_memory_adapter() {
 
     let captured = svc
         .charge(Charge {
-            order_id: "7".into(),
+            order_id: 7u128.into(),
             amount_cents: 2500,
         })
         .await
@@ -37,7 +37,7 @@ async fn full_flow_over_the_real_in_memory_adapter() {
 
     let declined = svc
         .charge(Charge {
-            order_id: "8".into(),
+            order_id: 8u128.into(),
             amount_cents: 0,
         })
         .await
@@ -47,7 +47,7 @@ async fn full_flow_over_the_real_in_memory_adapter() {
     // Both outcomes read back from the real adapter.
     assert_eq!(
         svc.get(PaymentId {
-            id: captured.id.parse().unwrap()
+            id: captured.id.get()
         })
         .await
         .expect("get captured"),
