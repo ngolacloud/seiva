@@ -17,12 +17,27 @@ seiva-http = { version = "0.1.0", path = "../../crates/seiva-http" }
 seiva-server = { version = "0.1.0", path = "../../crates/seiva-server" }
 seiva-console-admin = { version = "0.1.0", path = "../../crates/seiva-console-admin" }
 
+# The in-process event bus (ADR 0021): the outbox double, its publisher, the
+# subscriber registry and the drain driver — the choreography's moving parts.
+seiva-events = { version = "0.1.0", path = "../../crates/seiva-events" }
+# The CloudEvents envelope a subscriber reads; the id-indexed inbox + offline
+# doubles (unit of work, id generator, recording publisher) the subscriber runs on.
+seiva-messaging = { version = "0.1.0", path = "../../crates/seiva-messaging", default-features = false }
+seiva-ports = { version = "0.1.0", path = "../../crates/seiva-ports" }
+seiva-testing = { version = "0.1.0", path = "../../crates/seiva-testing" }
+async-trait = "0.1"
+serde_json = "1"
+
 # Each module contributes its generated controller router + its in-memory
 # repository. The modules share no crate with one another.
 shop-catalog-interface = { path = "../../examples/shop/catalog/interface" }
 shop-catalog-infrastructure = { path = "../../examples/shop/catalog/infrastructure" }
 shop-inventory-interface = { path = "../../examples/shop/inventory/interface" }
 shop-inventory-infrastructure = { path = "../../examples/shop/inventory/infrastructure" }
+# The composition root drives the REAL inventory use case (over the shared stock)
+# from its `orders.placed` subscriber, so it needs the application + facade here.
+shop-inventory-application = { path = "../../examples/shop/inventory/application" }
+shop-inventory-facade = { path = "../../examples/shop/inventory/facade" }
 shop-orders-interface = { path = "../../examples/shop/orders/interface" }
 shop-orders-infrastructure = { path = "../../examples/shop/orders/infrastructure" }
 shop-payments-interface = { path = "../../examples/shop/payments/interface" }
@@ -30,7 +45,17 @@ shop-payments-infrastructure = { path = "../../examples/shop/payments/infrastruc
 shop-notifications-interface = { path = "../../examples/shop/notifications/interface" }
 shop-notifications-infrastructure = { path = "../../examples/shop/notifications/infrastructure" }
 
+axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+[dev-dependencies]
+# The e2e test drives the router with `oneshot`; `seiva-events` (the drain driver)
+# and `axum`/`serde_json` come through the normal dependencies above.
+tower = { version = "0.5", features = ["util"] }
+
+[lib]
+name = "shop_api"
+path = "src/lib.rs"
 
 [[bin]]
 name = "shop-api"

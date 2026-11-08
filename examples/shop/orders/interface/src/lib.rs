@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use delonix_seiva::admin::{AdminPermissions, AdminResource};
 use delonix_seiva::{controller, register_admin};
+use seiva_ports::EventPublisher;
 
 use shop_orders_application::{OrderRepository, OrdersService};
 use shop_orders_facade::{OrderDto, OrderId, Orders, OrdersError, OrdersFacade, PlaceOrder};
@@ -90,35 +91,57 @@ mod runtime {
     }
 }
 
-/// The concrete `Orders` service this controller wraps.
-type Service<R> = OrdersService<R, SystemIds, DirectUnitOfWork, NoopEventPublisher>;
+/// The concrete `Orders` service this controller wraps, generic over the event
+/// publisher port `E` so the composition root can swap the default no-op for a real
+/// one (an outbox) without touching the module.
+type Service<R, E> = OrdersService<R, SystemIds, DirectUnitOfWork, E>;
 
 /// Transport adapter: a concrete `Orders` service exposed over HTTP, generic over
-/// the repository port `R`.
-pub struct OrdersController<R>(Arc<Service<R>>);
+/// the repository port `R` and the event publisher port `E`.
+///
+/// `E` defaults to `NoopEventPublisher`, so [`new`](Self::new) stays a one-arg
+/// constructor for the standalone demo where the `orders.placed` event is swallowed.
+/// The composition root that wants the event to actually flow (ADR 0021) injects a
+/// real publisher through [`with_events`](Self::with_events) — e.g. an in-memory
+/// outbox the in-process dispatcher drains.
+pub struct OrdersController<R, E = NoopEventPublisher>(Arc<Service<R, E>>);
 
-impl<R> Clone for OrdersController<R> {
+impl<R, E> Clone for OrdersController<R, E> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<R: OrderRepository> OrdersController<R> {
-    /// Builds the controller over `repository` and the in-process ports.
+impl<R: OrderRepository> OrdersController<R, NoopEventPublisher> {
+    /// Builds the controller over `repository` and the in-process ports, with the
+    /// `orders.placed` event swallowed by a `NoopEventPublisher`. The runnable
+    /// default for the standalone module demo.
     pub fn new(repository: R) -> Self {
+        Self::with_events(repository, NoopEventPublisher)
+    }
+}
+
+impl<R: OrderRepository, E: EventPublisher> OrdersController<R, E> {
+    /// Builds the controller over `repository` and an injected event publisher
+    /// `events`, so a published `orders.placed` lands wherever `events` writes it
+    /// (an outbox the composition root then dispatches). The id generator and the
+    /// commit-on-`Ok` unit of work stay the in-process defaults — the use-case body
+    /// runs, so the publish happens inside it.
+    pub fn with_events(repository: R, events: E) -> Self {
         OrdersController(Arc::new(OrdersService {
             repository,
             ids: SystemIds,
             uow: DirectUnitOfWork,
-            events: NoopEventPublisher,
+            events,
         }))
     }
 }
 
 #[controller]
-impl<R> Orders for OrdersController<R>
+impl<R, E> Orders for OrdersController<R, E>
 where
     R: OrderRepository + Send + Sync + 'static,
+    E: EventPublisher + 'static,
 {
     async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError> {
         self.0.place(cmd).await
