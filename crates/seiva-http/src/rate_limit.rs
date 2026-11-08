@@ -26,11 +26,20 @@
 //! client cannot spoof (it can only prepend entries to its left). Deeper proxy
 //! chains need a dedicated edge, per the token-bucket note above.
 //!
-//! The per-client table is **bounded**: a flood of distinct source IPs (the very
-//! thing API4 guards against) must not let the limiter itself exhaust memory. At
+//! The client key carries a **tenant dimension** (OWASP API4, multi-tenant
+//! isolation): an authenticated caller is keyed by `(tenant, peer IP)`, so two
+//! tenants sharing a source IP (a corporate NAT, a mobile carrier, a cloud egress)
+//! get **separate budgets** — one tenant exhausting its rate can no longer `429`
+//! another from the same address. An anonymous caller is keyed by peer IP alone.
+//!
+//! The per-client table is **bounded**: a flood of distinct keys (the very thing
+//! API4 guards against) must not let the limiter itself exhaust memory. At
 //! [`MAX_TRACKED_CLIENTS`] entries the table first drops every window that has
-//! fully elapsed; if it is still full of live counters it fails *open* for the
-//! new key rather than evict a live budget or reject a fresh client.
+//! fully elapsed; if it is still full of live counters it **evicts the oldest
+//! window** to make room for the new key. It does *not* fail open (which would let
+//! a flood switch the limiter off globally — a bypass of the very control) nor
+//! reject the fresh client (which would turn the flood into a `429` DoS for
+//! everyone): memory stays capped while the limit keeps applying.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -41,6 +50,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use seiva_identity::Principal;
 use seiva_ports::Clock;
 
 use crate::problem::Problem;
@@ -84,6 +94,35 @@ impl Clock for SystemClock {
     }
 }
 
+/// The identity a request is rate-limited under. An authenticated caller is
+/// scoped by its tenant **and** peer IP, so tenants behind one shared address keep
+/// independent budgets (multi-tenant API4 isolation); an unauthenticated caller is
+/// scoped by peer IP alone.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ClientKey {
+    /// Authenticated caller: `(tenant, peer IP)`.
+    Tenant { tenant: String, ip: IpAddr },
+    /// Unauthenticated (or untenanted) caller: peer IP only.
+    Ip(IpAddr),
+}
+
+impl From<IpAddr> for ClientKey {
+    fn from(ip: IpAddr) -> Self {
+        ClientKey::Ip(ip)
+    }
+}
+
+impl std::fmt::Display for ClientKey {
+    /// The stable string the distributed store keys on. The `t:`/`ip:` prefixes
+    /// keep a tenant named like an IP from colliding with an IP bucket.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientKey::Tenant { tenant, ip } => write!(f, "t:{tenant}:{ip}"),
+            ClientKey::Ip(ip) => write!(f, "ip:{ip}"),
+        }
+    }
+}
+
 /// One client's fixed-window counter.
 #[derive(Debug, Clone, Copy)]
 struct Window {
@@ -103,7 +142,7 @@ pub const MAX_TRACKED_CLIENTS: usize = 100_000;
 pub struct RateLimiter {
     limit: RateLimit,
     clock: Arc<dyn Clock>,
-    windows: Arc<Mutex<HashMap<IpAddr, Window>>>,
+    windows: Arc<Mutex<HashMap<ClientKey, Window>>>,
     trust_forwarded_for: bool,
 }
 
@@ -144,7 +183,7 @@ impl RateLimiter {
     /// exhausted it returns `Err(retry_after)`, the time until the current
     /// window rolls over, without incrementing (so a flood does not keep
     /// pushing the reset further out).
-    fn check(&self, key: IpAddr) -> Result<(), Duration> {
+    fn check(&self, key: ClientKey) -> Result<(), Duration> {
         let now = self.clock.now();
         let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -155,12 +194,20 @@ impl RateLimiter {
             windows.retain(|_, w| {
                 now.duration_since(w.start).unwrap_or(Duration::ZERO) < self.limit.window
             });
-            // Still full of *live* counters: fail OPEN for this new key rather
-            // than evict a live budget (which would hand back free quota) or
-            // reject a fresh client (a flood of spoofed IPs would 429 everyone).
-            // Memory stays capped either way.
+            // Still full of *live* counters: evict the oldest window (closest to
+            // rolling over anyway) to make room for the new key. Not fail-open
+            // (which switches the whole limiter off under a flood — a bypass of the
+            // control) and not a blanket reject (which turns the flood into a `429`
+            // DoS for fresh clients); memory stays capped while the limit keeps
+            // applying to every key, new ones included.
             if windows.len() >= MAX_TRACKED_CLIENTS && !windows.contains_key(&key) {
-                return Ok(());
+                if let Some(oldest) = windows
+                    .iter()
+                    .min_by_key(|(_, w)| w.start)
+                    .map(|(k, _)| k.clone())
+                {
+                    windows.remove(&oldest);
+                }
             }
         }
 
@@ -213,20 +260,34 @@ fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
         .find_map(|entry| entry.trim().parse::<IpAddr>().ok())
 }
 
-/// The key a request is rate-limited under: the trusted forwarded client IP when
-/// `trust_forwarded_for` is set and present, else the TCP peer IP, else the
-/// shared [`UNKNOWN_PEER`] fallback.
-fn client_key(request: &Request, trust_forwarded_for: bool) -> IpAddr {
-    if trust_forwarded_for {
-        if let Some(ip) = forwarded_client_ip(request.headers()) {
-            return ip;
-        }
+/// The key a request is rate-limited under. The peer IP is the trusted forwarded
+/// client IP when `trust_forwarded_for` is set and present, else the TCP peer IP,
+/// else the shared [`UNKNOWN_PEER`] fallback. When the request carries an
+/// authenticated tenant (the `authn` layer runs outside the limiter and installs
+/// the [`Principal`]), the key is scoped by `(tenant, IP)` so tenants sharing an
+/// address keep separate budgets; otherwise it is the IP alone.
+fn client_key(request: &Request, trust_forwarded_for: bool) -> ClientKey {
+    let ip = if trust_forwarded_for {
+        forwarded_client_ip(request.headers())
+    } else {
+        None
     }
-    request
+    .or_else(|| {
+        request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip())
+    })
+    .unwrap_or(UNKNOWN_PEER);
+
+    match request
         .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip())
-        .unwrap_or(UNKNOWN_PEER)
+        .get::<Principal>()
+        .and_then(|p| p.tenant.clone())
+    {
+        Some(tenant) => ClientKey::Tenant { tenant, ip },
+        None => ClientKey::Ip(ip),
+    }
 }
 
 /// Middleware enforcing a [`RateLimiter`] keyed by client IP.
@@ -544,9 +605,61 @@ mod tests {
 
         // One client exhausting its budget does not touch another's — the bug a
         // single shared (proxy-IP) bucket would cause.
-        assert!(limiter.check(a).is_ok());
-        assert!(limiter.check(a).is_err());
-        assert!(limiter.check(b).is_ok());
+        assert!(limiter.check(a.into()).is_ok());
+        assert!(limiter.check(a.into()).is_err());
+        assert!(limiter.check(b.into()).is_ok());
+    }
+
+    #[test]
+    fn tenants_sharing_an_ip_get_independent_budgets() {
+        let clock = Arc::new(FixedClock::at_unix_secs(0));
+        let limiter = RateLimiter::with_clock(
+            RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(60),
+            },
+            clock.clone(),
+        );
+        let ip: IpAddr = "203.0.113.9".parse().unwrap();
+        let acme = ClientKey::Tenant {
+            tenant: "acme".to_owned(),
+            ip,
+        };
+        let globex = ClientKey::Tenant {
+            tenant: "globex".to_owned(),
+            ip,
+        };
+
+        // Same source IP, different tenants: `acme` spending its budget must not
+        // `429` `globex` (the noisy-neighbour bug a per-IP-only key would cause).
+        assert!(limiter.check(acme.clone()).is_ok());
+        assert!(limiter.check(acme).is_err());
+        assert!(limiter.check(globex).is_ok());
+    }
+
+    #[test]
+    fn a_saturated_table_evicts_the_oldest_rather_than_failing_open() {
+        let clock = Arc::new(FixedClock::at_unix_secs(0));
+        let limiter = RateLimiter::with_clock(
+            RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(3600),
+            },
+            clock.clone(),
+        );
+        // Fill the table with live counters (none elapsed within the long window).
+        for i in 0..(MAX_TRACKED_CLIENTS as u64) {
+            let ip = IpAddr::from([(i >> 24) as u8, (i >> 16) as u8, (i >> 8) as u8, i as u8]);
+            assert!(limiter.check(ip.into()).is_ok());
+        }
+        // A brand-new key under saturation is still tracked (not waved through): it
+        // consumes its single-request budget and the next hit is refused, proving
+        // the limiter did not fail open.
+        let fresh: IpAddr = "198.51.100.1".parse().unwrap();
+        assert!(limiter.check(fresh.into()).is_ok());
+        assert!(limiter.check(fresh.into()).is_err());
+        // And the table stayed bounded.
+        assert!(limiter.windows.lock().unwrap().len() <= MAX_TRACKED_CLIENTS);
     }
 
     #[test]
@@ -560,7 +673,7 @@ mod tests {
         for i in 0..(MAX_TRACKED_CLIENTS as u64 + 5_000) {
             let octets = (i >> 24) as u8;
             let ip = IpAddr::from([octets, (i >> 16) as u8, (i >> 8) as u8, i as u8]);
-            let _ = limiter.check(ip);
+            let _ = limiter.check(ip.into());
         }
         let tracked = limiter.windows.lock().unwrap().len();
         assert!(

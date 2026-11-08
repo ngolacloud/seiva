@@ -22,7 +22,10 @@ pub trait Notes {
     #[cached(ttl = "5m")]
     async fn get(&self, ctx: &Ctx, id: NoteId) -> Result<NoteDto>;
 
-    // A method with no permission: the descriptor records an empty `requires`.
+    // An explicitly public method: the descriptor records an empty `requires`
+    // (the public sentinel). Omitting both `#[public]` and `#[requires]` is now a
+    // compile error (fail-closed authorization).
+    #[public]
     async fn ping(&self) -> Result<()>;
 }
 

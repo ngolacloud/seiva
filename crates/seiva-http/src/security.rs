@@ -58,6 +58,13 @@ pub struct HttpSecurity {
     /// every client collapses into the proxy's single bucket. See
     /// [`RateLimiter::trusting_forwarded_for`](crate::RateLimiter::trusting_forwarded_for).
     pub trust_forwarded_for: bool,
+    /// Whether to serve the interactive API reference (`/docs`, `/redoc`,
+    /// `/scalar`) and the generated `/openapi.json`. `true` by default (the
+    /// FastAPI-style discovery that is a product feature). A deployment that does
+    /// not want to publish its full contract to anonymous callers (OWASP API9 —
+    /// improper inventory management) sets it `false`, and those four routes answer
+    /// `404` while every module route keeps working.
+    pub expose_docs: bool,
 }
 
 impl Default for HttpSecurity {
@@ -66,6 +73,7 @@ impl Default for HttpSecurity {
             cors_allowed_origins: Vec::new(),
             rate_limit: Some(RateLimit::default()),
             trust_forwarded_for: false,
+            expose_docs: true,
         }
     }
 }

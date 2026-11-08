@@ -24,6 +24,10 @@ serde_json = "1"
 # The audited JWT library (on `ring`): JWKS parsing, RS256/ES256 verification and
 # `exp`/`aud`/`iss` validation. We never hand-roll token crypto (ADR 0006).
 jsonwebtoken = "9"
+# The static `TokenAuthenticator` indexes principals by the SHA-256 digest of the
+# bearer token, never the token in clear: a timing side-channel over the lookup
+# reveals only digest bytes (pre-image-resistant), and no secret sits in memory.
+sha2 = "0.10"
 
 [dev-dependencies]
 # Tests sign tokens with a locally generated RSA key (fixture) and verify them

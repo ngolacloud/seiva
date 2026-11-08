@@ -58,8 +58,15 @@ fn render_tokens(tokens: proc_macro2::TokenStream) -> String {
 ///
 /// Applied as `#[seiva::facade(version = "v1")]` (the `version` defaults to
 /// `"v1"` if omitted). The trait is re-emitted unchanged except that the
-/// per-method helper attributes (`#[requires(..)]`, `#[policy(..)]`,
+/// per-method helper attributes (`#[requires(..)]`, `#[public]`, `#[policy(..)]`,
 /// `#[cached(..)]`) are consumed. Alongside it, the macro generates a
+///
+/// # Authorization is fail-closed
+///
+/// Every method must declare its access policy (OWASP API5). A method with neither
+/// `#[requires("perm")]` nor `#[public]` is a **compile error**, so forgetting to
+/// guard a route cannot silently expose it. `#[public]` is the explicit, auditable
+/// way to serve a method without authorization.
 /// zero-sized `<Trait>Facade` type implementing `delonix_seiva::contract::Facade`,
 /// whose `DESCRIPTOR` lists the facade name, version, and every method with the
 /// permission its `#[requires(..)]` declared. That descriptor is read by the
@@ -88,6 +95,7 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         };
         let mut requires = String::new();
+        let mut is_public = false;
         let mut errors: Vec<syn::Error> = Vec::new();
         method.attrs.retain(|attr| {
             if attr.path().is_ident("requires") {
@@ -95,6 +103,17 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
                     Ok(lit) => requires = lit.value(),
                     Err(err) => errors.push(err),
                 }
+                false
+            } else if attr.path().is_ident("public") {
+                // An explicit, auditable opt-out of the permission guard. Must take
+                // no arguments: `#[public]`, not `#[public(..)]`.
+                if !matches!(attr.meta, syn::Meta::Path(_)) {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "`#[public]` takes no arguments",
+                    ));
+                }
+                is_public = true;
                 false
             } else {
                 // `policy` and `cached` are recognised contract attributes whose
@@ -105,6 +124,26 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
         if let Some(err) = errors.into_iter().next() {
             return err.to_compile_error().into();
+        }
+
+        // Authorization is fail-CLOSED at compile time (OWASP API5 — broken
+        // function-level authorization): every facade method must state its access
+        // policy. Forgetting `#[requires(..)]` no longer produces a silently public
+        // route — it fails the build with an actionable message. A route meant to be
+        // public says so explicitly with `#[public]`, which keeps `requires` empty —
+        // the sentinel the guard reads as "no authorization" (see `permission_guard`).
+        if requires.is_empty() && !is_public {
+            return syn::Error::new_spanned(
+                &method.sig,
+                format!(
+                    "facade method `{}` declares no access policy: add \
+                     `#[requires(\"permission\")]` to guard it, or `#[public]` to \
+                     expose it without authorization (an explicit, auditable choice)",
+                    method.sig.ident
+                ),
+            )
+            .to_compile_error()
+            .into();
         }
 
         // Parameters: skip the `&self` receiver; capture each typed argument's
@@ -699,23 +738,11 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
         {
             let __descriptor =
                 <#facade_path as ::delonix_seiva::contract::Facade>::DESCRIPTOR;
-            // Resource name from the descriptor: lowercased and pluralised. A name
-            // already ending in `s` is taken as plural; a consonant + `y` becomes
-            // `ies` (`Inventory` → `inventories`); otherwise append `s`.
-            let __resource = {
-                let __lower = __descriptor.name.to_ascii_lowercase();
-                let __bytes = __lower.as_bytes();
-                if __lower.ends_with('s') {
-                    __lower
-                } else if __lower.ends_with('y')
-                    && __bytes.len() >= 2
-                    && !matches!(__bytes[__bytes.len() - 2], b'a' | b'e' | b'i' | b'o' | b'u')
-                {
-                    ::std::format!("{}ies", &__lower[..__lower.len() - 1])
-                } else {
-                    ::std::format!("{__lower}s")
-                }
-            };
+            // Resource path segment from the descriptor. The rule lives in
+            // `delonix_seiva::contract::resource_segment` so route generation and
+            // the boot-time collision check (`route_collisions`) share one source
+            // of truth and cannot drift apart.
+            let __resource = ::delonix_seiva::contract::resource_segment(__descriptor.name);
             let mut __router: ::axum::Router<#self_ty> = ::axum::Router::new();
             #(#route_blocks)*
             __router.with_state(service)

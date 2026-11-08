@@ -82,9 +82,21 @@ pub trait Authenticator: Send + Sync {
 /// [`dorm_mcp::parse_tokens`], so an existing `DELONIX_ORM_MCP_TOKENS`-style
 /// configuration can be reused while the authentication *decision* stays Seiva's.
 /// An empty map denies every request — zero trust out of the box.
+///
+/// Tokens are indexed by their **SHA-256 digest**, never stored or compared in
+/// clear: a timing side-channel over the lookup leaks only digest bytes
+/// (pre-image-resistant), and no bearer secret sits in process memory.
 #[derive(Clone, Default)]
 pub struct TokenAuthenticator {
-    tokens: HashMap<String, Principal>,
+    tokens: HashMap<[u8; 32], Principal>,
+}
+
+/// The SHA-256 digest of a bearer token — the key the authenticator indexes on.
+fn token_digest(token: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hasher.finalize().into()
 }
 
 impl TokenAuthenticator {
@@ -93,16 +105,16 @@ impl TokenAuthenticator {
         Self::default()
     }
 
-    /// Register one `token` → `principal`, builder-style.
+    /// Register one `token` → `principal`, builder-style (stored as a SHA-256 digest).
     #[must_use]
     pub fn with_token(mut self, token: impl Into<String>, principal: Principal) -> Self {
-        self.tokens.insert(token.into(), principal);
+        self.tokens.insert(token_digest(&token.into()), principal);
         self
     }
 
-    /// Register one `token` → `principal` in place.
+    /// Register one `token` → `principal` in place (stored as a SHA-256 digest).
     pub fn insert(&mut self, token: impl Into<String>, principal: Principal) {
-        self.tokens.insert(token.into(), principal);
+        self.tokens.insert(token_digest(&token.into()), principal);
     }
 
     /// How many tokens are registered. Mostly for tests and health checks.
@@ -142,8 +154,10 @@ impl Authenticator for TokenAuthenticator {
         if bearer.is_empty() {
             return Err(AuthError::MissingCredentials);
         }
+        // Look up by the token's digest: the comparison is over digest bytes, which
+        // do not reveal the token even under a timing side-channel.
         self.tokens
-            .get(bearer)
+            .get(&token_digest(bearer))
             .cloned()
             .ok_or(AuthError::InvalidToken)
     }

@@ -76,6 +76,12 @@ pub use seiva_identity::{
 /// before a handler runs. Mounted as [`DefaultBodyLimit`] in [`router`].
 pub const DEFAULT_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
+/// The default per-request timeout (30 s). A request whose handler (or whose slow
+/// client streaming the body) outlives this is cut off with `408 Request Timeout`,
+/// so a slowloris client cannot pin a worker indefinitely (OWASP API4). Mounted as
+/// a [`tower_http::timeout::TimeoutLayer`] in the framework layers.
+pub const DEFAULT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Builds the service's OpenAPI 3.1 document from **every facade linked into the
 /// binary**, discovered through [`delonix_seiva::contract::registered_facades`]
 /// (each `#[seiva::facade]` registers itself in a link-time inventory). Nothing
@@ -97,6 +103,17 @@ pub fn openapi_document() -> serde_json::Value {
 /// `GET /openapi.json` — serves the generated [`openapi_document`].
 async fn openapi_handler() -> Json<serde_json::Value> {
     Json(openapi_document())
+}
+
+/// The `(version, resource)` route-prefix collisions among **every facade linked
+/// into the binary** — two facades whose generated routers would mount on the same
+/// prefix and make `Router::merge` panic at startup. Empty when the mounted
+/// facades are collision-free. A composition root calls this at boot to fail fast
+/// with a clear message instead of a bare axum panic (see
+/// [`delonix_seiva::contract::route_collisions`]).
+#[must_use]
+pub fn route_collisions() -> Vec<String> {
+    delonix_seiva::contract::route_collisions(&delonix_seiva::contract::registered_facades())
 }
 
 /// Builds the framework router with the **default** security posture
@@ -144,7 +161,12 @@ pub fn router_with_auth(
     security: &HttpSecurity,
     authenticator: Option<Arc<dyn Authenticator>>,
 ) -> Router {
-    apply_framework_layers(framework_routes(health), security, authenticator, None)
+    apply_framework_layers(
+        framework_routes(health, security.expose_docs),
+        security,
+        authenticator,
+        None,
+    )
 }
 
 /// Builds the full application router: the framework routes **plus the caller's
@@ -164,7 +186,7 @@ pub fn router_with_modules(
     modules: Router,
 ) -> Router {
     apply_framework_layers(
-        framework_routes(health).merge(modules),
+        framework_routes(health, security.expose_docs).merge(modules),
         security,
         authenticator,
         None,
@@ -187,7 +209,7 @@ pub fn router_with_modules_distributed(
     distributed: DistributedRateLimit,
 ) -> Router {
     apply_framework_layers(
-        framework_routes(health).merge(modules),
+        framework_routes(health, security.expose_docs).merge(modules),
         security,
         authenticator,
         Some(distributed),
@@ -203,13 +225,19 @@ pub fn router_with_modules_distributed(
 /// extension (`seiva-console-admin`, ADR 0008), not part of the base. A backend
 /// built without that crate answers `404` for `/admin`; a composition root that
 /// wants it calls `seiva_console_admin::mount(router)` before serving.
-fn framework_routes(health: Health) -> Router {
-    Router::new()
-        .merge(health_router(health))
-        .route("/openapi.json", get(openapi_handler))
-        .route("/docs", get(docs::docs_handler))
-        .route("/redoc", get(docs::redoc_handler))
-        .route("/scalar", get(docs::scalar_handler))
+fn framework_routes(health: Health, expose_docs: bool) -> Router {
+    let mut router = Router::new().merge(health_router(health));
+    // The contract-discovery surface is opt-out: on by default (FastAPI parity),
+    // but a deployment that must not publish its contract to anonymous callers
+    // (OWASP API9) sets `HttpSecurity::expose_docs = false` and these answer `404`.
+    if expose_docs {
+        router = router
+            .route("/openapi.json", get(openapi_handler))
+            .route("/docs", get(docs::docs_handler))
+            .route("/redoc", get(docs::redoc_handler))
+            .route("/scalar", get(docs::scalar_handler));
+    }
+    router
 }
 
 /// Wraps `app` (framework routes, and any merged module routes) in the transport
@@ -223,7 +251,15 @@ fn apply_framework_layers(
     authenticator: Option<Arc<dyn Authenticator>>,
     distributed: Option<DistributedRateLimit>,
 ) -> Router {
-    let mut app = app.layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES));
+    let mut app = app
+        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES))
+        // Inside the body limit: bound the lifetime of every request so a slow or
+        // stuck handler (or a slowloris client) cannot hold a worker forever. A
+        // breach returns `408 Request Timeout`.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            DEFAULT_REQUEST_TIMEOUT,
+        ));
 
     if let Some(cors) = cors_layer(security) {
         app = app.layer(cors);

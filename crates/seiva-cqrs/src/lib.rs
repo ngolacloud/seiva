@@ -230,6 +230,22 @@ where
 /// be incorrect; this middleware also implements [`CommandHandler`] as a plain
 /// pass-through, so a command placed in the same chain always reaches its
 /// handler. Only reads ([`QueryHandler`]) are memoised.
+///
+/// # Security: the query key must carry every authorization discriminant
+///
+/// The cache key **is the query value**. In a multi-tenant service the query must
+/// therefore include the caller's tenant (and any other scope that changes the
+/// result), exactly as a correct CQRS read already does — the query is the
+/// complete description of *what is being read, for whom*. A query that omits the
+/// tenant (e.g. `GetNote { id }` when the result differs per tenant) is already a
+/// correctness bug, and caching turns it into a **cross-tenant disclosure**: one
+/// tenant's result served to another under the same key (OWASP API1). Build the
+/// query from `Ctx::tenant` server-side; never cache a query whose key does not
+/// pin the scope.
+///
+/// The cache is also **unbounded** (one entry per distinct key); apply it only to
+/// read types with a bounded key space, or front it with a size/TTL policy, so a
+/// client-controlled filter space cannot grow it without limit (OWASP API4).
 pub struct CacheQueries<H, Q>
 where
     Q: Query + Eq + Hash,
