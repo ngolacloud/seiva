@@ -68,9 +68,9 @@ where
 }
 
 /// The module's OpenAPI 3.1 document, generated from the facade descriptor.
-/// (A proto3 document is available from the same descriptor via
-/// `seiva proto`; it is not generated per-module to keep this crate free
-/// of the gRPC generator.)
+/// (The framework can also derive a proto3 document from the same descriptor;
+/// this benchmark only exercises the OpenAPI path, keeping the crate free of
+/// the gRPC generator.)
 pub fn openapi() -> serde_json::Value {
     seiva_openapi::openapi_document(
         seiva_openapi::ApiInfo {
