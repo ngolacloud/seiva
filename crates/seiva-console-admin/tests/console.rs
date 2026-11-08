@@ -267,3 +267,99 @@ async fn registry_sees_the_authenticated_principal_through_the_layers() {
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["resources"].as_array().unwrap().len(), 0);
 }
+
+// --- ADR 0016: the opt-in dxjs console -----------------------------------
+
+async fn get_dx(path: &str) -> axum::http::Response<Body> {
+    seiva_console_admin::admin_dx_router()
+        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn dx_page_loads_an_external_same_origin_module() {
+    let res = get_dx(seiva_console_admin::ADMIN_DX_PATH).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    // External same-origin module + stylesheet, an #app mount point, no inline
+    // script/style and no CDN.
+    assert!(body.contains(r#"<script type="module" src="/admin/dx.js">"#));
+    assert!(body.contains(r#"<link rel="stylesheet" href="/admin/dx.css" />"#));
+    assert!(body.contains(r#"id="app""#));
+    assert!(!body.contains("http://") && !body.contains("https://"));
+}
+
+#[tokio::test]
+async fn dx_stylesheet_is_served_as_css_same_origin() {
+    let res = get_dx(seiva_console_admin::ADMIN_DX_CSS_PATH).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/css"));
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let css = String::from_utf8(bytes.to_vec()).unwrap();
+    // It is the vendored @dxjs/ui kit sheet (served same-origin, style-src 'self').
+    assert!(
+        css.contains(".dx-shell"),
+        "the @dxjs/ui stylesheet is embedded"
+    );
+}
+
+#[tokio::test]
+async fn dx_csp_is_strict_self_no_unsafe() {
+    let res = get_dx(seiva_console_admin::ADMIN_DX_PATH).await;
+    let csp = res.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(csp.contains("default-src 'none'"));
+    assert!(csp.contains("script-src 'self'"));
+    assert!(csp.contains("connect-src 'self'"));
+    assert!(!csp.contains("unsafe-inline"));
+    assert!(!csp.contains("unsafe-eval"));
+}
+
+#[tokio::test]
+async fn dx_bundle_is_served_as_javascript_and_is_csp_clean() {
+    let res = get_dx(seiva_console_admin::ADMIN_DX_JS_PATH).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .contains("javascript"));
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let js = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(!js.is_empty(), "the vendored dxjs bundle is embedded");
+    // dxjs is eval-free by construction (the whole point vs. the StillJS audit).
+    assert!(!js.contains("eval("), "the dxjs bundle contains no eval(");
+}
+
+#[tokio::test]
+async fn mount_dx_keeps_the_inline_console_and_adds_the_dx_route() {
+    let app = mount(axum::Router::new());
+    let app_dx = seiva_console_admin::mount_dx(axum::Router::new());
+    // The inline page stays at /admin on both; the dx page exists only with mount_dx.
+    let inline = app
+        .oneshot(
+            Request::builder()
+                .uri(ADMIN_PATH)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inline.status(), StatusCode::OK);
+    let dx = app_dx
+        .oneshot(
+            Request::builder()
+                .uri(seiva_console_admin::ADMIN_DX_PATH)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dx.status(), StatusCode::OK);
+}
