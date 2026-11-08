@@ -32,7 +32,7 @@ description = "In-process event bus for Delonix Seiva: a subscriber registry and
 # double is never wanted in a real build (the real reader is the DORM adapter in
 # `seiva-outbox-relay`).
 default = ["testing"]
-testing = []
+testing = ["dep:serde_json"]
 
 [dependencies]
 # The result/error boundary (`PortResult`, `BoxError`), the inbox key helper and
@@ -46,6 +46,10 @@ seiva-messaging = { version = "0.1.0", path = "../seiva-messaging", default-feat
 # The subscriber trait is object-safe (stored as `Arc<dyn EventSubscriber>` at the
 # composition edge), so its async method is erased with `async-trait`.
 async-trait = { workspace = true }
+# Only the `testing` double `InMemoryOutboxPublisher` parses the already-serialised
+# event payload into the CloudEvent `data`, so serde_json rides in exclusively with
+# that feature (a `--no-default-features` production build pulls none of it).
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 # The tests drive async dispatch on a current-thread runtime; the library brings
@@ -53,5 +57,3 @@ async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 # The in-memory `IdempotencyStore` double, so the dedup logic is proved OFFLINE.
 seiva-testing = { version = "0.1.0", path = "../seiva-testing" }
-# Building CloudEvent `data` bodies in the tests.
-serde_json = "1"

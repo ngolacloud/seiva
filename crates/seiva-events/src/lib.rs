@@ -415,10 +415,85 @@ impl OutboxReader for InMemoryOutbox {
     }
 }
 
+/// An [`EventPublisher`](seiva_ports::EventPublisher) that writes into an
+/// [`InMemoryOutbox`] (behind the `testing` feature): the publish side of the
+/// offline choreography, the in-memory stand-in for a use case writing the
+/// transactional outbox.
+///
+/// It is what a module's application service publishes through in the offline
+/// proof. The port's contract is deliberately byte-oriented — the application
+/// hands it an *already-serialised* payload and a topic, owning the envelope
+/// format — so this adapter is the piece that lifts those bytes back into the
+/// CloudEvents envelope the dispatcher and the broker path both carry:
+///
+/// 1. it mints a unique event id, `format!("{source}-{n}")`, from a fixed
+///    [`source`](Self::new) and a monotonic counter — so every publish is a
+///    distinct event the inbox can dedup on;
+/// 2. it parses the payload as JSON into the CloudEvent `data`; a payload that is
+///    not valid JSON is not an error here — it is wrapped as a JSON string so no
+///    event is ever dropped (the application still owns whether it emits JSON);
+/// 3. it builds [`CloudEvent::new(id, source, topic, data)`](CloudEvent) — the
+///    `topic` becomes the envelope `type` the [`SubscriberRegistry`] routes on —
+///    and appends it to the shared outbox.
+///
+/// The outbox is held behind an [`Arc`] so the same log the publisher writes is
+/// the one [`drain_in_process`] reads: the composition root clones one
+/// `Arc<InMemoryOutbox>` into this publisher (injected into the producing module)
+/// and into the driver. Cloning the publisher is **not** offered on purpose —
+/// each logical producer owns its own id sequence, so one publisher per injected
+/// module keeps event ids collision-free under its `source`.
+#[cfg(any(test, feature = "testing"))]
+pub struct InMemoryOutboxPublisher {
+    /// The shared log every published event is appended to; the twin the driver
+    /// reads from.
+    outbox: Arc<InMemoryOutbox>,
+    /// The fixed CloudEvents `source` for every event (and the id prefix), e.g.
+    /// `"/shop/orders"`.
+    source: String,
+    /// Monotonic per-publisher counter that, with `source`, composes each unique
+    /// event id.
+    counter: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl InMemoryOutboxPublisher {
+    /// Builds a publisher that appends to `outbox`, stamping every event with
+    /// `source` as both its CloudEvents `source` and the prefix of its generated
+    /// id. Clone the `outbox` `Arc` first so the driver shares the same log.
+    #[must_use]
+    pub fn new(outbox: Arc<InMemoryOutbox>, source: impl Into<String>) -> Self {
+        Self {
+            outbox,
+            source: source.into(),
+            counter: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl seiva_ports::EventPublisher for InMemoryOutboxPublisher {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> PortResult<()> {
+        let n = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let id = format!("{}-{n}", self.source);
+        // The payload is already serialised by the producing layer; lift it back
+        // into the envelope `data`. A non-JSON payload is wrapped rather than
+        // rejected, so a publish never fails on the shape of the bytes.
+        let data = serde_json::from_slice(payload).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(payload).into_owned())
+        });
+        self.outbox
+            .publish(CloudEvent::new(id, &self.source, topic, data));
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seiva_ports::BoxError;
+    use seiva_ports::{BoxError, EventPublisher};
     use seiva_testing::InMemoryIdempotencyStore;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -559,5 +634,29 @@ mod tests {
         .await
         .expect_err("a failing subscriber must surface its error");
         assert!(err.to_string().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn outbox_publisher_writes_one_event_with_the_topic_as_type() {
+        let outbox = Arc::new(InMemoryOutbox::new());
+        let publisher = InMemoryOutboxPublisher::new(Arc::clone(&outbox), "/shop/orders");
+
+        let payload = serde_json::to_vec(&serde_json::json!({ "id": "7" })).unwrap();
+        // Publish through the PORT, exactly as an application service would.
+        publisher.publish("orders.placed", &payload).await.unwrap();
+
+        assert_eq!(
+            outbox.pending(),
+            1,
+            "the publish landed in the shared outbox"
+        );
+        let batch = outbox.read_batch(10).await.unwrap();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(
+            batch[0].event.ty, "orders.placed",
+            "the topic became the CloudEvent type the registry routes on"
+        );
+        assert_eq!(batch[0].event.source, "/shop/orders");
+        assert_eq!(batch[0].event.data["id"], "7");
     }
 }
