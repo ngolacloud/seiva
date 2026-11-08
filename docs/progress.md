@@ -22,8 +22,13 @@ Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`
     passou a ser *downcast-aware* → erros das behaviors são status-bearing (403/409
     não remapeados para 500; erros opacos continuam 500 no-leak). Prova:
     `tests/bus_pipeline.rs` (cadeia `Authorize→Validate→Transactional{Idempotent}`).
-  - **F3 (por fazer):** migrar um módulo HTTP real (orders) para despachar pelo bus
-    (opt-in); activar os seams `#[cached]`/`#[policy]` na macro.
+  - **F3 (por fazer, decisão de desenho):** migrar um módulo HTTP real (orders)
+    para despachar pelo bus exige **inverter o controlo da tx** — hoje o
+    `OrdersService` encapsula `uow.transaction`+publish; o bus `Transactional` tem
+    de ser quem abre a tx para a `Idempotent` ficar dentro dela. A prova de
+    *composição* completa já existe (`bus_pipeline.rs`); a migração real coexistir
+    com o padrão service-encapsula-tx merece desenho próprio. Activar os seams
+    `#[cached]`/`#[policy]` na macro é o default-no-controller que o ADR 0020 adiou.
 - **[ADR 0021](adr/0021-in-process-event-bus-and-choreography.md) — Event bus
   in-process + choreography.** Fecha o lado que faltava do outbox (já construído).
   - **F1** (`seiva-events`, DORM-free): `EventSubscriber`, `SubscriberRegistry`,
@@ -35,8 +40,17 @@ Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`
     avançar cursor). Adapter `DormOutboxReader` em `seiva-outbox-relay` compila; o
     teste live `live_drain_in_process_over_the_dorm_outbox` está **gated** em
     `SEIVA_DORM_TEST_DSN`.
-  - **F2b/F3 (por fazer):** prova live sobre PostgreSQL/DORM; substituir o
-    `NoopEventPublisher` no `apps/shop-api` real; worker/loop sobre `drain_in_process`.
+  - **F3 (FEITA)** — choreography **viva** no `apps/shop-api`, 100% offline:
+    `InMemoryOutboxPublisher` (EventPublisher→CloudEvent no outbox, feature
+    `testing`); `OrdersController<R,E>` genérico com `with_events` injecta o
+    publisher (substitui o `NoopEventPublisher`); subscriber `inventory` na
+    composition root (`orders.placed`→`Inventory::reserve`, stock partilhado via
+    `StockRepository for Arc<R>`); `apps/shop-api` partido em `lib.rs`
+    (`build_app() -> BuiltApp`) + binário. Prova e2e `tests/choreography_e2e.rs`:
+    POST order → `drain_in_process` → stock 10→7; `redeliver`+drain mantém 7 (dedup
+    de inbox). 137 grupos de teste `ok`.
+  - **F2b (por fazer):** prova **live** sobre PostgreSQL/DORM (`DormOutboxReader`,
+    gated em `SEIVA_DORM_TEST_DSN`); worker/loop de fundo sobre `drain_in_process`.
 
 ## Estado (2026-11-07) — ids no fio como strings (ADR 0018)
 
