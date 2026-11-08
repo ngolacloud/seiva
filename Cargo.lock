@@ -2742,6 +2742,19 @@ name = "seiva-cqrs"
 version = "0.1.0"
 dependencies = [
  "seiva-ports",
+ "seiva-testing",
+ "tokio",
+]
+
+[[package]]
+name = "seiva-events"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "seiva-messaging",
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
  "tokio",
 ]
 
