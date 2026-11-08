@@ -6,22 +6,37 @@
 
 ## Estado (2026-11-08) — bus de comandos + eventos in-process (ADR 0020/0021)
 
-Dois padrões nativos a seguir ao CQRS, desenhados como ADRs aceites e em
-implementação na branch `feat/cqrs-bus-and-inprocess-events` (duas frentes em
-paralelo, sub-branches `feat/cqrs-bus-pipeline` e `feat/inprocess-event-bus`):
+Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`
+(PR #30 sobre main). **Fase 1 + Fase 2 feitas e integradas, workspace verde**
+(`fmt`/`clippy -D warnings`/`cargo test --workspace` = 134 grupos `ok`, 0 falhas).
 
 - **[ADR 0020](adr/0020-command-bus-and-pipeline-behaviors.md) — Command bus +
-  pipeline de behaviors (opt-in).** Liga o `seiva-cqrs` (já existente, estático/
-  zero-cost, mas desligado do caminho HTTP) a um pipeline tipado de behaviors
-  (`Authorize`/`Validate` fora da tx; `Idempotent`→handler→outbox dentro da tx),
-  activando os seams inertes `#[cached]`/`#[policy]`. Opt-in por command — a macro
-  controller continua a chamar o service directamente por default.
+  pipeline de behaviors (opt-in).** Liga o `seiva-cqrs` (estático/zero-cost, antes
+  desligado do caminho HTTP) a um pipeline tipado de behaviors.
+  - **F1** (`seiva-cqrs`): `Validate` (pré-tx, via trait `Validated`) e
+    `Transactional` (handler dentro de `UnitOfWork::transaction`; `Trace` reusa o
+    `Instrument`).
+  - **F2** (`seiva-http::bus`): `Authorize` (fail-closed, ADR 0019; partilha
+    `require_permission` com o guard tower) e `Idempotent` (intra-tx, via `Ctx`:
+    `scoped_key`+`fingerprint`, `begin`/`finish`, replay/`409`). `From<BoxError>`
+    passou a ser *downcast-aware* → erros das behaviors são status-bearing (403/409
+    não remapeados para 500; erros opacos continuam 500 no-leak). Prova:
+    `tests/bus_pipeline.rs` (cadeia `Authorize→Validate→Transactional{Idempotent}`).
+  - **F3 (por fazer):** migrar um módulo HTTP real (orders) para despachar pelo bus
+    (opt-in); activar os seams `#[cached]`/`#[policy]` na macro.
 - **[ADR 0021](adr/0021-in-process-event-bus-and-choreography.md) — Event bus
-  in-process + choreography.** Fecha o lado que faltava do outbox (que já está
-  construído e provado): um despachante in-process lê o outbox e entrega a
-  subscribers locais com dedup de inbox, deixando o código do subscriber idêntico
-  entre monólito e microserviço. Prova: `orders.placed → inventory.reserved` no
-  shop, sem broker. Substitui o `NoopEventPublisher`.
+  in-process + choreography.** Fecha o lado que faltava do outbox (já construído).
+  - **F1** (`seiva-events`, DORM-free): `EventSubscriber`, `SubscriberRegistry`,
+    `dispatch` com dedup de inbox.
+  - **F2** (`seiva-events` + `seiva-outbox-relay`): `OutboxReader` + driver
+    `drain_in_process` (gémeo DORM-free do `drain`); `InMemoryOutbox` (feature
+    `testing`); prova **offline** `orders.placed → inventory.reserved`
+    (`tests/choreography.rs`: cursor, dedup de inbox sob redelivery, retry sem
+    avançar cursor). Adapter `DormOutboxReader` em `seiva-outbox-relay` compila; o
+    teste live `live_drain_in_process_over_the_dorm_outbox` está **gated** em
+    `SEIVA_DORM_TEST_DSN`.
+  - **F2b/F3 (por fazer):** prova live sobre PostgreSQL/DORM; substituir o
+    `NoopEventPublisher` no `apps/shop-api` real; worker/loop sobre `drain_in_process`.
 
 ## Estado (2026-11-07) — ids no fio como strings (ADR 0018)
 
