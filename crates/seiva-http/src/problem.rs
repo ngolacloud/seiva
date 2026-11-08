@@ -7,6 +7,8 @@
 //! `application/problem+json` with the right status code, and a framework
 //! [`BoxError`] maps into a `500` problem.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use axum::body::Body;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderValue, StatusCode};
@@ -15,6 +17,28 @@ use seiva_ports::BoxError;
 
 /// The media type mandated by RFC 9457 for a problem document.
 pub const PROBLEM_JSON: &str = "application/problem+json";
+
+/// Whether a `500` may carry the internal error's text to the client. **Off by
+/// default (fail-closed):** an internal error that reaches [`From<BoxError>`] is
+/// logged server-side and the client sees only a generic detail, so a database or
+/// adapter message (SQL, column names, paths) never leaks (OWASP API8/API5). The
+/// runtime flips this from `SEIVA_EXPOSE_ERROR_DETAILS` at boot
+/// ([`set_expose_error_details`]); the production config guard rejects enabling it
+/// outside development.
+static EXPOSE_ERROR_DETAILS: AtomicBool = AtomicBool::new(false);
+
+/// Sets whether internal error detail is exposed to clients. Called once by the
+/// runtime at boot from the validated `SEIVA_EXPOSE_ERROR_DETAILS` config value. A
+/// development convenience; production must leave it off (fail-closed default).
+pub fn set_expose_error_details(expose: bool) {
+    EXPOSE_ERROR_DETAILS.store(expose, Ordering::Relaxed);
+}
+
+/// Whether internal error detail is currently exposed to clients.
+#[must_use]
+pub fn expose_error_details() -> bool {
+    EXPOSE_ERROR_DETAILS.load(Ordering::Relaxed)
+}
 
 /// An RFC 9457 problem detail: a machine-readable description of an HTTP error.
 ///
@@ -176,13 +200,23 @@ impl IntoResponse for Problem {
     }
 }
 
-/// Maps the framework's opaque port error into a `500` problem. The error's
-/// `Display` becomes the `detail`; adapters are expected to keep sensitive
-/// specifics out of it (first cut — a later phase will add a classification seam
-/// so some port errors map to `409`/`422` instead of a blanket `500`).
+/// Maps the framework's opaque port error into a `500` problem.
+///
+/// The internal error's `Display` is **not** sent to the client by default: it is
+/// logged server-side (correlate via the response's `request_id`) and the client
+/// receives a generic detail, so an adapter/database message never leaks (OWASP
+/// API8). Setting `SEIVA_EXPOSE_ERROR_DETAILS` (development only — the production
+/// config guard rejects it) flips [`set_expose_error_details`] and the real text
+/// is surfaced to speed up local debugging.
 impl From<BoxError> for Problem {
     fn from(error: BoxError) -> Self {
-        Problem::internal(error.to_string())
+        if expose_error_details() {
+            Problem::internal(error.to_string())
+        } else {
+            // Logged, not returned: the operator sees the cause, the client does not.
+            tracing::error!(error = %error, "internal error mapped to 500");
+            Problem::internal("an internal error occurred")
+        }
     }
 }
 

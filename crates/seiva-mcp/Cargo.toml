@@ -32,6 +32,8 @@ serde_json = "1"
 # The framework's trait-only boundary: reused for the opaque boundary error type
 # so the auth layer surfaces failures in Seiva's vocabulary, not axum's.
 seiva-ports = { path = "../seiva-ports" }
+# Bearer tokens are indexed by their SHA-256 digest, never kept in clear.
+sha2 = "0.10"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

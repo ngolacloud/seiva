@@ -96,6 +96,63 @@ impl FacadeDescriptor {
     pub fn method(&self, name: &str) -> Option<&MethodDescriptor> {
         self.methods.iter().find(|method| method.name == name)
     }
+
+    /// The URL path segment this facade's routes are mounted under: its name,
+    /// lowercased and pluralised. This is the single source of truth for the rule
+    /// `#[seiva::controller]` applies, so route generation and collision detection
+    /// never drift apart.
+    ///
+    /// - a name already ending in `s` is taken as already plural;
+    /// - a consonant followed by `y` becomes `ies` (`Inventory` → `inventories`);
+    /// - otherwise an `s` is appended.
+    #[must_use]
+    pub fn resource_segment(&self) -> String {
+        resource_segment(self.name)
+    }
+}
+
+/// The resource path segment for a facade `name` (see
+/// [`FacadeDescriptor::resource_segment`]). Free function so the controller macro
+/// and the collision check share one rule.
+#[must_use]
+pub fn resource_segment(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    if lower.ends_with('s') {
+        lower
+    } else if lower.ends_with('y')
+        && bytes.len() >= 2
+        && !matches!(bytes[bytes.len() - 2], b'a' | b'e' | b'i' | b'o' | b'u')
+    {
+        format!("{}ies", &lower[..lower.len() - 1])
+    } else {
+        format!("{lower}s")
+    }
+}
+
+/// Every `(version, resource)` pair that two or more facades would mount on,
+/// i.e. a route-prefix collision that makes `Router::merge` panic at startup.
+///
+/// The pluralisation rule is not injective (`Account` and `Accounts` both yield
+/// `accounts`), so distinct facade names can collide. Call this over
+/// [`registered_facades`] at boot to fail fast with an actionable message instead
+/// of a bare axum panic; an empty result means the mounted facades are collision
+/// free. Returned pairs are `"<version>/<resource>"`, sorted and deduplicated.
+#[must_use]
+pub fn route_collisions(facades: &[FacadeDescriptor]) -> Vec<String> {
+    use std::collections::HashMap;
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    for facade in facades {
+        let key = (facade.version.to_owned(), facade.resource_segment());
+        *seen.entry(key).or_insert(0) += 1;
+    }
+    let mut collisions: Vec<String> = seen
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|((version, resource), _)| format!("{version}/{resource}"))
+        .collect();
+    collisions.sort();
+    collisions
 }
 
 /// A facade's registration in the link-time inventory.

@@ -201,22 +201,34 @@ impl Webhook {
     /// # Errors
     ///
     /// Returns [`WebhookError::InvalidSecret`] if the remainder is not valid
-    /// base64.
+    /// base64, or if it decodes to an **empty** key: an empty HMAC key offers no
+    /// authentication (every forged message with a matching empty-key HMAC would
+    /// verify), so a misconfigured empty secret is refused instead of silently
+    /// accepted.
     pub fn new(secret: &str) -> Result<Self, WebhookError> {
         let b64 = secret.strip_prefix(SECRET_PREFIX).unwrap_or(secret);
         let key = STANDARD
             .decode(b64)
             .map_err(|_| WebhookError::InvalidSecret)?;
+        if key.is_empty() {
+            return Err(WebhookError::InvalidSecret);
+        }
         Ok(Self { key })
     }
 
     /// Build a signer from raw key bytes, bypassing base64 decoding.
     ///
-    /// Use this when the secret is held as bytes rather than as a base64
-    /// string. HMAC accepts a key of any length.
-    #[must_use]
-    pub fn from_bytes(key: &[u8]) -> Self {
-        Self { key: key.to_vec() }
+    /// Use this when the secret is held as bytes rather than as a base64 string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WebhookError::InvalidSecret`] if `key` is empty: an empty HMAC key
+    /// provides no authentication, so it is refused rather than accepted.
+    pub fn from_bytes(key: &[u8]) -> Result<Self, WebhookError> {
+        if key.is_empty() {
+            return Err(WebhookError::InvalidSecret);
+        }
+        Ok(Self { key: key.to_vec() })
     }
 
     /// Sign a payload, returning the `v1,<base64>` value for the
@@ -252,6 +264,16 @@ impl Webhook {
     /// The timestamp used in the signed content is the raw header string, so a
     /// signature only verifies when the header the sender signed is reproduced
     /// byte for byte.
+    ///
+    /// # Replay within the window
+    ///
+    /// A valid message replayed **inside** the tolerance window verifies again —
+    /// the timestamp check only bounds how far in the past/future it may be, it does
+    /// not make a message single-use. A receiver that must process each event
+    /// exactly once (e.g. a payment capture) **must deduplicate on the
+    /// [`ID_HEADER`]** (`webhook-id`): record seen ids for at least the tolerance
+    /// window and drop a repeat. This crate verifies authenticity and freshness; at-
+    /// most-once delivery is the caller's, by id.
     ///
     /// # Errors
     ///
@@ -416,10 +438,21 @@ mod tests {
 
     #[test]
     fn from_bytes_roundtrips_with_a_raw_key() {
-        let wh = Webhook::from_bytes(b"a raw secret key, any length");
+        let wh = Webhook::from_bytes(b"a raw secret key, any length").unwrap();
         let sig = wh.sign(ID, TS, PAYLOAD);
         let h = headers(ID, "1614265330", sig.as_str());
         assert_eq!(wh.verify(&h, PAYLOAD, at(TS), DEFAULT_TOLERANCE), Ok(()));
+    }
+
+    #[test]
+    fn an_empty_secret_is_refused() {
+        // Neither a base64 nor a raw empty key is accepted: an empty HMAC key
+        // authenticates nothing.
+        assert!(matches!(Webhook::new(""), Err(WebhookError::InvalidSecret)));
+        assert!(matches!(
+            Webhook::from_bytes(b""),
+            Err(WebhookError::InvalidSecret)
+        ));
     }
 
     #[test]

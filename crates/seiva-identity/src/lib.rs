@@ -144,9 +144,22 @@ pub trait Authenticator: Send + Sync {
 /// A fine dev/test authenticator; real OIDC/JWT is [`JwtAuthenticator`], and both
 /// slot behind the same [`Authenticator`] trait. An empty map denies every
 /// request — zero trust out of the box.
+///
+/// Tokens are indexed by their **SHA-256 digest**, never stored or compared in
+/// clear: the lookup keys on the digest, so a timing side-channel over the map
+/// leaks only digest bytes (which are pre-image-resistant — useless for forging a
+/// token), and no bearer secret ever sits in process memory.
 #[derive(Clone, Default)]
 pub struct TokenAuthenticator {
-    tokens: std::collections::HashMap<String, Principal>,
+    tokens: std::collections::HashMap<[u8; 32], Principal>,
+}
+
+/// The SHA-256 digest of a bearer token — the key the authenticator indexes on.
+fn token_digest(token: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hasher.finalize().into()
 }
 
 impl TokenAuthenticator {
@@ -156,16 +169,17 @@ impl TokenAuthenticator {
         Self::default()
     }
 
-    /// Register one `token` → `principal`, builder-style.
+    /// Register one `token` → `principal`, builder-style. The token is stored as
+    /// its SHA-256 digest, not in clear.
     #[must_use]
     pub fn with_token(mut self, token: impl Into<String>, principal: Principal) -> Self {
-        self.tokens.insert(token.into(), principal);
+        self.tokens.insert(token_digest(&token.into()), principal);
         self
     }
 
-    /// Register one `token` → `principal` in place.
+    /// Register one `token` → `principal` in place (stored as a SHA-256 digest).
     pub fn insert(&mut self, token: impl Into<String>, principal: Principal) {
-        self.tokens.insert(token.into(), principal);
+        self.tokens.insert(token_digest(&token.into()), principal);
     }
 
     /// How many tokens are registered. Mostly for tests and health checks.
@@ -186,8 +200,10 @@ impl Authenticator for TokenAuthenticator {
         if bearer.is_empty() {
             return Err(AuthError::MissingCredentials);
         }
+        // Look up by the token's digest: the comparison is over digest bytes, which
+        // do not reveal the token even under a timing side-channel.
         self.tokens
-            .get(bearer)
+            .get(&token_digest(bearer))
             .cloned()
             .ok_or(AuthError::InvalidToken)
     }

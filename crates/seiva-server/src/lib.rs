@@ -117,6 +117,12 @@ pub const CORS_ALLOWED_ORIGINS_VAR: &str = "SEIVA_CORS_ALLOWED_ORIGINS";
 /// reverse proxy; defaults to `false`. See [`HttpSecurity::trust_forwarded_for`].
 pub const TRUST_FORWARDED_FOR_VAR: &str = "SEIVA_TRUST_FORWARDED_FOR";
 
+/// Whether to serve `/openapi.json` and the interactive reference (`/docs`,
+/// `/redoc`, `/scalar`). Defaults to `true` (FastAPI parity); set `false` to stop
+/// publishing the contract to anonymous callers (OWASP API9). See
+/// [`HttpSecurity::expose_docs`].
+pub const EXPOSE_DOCS_VAR: &str = "SEIVA_EXPOSE_DOCS";
+
 /// The per-client rate-limit budget per window. Defaults to
 /// [`RateLimit::DEFAULT_MAX_REQUESTS`]; `0` disables rate limiting entirely.
 pub const RATE_LIMIT_MAX_REQUESTS_VAR: &str = "SEIVA_RATE_LIMIT_MAX_REQUESTS";
@@ -278,6 +284,9 @@ fn resolve_security(reader: &mut EnvReader) -> Option<HttpSecurity> {
         })
         .unwrap_or_default();
     let trust_forwarded_for = reader.optional_bool(TRUST_FORWARDED_FOR_VAR, false)?;
+    // Contract-discovery surface on by default (FastAPI parity); a deployment
+    // closes it with `SEIVA_EXPOSE_DOCS=false` (OWASP API9).
+    let expose_docs = reader.optional_bool(EXPOSE_DOCS_VAR, true)?;
     let max_requests = reader
         .optional_parsed::<u32>(RATE_LIMIT_MAX_REQUESTS_VAR, RateLimit::DEFAULT_MAX_REQUESTS)?;
     let window_secs = reader.optional_parsed::<u64>(
@@ -296,6 +305,7 @@ fn resolve_security(reader: &mut EnvReader) -> Option<HttpSecurity> {
         cors_allowed_origins,
         rate_limit,
         trust_forwarded_for,
+        expose_docs,
     })
 }
 
@@ -343,6 +353,10 @@ pub enum ServeError {
     /// or is not a valid key set). A startup error — the service refuses to boot
     /// claiming to authenticate when it cannot.
     Identity(String),
+    /// Two or more mounted facades pluralise to the same `(version, resource)`
+    /// route prefix, which would panic `Router::merge`. Carries the colliding
+    /// `"<version>/<resource>"` prefixes so the operator can rename a facade.
+    RouteCollision(Vec<String>),
 }
 
 impl fmt::Display for ServeError {
@@ -351,6 +365,12 @@ impl fmt::Display for ServeError {
             ServeError::Bind(e) => write!(f, "failed to bind the HTTP listener: {e}"),
             ServeError::Serve(e) => write!(f, "the HTTP server failed: {e}"),
             ServeError::Identity(m) => write!(f, "failed to build the OIDC authenticator: {m}"),
+            ServeError::RouteCollision(prefixes) => write!(
+                f,
+                "two or more facades mount on the same route prefix ({}); \
+                 rename a facade so each resolves to a distinct `<version>/<resource>`",
+                prefixes.join(", ")
+            ),
         }
     }
 }
@@ -359,7 +379,7 @@ impl std::error::Error for ServeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ServeError::Bind(e) | ServeError::Serve(e) => Some(e),
-            ServeError::Identity(_) => None,
+            ServeError::Identity(_) | ServeError::RouteCollision(_) => None,
         }
     }
 }
@@ -421,6 +441,11 @@ pub async fn serve(
     // graceful-shutdown future is held by the server task for its whole life.
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
+    // Apply the validated error-detail policy process-wide before serving, so a
+    // `500` honours `SEIVA_EXPOSE_ERROR_DETAILS` (off in production — the config
+    // guard above enforces it). Fail-closed by default: a composition root that
+    // drives `serve_router` directly and forgets this still hides internal errors.
+    seiva_http::problem::set_expose_error_details(config.expose_error_details);
     let health = Health::starting();
     let authenticator = build_authenticator(&config)?;
     let app = router_with_auth(health.clone(), &config.security, authenticator);
@@ -452,6 +477,14 @@ pub async fn serve_router(
     health: Health,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
+    // Fail fast on a route-prefix collision (two facades pluralising to the same
+    // `(version, resource)`): a clear startup error beats the bare `Router::merge`
+    // panic that would otherwise fire while mounting the modules.
+    let collisions = seiva_http::route_collisions();
+    if !collisions.is_empty() {
+        return Err(ServeError::RouteCollision(collisions));
+    }
+
     let listener = TcpListener::bind(addr).await.map_err(ServeError::Bind)?;
 
     // The socket is live: Starting -> Ready, so /health/ready passes.

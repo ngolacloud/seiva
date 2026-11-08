@@ -68,7 +68,10 @@ pub trait Widgets {
     #[requires("widgets.read")]
     async fn get(&self, id: u64) -> Result<WidgetDto, WidgetError>;
 
-    /// List widgets (unguarded, `GET /v2/widgets`).
+    /// List widgets — explicitly public, no authorization (`GET /v2/widgets`).
+    /// `#[public]` is the auditable opt-out; omitting both it and `#[requires]`
+    /// is now a compile error (fail-closed authorization).
+    #[public]
     async fn list(&self) -> Result<Vec<WidgetDto>, WidgetError>;
 }
 
