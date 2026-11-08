@@ -15,23 +15,30 @@
 //! across them, and delivery is at-least-once with exactly-one *effect* either
 //! way. It is the in-process twin of `seiva_outbox_relay::drain`.
 //!
-//! ## What is here (Fase 1) and what is not (Fase 2)
+//! ## What is here and what stays DORM-coupled
 //!
-//! This crate is **DORM-free and broker-free**, so the choreography is testable
-//! fully offline. It provides the dispatch core only:
+//! This crate is **DORM-free and broker-free**, so the whole choreography is
+//! testable fully offline. It provides:
 //!
 //! - [`EventSubscriber`] — the handler a module plugs in for an event type;
 //! - [`SubscriberRegistry`] — the composition-root routing table, by type;
-//! - [`dispatch`] — deliver one event to its subscribers, deduped per subscriber.
+//! - [`dispatch`] — deliver one event to its subscribers, deduped per subscriber;
+//! - [`OutboxReader`] — the DORM-free read seam over an outbox (read a batch,
+//!   advance the cursor), the twin of what `dorm-outbox` does in-database;
+//! - [`drain_in_process`] — the **driver**: one pass that reads a batch, dispatches
+//!   each event, and advances the cursor only after a successful dispatch — the
+//!   in-process twin of `seiva_outbox_relay::drain`;
+//! - [`InMemoryOutbox`] (behind the `testing` feature) — an in-memory
+//!   [`OutboxReader`] so the `orders.placed → inventory.reserved` choreography is
+//!   proved with no broker and no database (see `tests/choreography.rs`).
 //!
-//! It deliberately does **not** read the real outbox (that is DORM's, through
-//! `dorm-outbox`) nor run the worker loop that polls it. Wiring this dispatcher
-//! to the outbox — the DORM-coupled driver that makes `module split` a swap of
-//! dispatcher for `seiva-outbox-relay` — is **Fase 2** and lands alongside
-//! `seiva-outbox-relay` (which is excluded from the default workspace because it
-//! is DORM-git-coupled). The `IdempotencyStore` the real driver passes will be
-//! the DORM-backed one, and the claim + effect + mark will share one
-//! transaction; here any `IdempotencyStore` double proves the logic.
+//! What stays out is only the **DORM adapter** of [`OutboxReader`] over the real
+//! in-database outbox (`dorm-outbox`): it is the piece that makes `module split` a
+//! swap of this driver for `seiva-outbox-relay`, and it lands there (that crate is
+//! excluded from the default workspace because it is DORM-git-coupled). In the
+//! integrated driver the `IdempotencyStore` is the DORM-backed one and the claim +
+//! effect + mark share one transaction; here any `IdempotencyStore` double proves
+//! the same logic.
 //!
 //! [`seiva-outbox-relay`]: https://github.com/ngolacloud/seiva
 //! [`CloudEvent`]: seiva_messaging::CloudEvent
@@ -47,6 +54,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
 use seiva_ports::{inbox_key, IdempotencyOutcome, IdempotencyStore, PortResult};
+
+// The in-memory outbox double needs interior mutability behind the shared `Arc`;
+// gated so a `--no-default-features` build (no `testing`) imports nothing unused.
+#[cfg(any(test, feature = "testing"))]
+use std::sync::Mutex;
 
 /// How long a per-subscriber inbox claim stays valid in [`dispatch`].
 ///
@@ -225,6 +237,183 @@ impl std::fmt::Display for InboxMismatch {
 }
 
 impl std::error::Error for InboxMismatch {}
+
+/// One record read from an outbox: a [`CloudEvent`] plus the opaque `position` that
+/// [`OutboxReader::advance`] uses to mark it (and everything before it) dispatched.
+///
+/// The `position` is a monotonically increasing cursor token owned by the reader
+/// (the outbox row id in the DORM adapter). The driver never interprets it — it only
+/// hands it back to [`advance`](OutboxReader::advance) once the event's
+/// [`dispatch`] has returned `Ok`.
+#[derive(Clone, Debug)]
+pub struct OutboxRecord {
+    /// The reader's opaque cursor token for this event. Pass it to
+    /// [`OutboxReader::advance`] after the event has been dispatched.
+    pub position: u64,
+    /// The event to dispatch, in the **same** CloudEvents envelope the broker path
+    /// carries — which is what makes a subscriber handler byte-identical across the
+    /// in-process and the broker paths.
+    pub event: CloudEvent,
+}
+
+/// The read side of the outbox the in-process driver drains — the **DORM-free seam**
+/// that lets [`drain_in_process`] run against an in-memory double offline and, in the
+/// DORM adapter, against the real `dorm-outbox` cursor.
+///
+/// It mirrors `seiva_outbox_relay::drain` / `dorm_outbox::relay`, but splits the two
+/// steps so the *driver* controls their ordering for **at-least-once** delivery:
+///
+/// 1. [`read_batch`](Self::read_batch) returns the next events the cursor has not
+///    passed yet, oldest first;
+/// 2. [`advance`](Self::advance) moves the cursor past an event — called **only
+///    after** that event's [`dispatch`] returned `Ok`, so a crash (or a failing
+///    subscriber) between the two re-reads the event on the next pass rather than
+///    silently skipping it.
+///
+/// An adapter over the in-database outbox implements this in `seiva-outbox-relay`
+/// behind the DORM coupling; [`InMemoryOutbox`] implements it for the offline proof.
+#[async_trait]
+pub trait OutboxReader {
+    /// The next up-to-`max` undispatched events, oldest first (cursor-ascending). An
+    /// empty batch means the outbox is drained up to the cursor.
+    async fn read_batch(&self, max: usize) -> PortResult<Vec<OutboxRecord>>;
+
+    /// Advance the cursor to `position`, acknowledging every event up to and
+    /// including it as dispatched. **Monotonic**: a `position` at or behind the
+    /// cursor is a no-op, so a slower concurrent pass can never rewind it.
+    async fn advance(&self, position: u64) -> PortResult<()>;
+}
+
+/// How many events [`drain_in_process`] pulls per pass. A pass dispatches at most
+/// this many events, then returns; a worker loops on it, sleeping when it returns
+/// `0`. The constant lives here because the offline driver takes no configuration;
+/// the DORM adapter reads its batch size from the relay's `RelayConfig` instead.
+pub const DRAIN_BATCH: usize = 128;
+
+/// The in-process outbox **driver**: one pass that drains a batch from `reader`,
+/// [`dispatch`]es each event to `registry`'s subscribers (deduped through `inbox`),
+/// and advances the cursor past each event **only after** its dispatch succeeds.
+/// Returns how many events were dispatched this pass (`0` when the outbox is already
+/// drained) — a worker loops on it and sleeps on `0`.
+///
+/// This is the DORM-free twin of `seiva_outbox_relay::drain`: the same at-least-once
+/// contract and the same inbox dedup, so a subscriber reacts identically whether a
+/// monolith runs this driver or a split service drains the broker — which is what
+/// makes `seiva module split` a swap of dispatcher rather than a rewrite (ADR 0021).
+///
+/// **At-least-once.** The cursor advances (`reader.advance`) only after [`dispatch`]
+/// returns `Ok`. If a subscriber errors, `dispatch` propagates the error, this
+/// returns early, and the cursor is left where it was — so the event is re-read on
+/// the next pass (and, under the integrated DORM transaction, the failed inbox claim
+/// rolls back, so the retry is `Fresh` again). A redelivery that *does* get through
+/// is absorbed by the inbox: the effect runs exactly once per `(subscriber, event)`.
+pub async fn drain_in_process<R, S>(
+    reader: &R,
+    registry: &SubscriberRegistry,
+    inbox: &S,
+) -> PortResult<usize>
+where
+    R: OutboxReader + Sync,
+    S: IdempotencyStore,
+{
+    let batch = reader.read_batch(DRAIN_BATCH).await?;
+    let mut dispatched = 0usize;
+    for record in batch {
+        // Dispatch first, advance second — the whole point of at-least-once: a
+        // failure here propagates before the cursor moves, leaving the event pending.
+        dispatch(&record.event, registry, inbox).await?;
+        reader.advance(record.position).await?;
+        dispatched += 1;
+    }
+    Ok(dispatched)
+}
+
+/// An in-memory [`OutboxReader`] double (behind the `testing` feature): an
+/// append-only log of [`CloudEvent`]s with a single advancing cursor, so the
+/// choreography can be proved with no database and no broker.
+///
+/// A test plays the role of a publishing module by calling [`publish`](Self::publish)
+/// — the in-memory stand-in for a use case writing to the transactional outbox — then
+/// drives [`drain_in_process`] over it. [`read_batch`](OutboxReader::read_batch)
+/// returns everything after the cursor; [`advance`](OutboxReader::advance) moves the
+/// cursor forward; [`redeliver`](Self::redeliver) rewinds it to model an
+/// at-least-once **redelivery** (a crash after dispatch but before the cursor
+/// advanced), so a test can prove the inbox absorbs it independently of the cursor.
+///
+/// It is a single-process model (a `Mutex`, nothing durable); the real durable,
+/// cursor-per-consumer guarantee is `dorm-outbox`, exercised by the DORM adapter.
+#[cfg(any(test, feature = "testing"))]
+#[derive(Clone, Default)]
+pub struct InMemoryOutbox {
+    inner: Arc<Mutex<InMemoryOutboxState>>,
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[derive(Default)]
+struct InMemoryOutboxState {
+    /// Appended events, each with its 1-based position (its cursor id).
+    records: Vec<OutboxRecord>,
+    /// The highest position dispatched; `read_batch` returns records beyond it.
+    cursor: u64,
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl InMemoryOutbox {
+    /// An empty outbox with the cursor at the start.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append `event` as a publishing module would into the transactional outbox,
+    /// returning its position. Positions increase monotonically, so the cursor
+    /// orders deliveries exactly as `dorm-outbox`'s row ids do.
+    pub fn publish(&self, event: CloudEvent) -> u64 {
+        let mut st = self.inner.lock().expect("InMemoryOutbox poisoned");
+        let position = st.records.len() as u64 + 1;
+        st.records.push(OutboxRecord { position, event });
+        position
+    }
+
+    /// How many events are still ahead of the cursor (undispatched).
+    #[must_use]
+    pub fn pending(&self) -> usize {
+        let st = self.inner.lock().expect("InMemoryOutbox poisoned");
+        st.records.iter().filter(|r| r.position > st.cursor).count()
+    }
+
+    /// Rewind the cursor to `position` to model an at-least-once **redelivery**: the
+    /// events after `position` are read again, exactly as if the process had crashed
+    /// after dispatching them but before the cursor advanced. The inbox is what then
+    /// keeps the effect exactly-once. (Never moves the cursor forward.)
+    pub fn redeliver(&self, position: u64) {
+        let mut st = self.inner.lock().expect("InMemoryOutbox poisoned");
+        st.cursor = position.min(st.cursor);
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl OutboxReader for InMemoryOutbox {
+    async fn read_batch(&self, max: usize) -> PortResult<Vec<OutboxRecord>> {
+        let st = self.inner.lock().expect("InMemoryOutbox poisoned");
+        Ok(st
+            .records
+            .iter()
+            .filter(|r| r.position > st.cursor)
+            .take(max)
+            .cloned()
+            .collect())
+    }
+
+    async fn advance(&self, position: u64) -> PortResult<()> {
+        let mut st = self.inner.lock().expect("InMemoryOutbox poisoned");
+        if position > st.cursor {
+            st.cursor = position;
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

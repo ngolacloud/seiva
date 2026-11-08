@@ -24,6 +24,16 @@ homepage.workspace = true
 rust-version.workspace = true
 description = "In-process event bus for Delonix Seiva: a subscriber registry and an inbox-deduplicating dispatcher, the in-process twin of the broker drain (ADR 0021). DORM-free."
 
+[features]
+# `testing` exposes the in-memory reference double `InMemoryOutbox` (an
+# `OutboxReader` with no database), used by the offline choreography proof. It is
+# ON by default so `cargo test`/`cargo doc`/`cargo clippy` see it with no extra
+# flags; a production consumer drops it with `default-features = false`, since the
+# double is never wanted in a real build (the real reader is the DORM adapter in
+# `seiva-outbox-relay`).
+default = ["testing"]
+testing = []
+
 [dependencies]
 # The result/error boundary (`PortResult`, `BoxError`), the inbox key helper and
 # the `IdempotencyStore` port the dispatcher dedupes through. No runtime, no data
