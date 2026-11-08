@@ -26,9 +26,30 @@
 //! A middleware is itself a handler that wraps an inner handler, so concerns
 //! compose by nesting and stay fully typed. Two are shipped to prove the seam:
 //! [`Instrument`] counts dispatched messages (the hook `#[policy]` instrumentation
-//! will map onto), and [`CacheQueries`] memoises one read-side [`Query`] (the hook
-//! `#[cached]` will map onto). Wrap from the inside out:
+//! will map onto, and the `Trace` behavior of ADR 0020), and [`CacheQueries`]
+//! memoises one read-side [`Query`] (the hook `#[cached]` will map onto). Wrap
+//! from the inside out:
 //! `Mediator::new(Instrument::new(CacheQueries::new(handler)))`.
+//!
+//! # Pipeline behaviors (ADR 0020)
+//!
+//! A *behavior* is the same shape — a handler wrapping an inner handler — used to
+//! express one cross-cutting concern of a use case as one typed, monomorphised
+//! link in a chain. Two transport-free behaviors live here alongside the pair
+//! above:
+//!
+//! - [`Validate`] rejects an invalid message *before* the handler runs
+//!   (pre-transaction, fail fast), keyed off the [`Validated`] contract.
+//! - [`Transactional`] runs the inner handler *inside* a [`UnitOfWork`]
+//!   transaction, so the mutation commits on `Ok` and rolls back on `Err`.
+//!
+//! The behaviors that need the **request context** — `Authorize` (the caller's
+//! `Principal` and the route policy, ADR 0019) and `Idempotent` (the request's
+//! scoped key and fingerprint, ADR 0011) — are deliberately **not** here: they
+//! bind to transport-supplied state and are wired in Phase 2 at the HTTP/gRPC
+//! edge. This crate stays transport-free, so it ships only the behaviors that
+//! depend on the message itself ([`Validate`]) or on an injected port
+//! ([`Transactional`]).
 
 #![forbid(unsafe_code)]
 // This is a framework, not a `dyn`-dispatched object: handlers are always used
@@ -45,7 +66,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use seiva_ports::PortResult;
+use seiva_ports::{PortResult, UnitOfWork};
 
 /// A message that *changes* state. Its [`Output`](Command::Output) is what the
 /// handler returns on success (an id, a DTO, or `()`), carried back through the
@@ -318,6 +339,143 @@ where
     }
 }
 
+/// A message that can check its own well-formedness before a handler acts on it.
+///
+/// This is the contract the [`Validate`] behavior keys off: a [`Command`] or
+/// [`Query`] that knows which of its fields are structurally required or bounded
+/// implements [`validate`](Validated::validate) to say so, returning
+/// [`PortResult`]`::Err` describing the first problem. It is deliberately minimal
+/// — no error-shape, no field path, no validation library — because the *message*
+/// is the single source of truth for what "well-formed" means, and the boundary
+/// error type ([`PortResult`]) already carries a human-readable reason. Keep the
+/// check **pure and cheap**: it runs on every dispatch, before any port is
+/// touched, so it must not read the database or call out.
+pub trait Validated {
+    /// Returns `Ok(())` if the message is well-formed, or an error describing the
+    /// first violation. Implementations must be side-effect-free.
+    fn validate(&self) -> PortResult<()>;
+}
+
+/// Validation behavior: checks the message against its [`Validated`] contract and
+/// only delegates to the inner handler if it passes.
+///
+/// This is a *pre-transaction* behavior (ADR 0020): it runs before the handler and
+/// before any [`Transactional`] scope, so a malformed request is rejected cheaply,
+/// without opening a transaction or touching a port. It wraps an inner handler and
+/// implements both [`CommandHandler`] and [`QueryHandler`], so the same guard
+/// serves a write and a read; the only added bound over the inner handler is that
+/// the message is [`Validated`]. On a failed check it returns the validation error
+/// and **never calls the inner handler** — the handler therefore cannot observe an
+/// invalid message. This is the typed home for the `Valid<T>` contract the HTTP
+/// extractor already enforces, made transport-free and composable with the rest of
+/// the chain.
+pub struct Validate<H> {
+    inner: H,
+}
+
+impl<H> Validate<H> {
+    /// Wrap `inner` so each dispatched message is validated before it reaches it.
+    pub fn new(inner: H) -> Self {
+        Self { inner }
+    }
+
+    /// Borrow the wrapped inner handler/behavior.
+    pub fn inner(&self) -> &H {
+        &self.inner
+    }
+}
+
+impl<C, H> CommandHandler<C> for Validate<H>
+where
+    C: Command + Validated,
+    H: CommandHandler<C>,
+{
+    async fn handle(&self, cmd: C) -> PortResult<C::Output> {
+        // Reject before delegating: on `Err` the inner handler is never called.
+        cmd.validate()?;
+        self.inner.handle(cmd).await
+    }
+}
+
+impl<Q, H> QueryHandler<Q> for Validate<H>
+where
+    Q: Query + Validated,
+    H: QueryHandler<Q>,
+{
+    async fn handle(&self, query: Q) -> PortResult<Q::Output> {
+        // Same guard on the read side: an invalid query never reaches the handler.
+        query.validate()?;
+        self.inner.handle(query).await
+    }
+}
+
+/// Transaction behavior: runs the inner handler *inside* a unit-of-work
+/// transaction, so the mutation commits as one atom or not at all.
+///
+/// This is the *transactional scope* of ADR 0020. It holds the inner handler and a
+/// [`UnitOfWork`] `U`, and implements [`CommandHandler`] by driving
+/// `inner.handle(cmd)` through
+/// [`U::transaction`](seiva_ports::UnitOfWork::transaction). Because that port is
+/// **scope-based** — it commits when the body returns `Ok` and rolls back when the
+/// body returns `Err` — the behavior inherits exactly that semantics for free: an
+/// `Ok` from the handler commits, any `Err` rolls back. Statements the handler
+/// performs through the data layer join the same transaction, which is what lets
+/// the Phase 2 intra-transaction behaviors (`Idempotent`, the outbox write) later
+/// nest *inside* this one and stay atomic with the mutation.
+///
+/// Only [`CommandHandler`] is implemented, by design: a [`Query`] is a
+/// side-effect-free read and does not need a write transaction, so wrapping a read
+/// in one would add a round trip for nothing. Compose a read through
+/// [`CacheQueries`]/[`Instrument`] instead.
+///
+/// ## Why the `Send` bounds work out
+///
+/// [`transaction`](seiva_ports::UnitOfWork::transaction) takes a closure
+/// `FnOnce() -> Fut` where both the closure and the `Fut` it returns must be
+/// `Send + 'a`, and it returns a boxed `Send` future. The closure captures the
+/// owned `cmd` (`C: Command`, hence `C: Send`) and a shared reference to the inner
+/// handler (`&H` is `Send` because [`CommandHandler`] requires `H: Send + Sync`);
+/// the `Fut` is `inner.handle(cmd)`, whose future [`CommandHandler`] already
+/// guarantees is `Send`. So every bound the port asks for is met by the bounds
+/// this behavior already carries — no `spawn_blocking`, no manual `Pin`, and the
+/// future returned from [`handle`](CommandHandler::handle) stays `Send`.
+pub struct Transactional<H, U> {
+    inner: H,
+    uow: U,
+}
+
+impl<H, U> Transactional<H, U> {
+    /// Wrap `inner`, running each command inside a transaction from `uow`.
+    pub fn new(inner: H, uow: U) -> Self {
+        Self { inner, uow }
+    }
+
+    /// Borrow the wrapped inner handler/behavior.
+    pub fn inner(&self) -> &H {
+        &self.inner
+    }
+
+    /// Borrow the unit of work this behavior opens transactions on.
+    pub fn uow(&self) -> &U {
+        &self.uow
+    }
+}
+
+impl<C, H, U> CommandHandler<C> for Transactional<H, U>
+where
+    C: Command,
+    H: CommandHandler<C>,
+    U: UnitOfWork,
+{
+    async fn handle(&self, cmd: C) -> PortResult<C::Output> {
+        // The inner handler is the transaction body: its `Ok` commits, its `Err`
+        // rolls back — the scope-based guarantee of `UnitOfWork::transaction`. The
+        // closure moves `cmd` and borrows `&self.inner`; both are `Send`, so the
+        // boxed future the port returns stays `Send`.
+        self.uow.transaction(move || self.inner.handle(cmd)).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,5 +629,141 @@ mod tests {
         assert_eq!(b, 15);
         // Nothing was cached: the cache only ever memoises its query type.
         assert!(mediator.handler().is_empty());
+    }
+
+    // ----- Validate behavior -------------------------------------------------
+
+    /// A command that is well-formed only when its name is non-empty, so a test
+    /// can dispatch both a valid and an invalid instance.
+    struct Register {
+        name: String,
+    }
+    impl Command for Register {
+        type Output = ();
+    }
+    impl Validated for Register {
+        fn validate(&self) -> PortResult<()> {
+            if self.name.is_empty() {
+                return Err("name must not be empty".into());
+            }
+            Ok(())
+        }
+    }
+
+    /// A handler that records whether it was ever invoked, so a test can prove the
+    /// validation behavior short-circuited before delegating.
+    struct RecordingRegistrar {
+        called: Arc<AtomicU64>,
+    }
+    impl RecordingRegistrar {
+        fn new() -> Self {
+            Self {
+                called: Arc::new(AtomicU64::new(0)),
+            }
+        }
+        fn calls(&self) -> Arc<AtomicU64> {
+            Arc::clone(&self.called)
+        }
+    }
+    impl CommandHandler<Register> for RecordingRegistrar {
+        async fn handle(&self, _cmd: Register) -> PortResult<()> {
+            self.called.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_valid_command_passes_validation_and_reaches_the_handler() {
+        let handler = RecordingRegistrar::new();
+        let calls = handler.calls();
+        let mediator = Mediator::new(Validate::new(handler));
+
+        mediator
+            .send(Register {
+                name: "ada".to_owned(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_command_is_rejected_without_calling_the_handler() {
+        let handler = RecordingRegistrar::new();
+        let calls = handler.calls();
+        let mediator = Mediator::new(Validate::new(handler));
+
+        let result = mediator
+            .send(Register {
+                name: String::new(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "name must not be empty");
+        // The decisive assertion: the inner handler never ran.
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    // ----- Transactional behavior --------------------------------------------
+
+    /// A command whose handler records whether it ran, so a test can prove the
+    /// transaction body actually executed inside the scope.
+    struct RecordedSum(u64, u64);
+    impl Command for RecordedSum {
+        type Output = u64;
+    }
+    struct RecordingAdder {
+        called: Arc<AtomicU64>,
+    }
+    impl RecordingAdder {
+        fn new() -> Self {
+            Self {
+                called: Arc::new(AtomicU64::new(0)),
+            }
+        }
+        fn calls(&self) -> Arc<AtomicU64> {
+            Arc::clone(&self.called)
+        }
+    }
+    impl CommandHandler<RecordedSum> for RecordingAdder {
+        async fn handle(&self, cmd: RecordedSum) -> PortResult<u64> {
+            self.called.fetch_add(1, Ordering::SeqCst);
+            Ok(cmd.0 + cmd.1)
+        }
+    }
+
+    #[tokio::test]
+    async fn an_ok_command_commits_the_transaction_and_runs_the_handler() {
+        use seiva_testing::{InMemoryUnitOfWork, TxOutcome};
+
+        let handler = RecordingAdder::new();
+        let calls = handler.calls();
+        let uow = InMemoryUnitOfWork::new();
+        let mediator = Mediator::new(Transactional::new(handler, uow));
+
+        let out = mediator.send(RecordedSum(2, 40)).await.unwrap();
+
+        assert_eq!(out, 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // The handler returned `Ok`, so the scope-based unit of work committed.
+        assert_eq!(mediator.handler().uow().outcomes(), [TxOutcome::Committed]);
+    }
+
+    #[tokio::test]
+    async fn a_failing_command_rolls_the_transaction_back() {
+        use seiva_testing::{InMemoryUnitOfWork, TxOutcome};
+
+        // `Failing` always returns `Err`, so the transaction body fails.
+        let uow = InMemoryUnitOfWork::new();
+        let mediator = Mediator::new(Transactional::new(Failing, uow));
+
+        let result = mediator.send(Boom).await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "handler blew up");
+        // An `Err` body rolls back — the error must not leave a committed effect.
+        assert_eq!(mediator.handler().uow().outcomes(), [TxOutcome::RolledBack]);
     }
 }
