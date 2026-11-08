@@ -2773,6 +2773,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "delonix-seiva",
+ "seiva-cqrs",
  "seiva-identity",
  "seiva-openapi",
  "seiva-ports",
