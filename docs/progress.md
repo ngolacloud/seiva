@@ -4,6 +4,25 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-08) — bus de comandos + eventos in-process (ADR 0020/0021)
+
+Dois padrões nativos a seguir ao CQRS, desenhados como ADRs aceites e em
+implementação na branch `feat/cqrs-bus-and-inprocess-events` (duas frentes em
+paralelo, sub-branches `feat/cqrs-bus-pipeline` e `feat/inprocess-event-bus`):
+
+- **[ADR 0020](adr/0020-command-bus-and-pipeline-behaviors.md) — Command bus +
+  pipeline de behaviors (opt-in).** Liga o `seiva-cqrs` (já existente, estático/
+  zero-cost, mas desligado do caminho HTTP) a um pipeline tipado de behaviors
+  (`Authorize`/`Validate` fora da tx; `Idempotent`→handler→outbox dentro da tx),
+  activando os seams inertes `#[cached]`/`#[policy]`. Opt-in por command — a macro
+  controller continua a chamar o service directamente por default.
+- **[ADR 0021](adr/0021-in-process-event-bus-and-choreography.md) — Event bus
+  in-process + choreography.** Fecha o lado que faltava do outbox (que já está
+  construído e provado): um despachante in-process lê o outbox e entrega a
+  subscribers locais com dedup de inbox, deixando o código do subscriber idêntico
+  entre monólito e microserviço. Prova: `orders.placed → inventory.reserved` no
+  shop, sem broker. Substitui o `NoopEventPublisher`.
+
 ## Estado (2026-11-07) — ids no fio como strings (ADR 0018)
 
 - **`delonix_seiva::WireId`** — um `u128` que serializa no fio como **string** JSON
