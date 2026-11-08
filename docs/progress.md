@@ -418,6 +418,15 @@ Instalados em `.claude/` (versionados via exceção no `.gitignore`; o resto de
 `dx-advocate`, `community-maintainer`). Ver `.claude/README.md`. A auditoria passa
 a gate permanente: uma sessão nova usa-os sem reler o prompt original.
 
+### Hashing de passwords plugável + fluxo de credenciais — ADR 0017 (2026-11-06)
+[ADR 0017](adr/0017-pluggable-password-hashing.md): `seiva-auth` ganha o modelo
+`PASSWORD_HASHERS` do Django — `trait PasswordHasher` + registo ordenado
+`PasswordHashers` (preferido p/ hashes novos, verifica qualquer algoritmo
+registado, `needs_rehash` p/ upgrade-on-login), com `Argon2idHasher` default e as
+funções livres a delegar (API inalterada). E `authenticate_password(throttle,
+hashers, …)` — o fluxo de referência que **põe o `LoginThrottle` em serviço**
+(lockout OWASP API2). 17 testes. security-review GO, lint 10/10, cargo deny ok.
+
 ### Framework padrão da comunidade — fase futura (fora do âmbito desta auditoria)
 Falta, para o Seiva ser referência pública ao nível de axum/loco.rs/shuttle:
 - **Getting-started de 5 minutos** executável (quando os crates do framework
