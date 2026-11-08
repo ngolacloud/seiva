@@ -10,6 +10,9 @@
 //! - [`valid`] — a typed, validated JSON body extractor ([`Valid`], [`Validate`]).
 //! - [`guard`] — a descriptor-driven permission guard ([`permission_guard`],
 //!   [`Principal`], [`RequiredPermission`]) plus tenant-ownership checks.
+//! - [`bus`] — the context-bound pipeline behaviors ([`Authorize`],
+//!   [`Idempotent`]) that complete the ADR 0020 chain over the `seiva-cqrs`
+//!   [`Validate`](seiva_cqrs::Validate)/[`Transactional`](seiva_cqrs::Transactional).
 //! - [`security`] — secure-by-default response headers and configurable CORS.
 //! - [`mod@rate_limit`] — a per-client request rate limiter.
 //! - [`health`] — `/health/live` and `/health/ready` over a
@@ -27,6 +30,7 @@
 
 pub mod audit;
 pub mod authn;
+pub mod bus;
 pub mod ctx;
 pub mod docs;
 pub mod guard;
@@ -47,9 +51,10 @@ use axum::{Json, Router};
 
 pub use audit::audit;
 pub use authn::authn;
+pub use bus::{Authorize, Idempotent, DEFAULT_IDEMPOTENCY_TTL};
 pub use ctx::Ctx;
 pub use docs::{docs_handler, redoc_handler, scalar_handler, DOCS_HTML};
-pub use guard::{permission_guard, PrincipalExt, RequiredPermission, Scoped};
+pub use guard::{permission_guard, require_permission, PrincipalExt, RequiredPermission, Scoped};
 pub use health::{
     health_router, health_router_with_dependency, Health, HealthState, ReadinessCheck,
 };

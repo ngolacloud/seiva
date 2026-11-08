@@ -126,6 +126,35 @@ impl<T> Scoped<T> {
 #[derive(Debug, Clone, Copy)]
 pub struct RequiredPermission(pub &'static str);
 
+/// The **function-level** (OWASP API5) permission check, fail-closed per ADR 0019.
+///
+/// This is the single home of the rule shared by the tower
+/// [`permission_guard`] and the pipeline `Authorize` behavior
+/// ([`crate::bus::Authorize`]), so the two transports cannot drift: an empty
+/// `required` marks an unguarded operation and always passes; otherwise the caller
+/// must hold the named permission verbatim. An absent principal is the caller's
+/// responsibility to default to [`Principal::anonymous`] (which holds nothing), so
+/// an unauthenticated caller is denied, not admitted.
+///
+/// It returns a *bare* `403` [`Problem`] on denial — no `instance`, no
+/// `request_id`. The caller enriches it with the request coordinates it has
+/// (`permission_guard` adds the URI path and correlation id; the behavior adds the
+/// `Ctx` path), so this function stays free of any transport detail.
+///
+/// # Errors
+///
+/// Returns a `403` [`Problem`] when `required` is non-empty and `principal` does
+/// not hold it.
+pub fn require_permission(principal: &Principal, required: &str) -> Result<(), Problem> {
+    if required.is_empty() || principal.has(required) {
+        Ok(())
+    } else {
+        Err(Problem::forbidden(format!(
+            "permission `{required}` is required"
+        )))
+    }
+}
+
 /// Middleware that enforces [`RequiredPermission`] against the request's
 /// [`Principal`]. Mount it with
 /// [`axum::middleware::from_fn_with_state`]`(RequiredPermission(perm), permission_guard)`.
@@ -134,22 +163,21 @@ pub async fn permission_guard(
     request: Request,
     next: Next,
 ) -> Response {
-    if required.0.is_empty() {
-        return next.run(request).await;
-    }
-
     let principal = request
         .extensions()
         .get::<Principal>()
         .cloned()
         .unwrap_or_else(Principal::anonymous);
 
-    if principal.has(required.0) {
-        return next.run(request).await;
-    }
+    // The fail-closed decision is shared with the `Authorize` behavior via
+    // `require_permission`, so there is one rule, not two that can diverge.
+    let problem = match require_permission(&principal, required.0) {
+        Ok(()) => return next.run(request).await,
+        Err(problem) => problem,
+    };
 
     let request_id = request.extensions().request_id();
-    Problem::forbidden(format!("permission `{}` is required", required.0))
+    problem
         .with_instance(request.uri().path().to_owned())
         .with_request_id_opt(request_id)
         .into_response()
