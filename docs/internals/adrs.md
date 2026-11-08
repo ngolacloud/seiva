@@ -21,6 +21,10 @@ The index of ADRs.
 - ADR 0013 — Persistent audit of administrative mutations
 - ADR 0014 — Supply-chain audit of the excluded, DORM-coupled lockfiles
 - ADR 0015 — Distributed rate limiting as an optional port
+- ADR 0016 — The dxjs admin console
+- ADR 0017 — Pluggable password hashers
+- ADR 0018 — Wire ids as strings
+- ADR 0019 — Fail-closed authorization: every facade method declares its policy
 
 ## Related
 
