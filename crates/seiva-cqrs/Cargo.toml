@@ -26,3 +26,7 @@ seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
 # The tests drive async handlers on a current-thread runtime. A dev-dependency
 # only: the library itself pulls in no runtime.
 tokio = { version = "1", features = ["rt", "macros"] }
+# The in-memory port doubles (`InMemoryUnitOfWork`, …) back the behavior tests.
+# Dev-only, and no dependency cycle: `seiva-testing` depends on `seiva-ports`,
+# never on `seiva-cqrs`.
+seiva-testing = { version = "0.1.0", path = "../seiva-testing" }
