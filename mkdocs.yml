@@ -317,5 +317,7 @@ nav:
           - 0013 · Admin mutation audit: adr/0013-admin-mutation-audit.md
           - 0014 · Supply-chain audit of excluded lockfiles: adr/0014-supply-chain-audit-excluded-lockfiles.md
           - 0015 · Distributed rate limiting: adr/0015-distributed-rate-limit.md
+          - 0016 · dxjs admin console: adr/0016-dxjs-admin-console.md
+          - 0017 · Pluggable password hashers: adr/0017-pluggable-password-hashing.md
           - 0018 · Wire ids as strings: adr/0018-wire-ids-as-strings.md
   - API reference: https://ngolacloud.github.io/seiva/api/
