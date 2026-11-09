@@ -121,19 +121,51 @@ impl UnitOfWork for DormUnitOfWork {
     {
         let db = self.db.clone();
         Box::pin(async move {
+            // Preserve the caller's ORIGINAL boundary error across the DORM bridge.
+            // `dorm_core::db::atomic` only rolls back when the body returns `Err`,
+            // and its error type is `dorm_core::Error` — so stringifying the boundary
+            // error into `Error::Config` would throw away its type. That silently
+            // flattens a status-bearing `Problem` boxed in the `BoxError` (a `404`
+            // from a use case, the `409` from the `Idempotent` behavior) into a
+            // generic `500` at the HTTP edge, because `From<BoxError> for Problem`
+            // can no longer `downcast::<Problem>()`. Instead we stash the real error
+            // and hand `atomic` a sentinel purely to trigger the rollback, then
+            // restore the original on the way out — the rollback still happens, and
+            // the typed error survives. (`InMemoryUnitOfWork` already preserves it,
+            // so this closes the gap between the double and the real gateway.)
+            let captured: std::sync::Arc<std::sync::Mutex<Option<BoxError>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(None));
+            let slot = std::sync::Arc::clone(&captured);
             let outcome: Result<T, dorm_core::Error> =
                 dorm_core::db::with_session(db, async move {
                     dorm_core::db::atomic(move |_tx| async move {
-                        // Map the boundary error to a DORM error so `atomic` rolls
-                        // back; the message is preserved across the bridge.
-                        work()
-                            .await
-                            .map_err(|e| dorm_core::Error::Config(e.to_string()))
+                        match work().await {
+                            Ok(value) => Ok(value),
+                            Err(err) => {
+                                // Stash the real (typed) error; the sentinel below
+                                // only exists to make `atomic` roll back. The lock is
+                                // released before any `.await`, so the future stays
+                                // `Send`.
+                                *slot.lock().expect("uow error slot poisoned") = Some(err);
+                                Err(dorm_core::Error::Config(
+                                    "seiva: rolling back on handler error".to_owned(),
+                                ))
+                            }
+                        }
                     })
                     .await
                 })
                 .await;
-            outcome.map_err(|e| Box::new(e) as BoxError)
+            outcome.map_err(|dorm_err| {
+                // Restore the caller's original error if we captured one; otherwise
+                // the failure came from DORM itself (connect/commit/rollback) and we
+                // surface that.
+                captured
+                    .lock()
+                    .expect("uow error slot poisoned")
+                    .take()
+                    .unwrap_or_else(|| Box::new(dorm_err) as BoxError)
+            })
         })
     }
 }
@@ -411,6 +443,86 @@ mod tests {
         assert_eq!(deleted, 0, "the rolled-back row must not have persisted");
 
         uow.transaction(|| async { exec("DROP TABLE seiva_rt").await })
+            .await
+            .expect("cleanup succeeds");
+    }
+
+    /// Live proof that a *typed* boundary error returned from inside a transaction
+    /// survives the DORM bridge instead of being flattened to a `dorm_core::Error`
+    /// string. This is what lets `From<BoxError> for Problem` recover a
+    /// status-bearing `Problem` (a `404`/`409`) rather than a generic `500` — the
+    /// gap between `InMemoryUnitOfWork` (which always preserved the error) and the
+    /// real DORM gateway. Rolls back the write too, so one failing transaction
+    /// proves both halves. Gated on `SEIVA_DORM_TEST_DSN`.
+    #[tokio::test]
+    async fn live_transaction_preserves_the_typed_boundary_error() {
+        let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+            eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the typed-error proof");
+            return;
+        };
+
+        // A distinctive typed error the test can downcast back to — stands in for a
+        // status-bearing `Problem` boxed as the port's `BoxError`.
+        #[derive(Debug)]
+        struct Sentinel(u16);
+        impl std::fmt::Display for Sentinel {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "sentinel status {}", self.0)
+            }
+        }
+        impl std::error::Error for Sentinel {}
+
+        let uow = DormUnitOfWork::new(
+            connect(&DormConfig {
+                dsn,
+                replicas: vec![],
+                read_only: false,
+                schema: None,
+                pool_max: 4,
+                cursor_key: b"live-test-secret".to_vec(),
+            })
+            .expect("connect to the test database"),
+        );
+        let exec = |sql: &'static str| async move {
+            dorm_core::db::execute(sql, &[])
+                .await
+                .map_err(|e| Box::new(e) as BoxError)
+        };
+
+        // A clean, committed, empty table.
+        uow.transaction(|| async {
+            exec("DROP TABLE IF EXISTS seiva_err_rt").await?;
+            exec("CREATE TABLE seiva_err_rt (id int primary key)").await?;
+            Ok(())
+        })
+        .await
+        .expect("setup commits");
+
+        // A transaction that does a real write, then fails with the TYPED error.
+        let err: BoxError = uow
+            .transaction(|| async {
+                exec("INSERT INTO seiva_err_rt (id) VALUES (1)").await?;
+                Err::<(), BoxError>(Box::new(Sentinel(404)) as BoxError)
+            })
+            .await
+            .expect_err("the transaction returns the typed error");
+
+        // The decisive assertion: the error downcasts back to `Sentinel` — the type
+        // crossed the bridge intact. Before the fix it was a `dorm_core::Error`
+        // string and this `downcast` would fail (→ generic 500 at the HTTP edge).
+        let sentinel = err
+            .downcast::<Sentinel>()
+            .expect("the typed error survives the DORM bridge (not stringified)");
+        assert_eq!(sentinel.0, 404);
+
+        // And the write rolled back with it: the row is not there (DELETE affects 0).
+        let remaining = uow
+            .transaction(|| async { exec("DELETE FROM seiva_err_rt WHERE id = 1").await })
+            .await
+            .expect("verification transaction succeeds");
+        assert_eq!(remaining, 0, "the insert rolled back with the typed error");
+
+        uow.transaction(|| async { exec("DROP TABLE seiva_err_rt").await })
             .await
             .expect("cleanup succeeds");
     }
