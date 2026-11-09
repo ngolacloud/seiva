@@ -197,10 +197,16 @@ pub fn build_app() -> BuiltApp {
     let inventory_controller = InventoryController::new(Arc::clone(&inventory_repo));
 
     // The `orders` HTTP controller publishes a real `orders.placed` into the SHARED
-    // outbox, replacing the module's default no-op publisher.
-    let orders_controller = OrdersController::with_events(
+    // outbox (replacing the module's default no-op publisher) AND dispatches `place`
+    // through the ADR 0020 command bus with a durable idempotency store injected: a
+    // retried `POST /v1/orders/place` carrying the same `Idempotency-Key` dedupes
+    // through the bus's `Idempotent` behavior, so it produces exactly one order and
+    // one `orders.placed` event. The store is dedicated to HTTP write idempotency,
+    // distinct from the event-drain `inbox` above.
+    let orders_controller = OrdersController::with_idempotency(
         shop_orders_infrastructure::InMemoryOrderRepository::new(),
         InMemoryOutboxPublisher::new(Arc::clone(&outbox), "/shop/orders"),
+        InMemoryIdempotencyStore::new(),
     );
 
     let modules = catalog_router(CatalogController::new(
