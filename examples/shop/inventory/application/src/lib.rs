@@ -31,6 +31,28 @@ pub trait StockRepository {
     ) -> impl std::future::Future<Output = PortResult<()>> + Send;
 }
 
+/// A shared [`StockRepository`] is itself a `StockRepository`: delegating through
+/// the `Arc` lets the composition root hold ONE stock state behind an
+/// `Arc<impl StockRepository>` and inject a clone into both the HTTP controller and
+/// an event subscriber, so an `orders.placed` reservation and an
+/// `available` query read and write the very same stock (ADR 0021, Fase 3). It
+/// stays here, next to the port, because the port trait is local to this crate.
+impl<R: StockRepository + Send + Sync> StockRepository for std::sync::Arc<R> {
+    fn get_stock(
+        &self,
+        product_id: u128,
+    ) -> impl std::future::Future<Output = PortResult<Option<StockItem>>> + Send {
+        (**self).get_stock(product_id)
+    }
+
+    fn save_stock(
+        &self,
+        stock: &StockItem,
+    ) -> impl std::future::Future<Output = PortResult<()>> + Send {
+        (**self).save_stock(stock)
+    }
+}
+
 /// The application service. Generic over the port and the framework's
 /// cross-cutting ports, exactly like the other shop modules.
 pub struct InventoryService<R, G, U, E> {

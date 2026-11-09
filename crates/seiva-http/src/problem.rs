@@ -200,22 +200,39 @@ impl IntoResponse for Problem {
     }
 }
 
-/// Maps the framework's opaque port error into a `500` problem.
+/// Maps the framework's opaque port error into a problem response.
 ///
-/// The internal error's `Display` is **not** sent to the client by default: it is
-/// logged server-side (correlate via the response's `request_id`) and the client
-/// receives a generic detail, so an adapter/database message never leaks (OWASP
-/// API8). Setting `SEIVA_EXPOSE_ERROR_DETAILS` (development only — the production
-/// config guard rejects it) flips [`set_expose_error_details`] and the real text
-/// is surfaced to speed up local debugging.
+/// A port error that is **already a client-facing [`Problem`]** is recovered
+/// verbatim, status and all: a pipeline behavior or a handler that returned a
+/// [`Problem`] boxed as the port's `BoxError` (the `403` from
+/// [`crate::bus::Authorize`], the `409` from [`crate::bus::Idempotent`]) keeps its
+/// status instead of being flattened to `500`. This is what makes those behaviors
+/// *status-bearing*: the error type is the single source of truth for the status,
+/// so the HTTP edge does not have to re-derive it. Only an explicitly-constructed
+/// [`Problem`] matches this path — an opaque adapter/database error does not
+/// downcast and still maps to `500`.
+///
+/// For every other error the internal `Display` is **not** sent to the client by
+/// default: it is logged server-side (correlate via the response's `request_id`)
+/// and the client receives a generic detail, so an adapter/database message never
+/// leaks (OWASP API8). Setting `SEIVA_EXPOSE_ERROR_DETAILS` (development only — the
+/// production config guard rejects it) flips [`set_expose_error_details`] and the
+/// real text is surfaced to speed up local debugging.
 impl From<BoxError> for Problem {
     fn from(error: BoxError) -> Self {
-        if expose_error_details() {
-            Problem::internal(error.to_string())
-        } else {
-            // Logged, not returned: the operator sees the cause, the client does not.
-            tracing::error!(error = %error, "internal error mapped to 500");
-            Problem::internal("an internal error occurred")
+        // Recover a Problem that travelled inside the box (a behavior's 403/409),
+        // preserving its status; fall through for any other, opaque error.
+        match error.downcast::<Problem>() {
+            Ok(problem) => *problem,
+            Err(error) => {
+                if expose_error_details() {
+                    Problem::internal(error.to_string())
+                } else {
+                    // Logged, not returned: the operator sees the cause, the client does not.
+                    tracing::error!(error = %error, "internal error mapped to 500");
+                    Problem::internal("an internal error occurred")
+                }
+            }
         }
     }
 }

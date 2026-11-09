@@ -19,6 +19,12 @@ seiva-messaging = { path = "../seiva-messaging" }
 # error type. `delonix-seiva` is data-layer-free, so no DORM feature is pulled.
 delonix-seiva = { path = "../delonix-seiva", default-features = false }
 seiva-ports = { path = "../seiva-ports" }
+# The DORM-free in-process bus: the `OutboxReader` trait + `drain_in_process` driver
+# this crate supplies a DORM adapter for. `default-features = false` drops the
+# in-memory `InMemoryOutbox` double — the real reader here is the DORM one.
+seiva-events = { path = "../seiva-events", default-features = false }
+# To implement the `OutboxReader` (an `async-trait` trait) over DORM.
+async-trait = "0.1"
 # DORM by published version (owner decision, roadmap P0-1); resolved from crates.io.
 dorm-outbox = "0.1"
 dorm-core = "0.6"
@@ -26,3 +32,6 @@ serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
+# The in-memory idempotency double, so the gated live test can drive the driver's
+# inbox without a DORM-backed store (the DORM store lives in seiva-data-dorm).
+seiva-testing = { path = "../seiva-testing" }

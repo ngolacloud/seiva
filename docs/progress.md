@@ -4,6 +4,62 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-08) — bus de comandos + eventos in-process (ADR 0020/0021)
+
+Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`
+(PR #30 sobre main). **Fase 1 + Fase 2 feitas e integradas, workspace verde**
+(`fmt`/`clippy -D warnings`/`cargo test --workspace` = 134 grupos `ok`, 0 falhas).
+
+- **[ADR 0020](adr/0020-command-bus-and-pipeline-behaviors.md) — Command bus +
+  pipeline de behaviors (opt-in).** Liga o `seiva-cqrs` (estático/zero-cost, antes
+  desligado do caminho HTTP) a um pipeline tipado de behaviors.
+  - **F1** (`seiva-cqrs`): `Validate` (pré-tx, via trait `Validated`) e
+    `Transactional` (handler dentro de `UnitOfWork::transaction`; `Trace` reusa o
+    `Instrument`).
+  - **F2** (`seiva-http::bus`): `Authorize` (fail-closed, ADR 0019; partilha
+    `require_permission` com o guard tower) e `Idempotent` (intra-tx, via `Ctx`:
+    `scoped_key`+`fingerprint`, `begin`/`finish`, replay/`409`). `From<BoxError>`
+    passou a ser *downcast-aware* → erros das behaviors são status-bearing (403/409
+    não remapeados para 500; erros opacos continuam 500 no-leak). Prova:
+    `tests/bus_pipeline.rs` (cadeia `Authorize→Validate→Transactional{Idempotent}`).
+  - **F3 (FEITA)** — o módulo real `orders` despacha `place` pela **cadeia do bus**.
+    Desenho (resolve a inversão de tx + camadas): facade `place(&ctx, cmd)` (o
+    `&Ctx` é saltado do wire pela macro); `OrdersService::place_work` = a lógica
+    **sem** abrir tx (o `place` directo = `uow.transaction(place_work)` fica p/
+    compat); a cadeia monta-se na **interface** (que já depende de seiva-http):
+    `Validate → Transactional{ Idempotent → handler(place_work) }` com key, ou
+    `Validate → Transactional{ handler }` sem. Como o facade passa a exigir `&Ctx`,
+    quem o implementa é o **controller** (não a application) — mesmo padrão do
+    `admin-data-e2e` catalog. `OrdersController<R,E,S>` ganha `with_idempotency`;
+    `409` status-bearing via `OrdersError::Conflict`. Prova:
+    `apps/shop-api/tests/orders_idempotency_e2e.rs` (mesma key = 1 order + 1 evento;
+    key+corpo diferente = 409) + testes de interface. Substitui o boilerplate manual
+    de idempotência (que o catalog ainda faz à mão) por uma cadeia declarativa.
+  - **Ainda por fazer:** activar os seams `#[cached]`/`#[policy]` na macro é o
+    default-no-controller que o ADR 0020 adiou (ADR futuro reavalia).
+- **[ADR 0021](adr/0021-in-process-event-bus-and-choreography.md) — Event bus
+  in-process + choreography.** Fecha o lado que faltava do outbox (já construído).
+  - **F1** (`seiva-events`, DORM-free): `EventSubscriber`, `SubscriberRegistry`,
+    `dispatch` com dedup de inbox.
+  - **F2** (`seiva-events` + `seiva-outbox-relay`): `OutboxReader` + driver
+    `drain_in_process` (gémeo DORM-free do `drain`); `InMemoryOutbox` (feature
+    `testing`); prova **offline** `orders.placed → inventory.reserved`
+    (`tests/choreography.rs`: cursor, dedup de inbox sob redelivery, retry sem
+    avançar cursor). Adapter `DormOutboxReader` em `seiva-outbox-relay` compila; o
+    teste live `live_drain_in_process_over_the_dorm_outbox` está **gated** em
+    `SEIVA_DORM_TEST_DSN`.
+  - **F3 (FEITA)** — choreography **viva** no `apps/shop-api`, 100% offline:
+    `InMemoryOutboxPublisher` (EventPublisher→CloudEvent no outbox, feature
+    `testing`); `OrdersController<R,E>` genérico com `with_events` injecta o
+    publisher (substitui o `NoopEventPublisher`); subscriber `inventory` na
+    composition root (`orders.placed`→`Inventory::reserve`, stock partilhado via
+    `StockRepository for Arc<R>`); `apps/shop-api` partido em `lib.rs`
+    (`build_app() -> BuiltApp`) + binário. Prova e2e `tests/choreography_e2e.rs`:
+    POST order → `drain_in_process` → stock 10→7; `redeliver`+drain mantém 7 (dedup
+    de inbox). 137 grupos de teste `ok`.
+  - **F2b (por fazer):** prova **live** sobre PostgreSQL/DORM (`DormOutboxReader`,
+    gated em `SEIVA_DORM_TEST_DSN`); worker/loop de fundo sobre `drain_in_process`.
+
 ## Estado (2026-11-07) — ids no fio como strings (ADR 0018)
 
 - **`delonix_seiva::WireId`** — um `u128` que serializa no fio como **string** JSON

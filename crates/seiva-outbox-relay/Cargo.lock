@@ -300,6 +300,8 @@ dependencies = [
 [[package]]
 name = "dorm-core"
 version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "341009ad071e6f87b85110b2c6c56c4379236d79772b34131e468190c61a9688"
 dependencies = [
  "base64",
  "chrono",
@@ -326,6 +328,8 @@ dependencies = [
 [[package]]
 name = "dorm-outbox"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ef34124efa78ead1b3cae406f7ec8754d1966d1d78b7743d17358c6c04d520a"
 dependencies = [
  "dorm-core",
  "serde_json",
@@ -964,6 +968,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "seiva-events"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "seiva-messaging",
+ "seiva-ports",
+]
+
+[[package]]
 name = "seiva-macros"
 version = "0.1.0"
 dependencies = [
@@ -984,11 +997,14 @@ dependencies = [
 name = "seiva-outbox-relay"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "delonix-seiva",
  "dorm-core",
  "dorm-outbox",
+ "seiva-events",
  "seiva-messaging",
  "seiva-ports",
+ "seiva-testing",
  "serde_json",
  "tokio",
 ]
@@ -998,6 +1014,14 @@ name = "seiva-ports"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+]
+
+[[package]]
+name = "seiva-testing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "seiva-ports",
 ]
 
 [[package]]

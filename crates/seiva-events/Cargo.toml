@@ -1,0 +1,59 @@
+# seiva-events — the in-process event bus core (ADR 0021).
+#
+# The DORM-free half of "modules cooperate through events, not calls": a registry
+# of subscribers keyed by CloudEvent type, and a `dispatch` that fans one event
+# out to its subscribers, deduplicating each delivery through the same inbox key
+# (`seiva_ports::inbox_key` + `IdempotencyStore`) the broker consumer uses. It is
+# the in-process twin of `seiva-outbox-relay::drain`, so a subscriber handler is
+# byte-identical whether the monolith dispatches it in-process or a split service
+# drains it off a broker.
+#
+# Data-layer-free by design: this crate reads no outbox and runs no worker loop
+# (that is Fase 2, wired through the DORM-coupled `seiva-outbox-relay`). It depends
+# only on the trait-only ports and the data-layer-free messaging envelope, so it
+# builds and tests fully OFFLINE — no DORM, no broker — and lives in the default
+# workspace `members`.
+[package]
+name = "seiva-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "In-process event bus for Delonix Seiva: a subscriber registry and an inbox-deduplicating dispatcher, the in-process twin of the broker drain (ADR 0021). DORM-free."
+
+[features]
+# `testing` exposes the in-memory reference double `InMemoryOutbox` (an
+# `OutboxReader` with no database), used by the offline choreography proof. It is
+# ON by default so `cargo test`/`cargo doc`/`cargo clippy` see it with no extra
+# flags; a production consumer drops it with `default-features = false`, since the
+# double is never wanted in a real build (the real reader is the DORM adapter in
+# `seiva-outbox-relay`).
+default = ["testing"]
+testing = ["dep:serde_json"]
+
+[dependencies]
+# The result/error boundary (`PortResult`, `BoxError`), the inbox key helper and
+# the `IdempotencyStore` port the dispatcher dedupes through. No runtime, no data
+# layer rides in here.
+seiva-ports = { workspace = true }
+# The CloudEvents 1.0 envelope. `default-features = false` so none of the broker
+# backends (NATS/AMQP/Kafka) are pulled — we reuse only the data-layer-free
+# envelope so a subscriber sees the SAME event type as the broker path.
+seiva-messaging = { version = "0.1.0", path = "../seiva-messaging", default-features = false }
+# The subscriber trait is object-safe (stored as `Arc<dyn EventSubscriber>` at the
+# composition edge), so its async method is erased with `async-trait`.
+async-trait = { workspace = true }
+# Only the `testing` double `InMemoryOutboxPublisher` parses the already-serialised
+# event payload into the CloudEvent `data`, so serde_json rides in exclusively with
+# that feature (a `--no-default-features` production build pulls none of it).
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+# The tests drive async dispatch on a current-thread runtime; the library brings
+# no runtime of its own.
+tokio = { workspace = true, features = ["rt", "macros"] }
+# The in-memory `IdempotencyStore` double, so the dedup logic is proved OFFLINE.
+seiva-testing = { version = "0.1.0", path = "../seiva-testing" }

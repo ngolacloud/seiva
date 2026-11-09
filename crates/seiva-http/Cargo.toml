@@ -27,6 +27,10 @@ description = "Delonix Seiva — HTTP transport (axum/tower): RFC 9457 problems,
 delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
 # The trait-only ports: we map their opaque `BoxError` into an RFC 9457 problem.
 seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
+# The CQRS dispatch core: the `CommandHandler`/`QueryHandler` traits the pipeline
+# behaviors (`bus`) implement, so `Authorize`/`Idempotent` compose with the
+# transport-free `Validate`/`Transactional` behaviors that live there (ADR 0020).
+seiva-cqrs = { version = "0.1.0", path = "../seiva-cqrs" }
 # The verified caller: `Principal` and the `Authenticator` the authn middleware
 # runs. Transport-free, so the same identity model serves HTTP and MCP (ADR 0006).
 seiva-identity = { version = "0.1.0", path = "../seiva-identity" }

@@ -16,9 +16,9 @@
 
 use std::sync::Arc;
 
-use seiva_cqrs::{Command, CommandHandler, Query, QueryHandler};
+use seiva_cqrs::{Command, CommandHandler, Query, QueryHandler, Validated};
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
-use shop_orders_facade::{OrderDto, OrderId, Orders, PlaceOrder};
+use shop_orders_facade::{OrderDto, OrderId, PlaceOrder};
 
 use crate::{OrderRepository, OrdersService};
 
@@ -27,6 +27,30 @@ pub struct PlaceOrderCommand(pub PlaceOrder);
 
 impl Command for PlaceOrderCommand {
     type Output = OrderDto;
+}
+
+/// The command validates itself against the same structural rules the facade's
+/// HTTP `Validate` extractor enforces (non-empty customer, at least one line,
+/// every quantity positive). This is what the bus's
+/// [`Validate`](seiva_cqrs::Validate) behavior keys off, so the chain rejects a
+/// malformed command *before* the handler and the transaction — the pre-transaction
+/// link of ADR 0020. It is a pure, cheap check (no port, no I/O), and it lives in
+/// the application layer because the orphan rule binds the foreign `Validated`
+/// trait to the command type defined here.
+impl Validated for PlaceOrderCommand {
+    fn validate(&self) -> PortResult<()> {
+        let cmd = &self.0;
+        if cmd.customer.trim().is_empty() {
+            return Err("customer must not be empty".into());
+        }
+        if cmd.lines.is_empty() {
+            return Err("an order must have at least one line".into());
+        }
+        if cmd.lines.iter().any(|l| l.qty == 0) {
+            return Err("every order line must have a quantity greater than zero".into());
+        }
+        Ok(())
+    }
 }
 
 /// Read message: fetch one order by id. `Eq + Hash + Clone` so it can be its own

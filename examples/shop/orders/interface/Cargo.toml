@@ -16,11 +16,19 @@ shop-orders-application = { path = "../application" }
 delonix-seiva = { workspace = true }
 seiva-http = { path = "../../../../crates/seiva-http" }
 seiva-ports = { workspace = true }
+# The command bus the controller dispatches `place` through (ADR 0020): the
+# `Mediator`, the transport-free `Validate`/`Transactional` behaviors and the
+# `CommandHandler` the controller implements. CQRS is allowed in this layer.
+seiva-cqrs = { path = "../../../../crates/seiva-cqrs" }
 async-trait = { workspace = true }
 axum = "0.8"
+# The command body is fingerprinted as canonical JSON for the `Idempotent` behavior.
+serde_json = "1"
 
 [dev-dependencies]
 shop-orders-infrastructure = { path = "../infrastructure" }
+shop-orders-domain = { path = "../domain" }
+# In-memory idempotency store + unit-of-work doubles for the bus tests.
+seiva-testing = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tower = { version = "0.5", features = ["util"] }
-serde_json = "1"

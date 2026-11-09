@@ -8,9 +8,9 @@
 
 #![allow(async_fn_in_trait)]
 
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_orders_domain::{Line, Order};
-use shop_orders_facade::{LineDto, OrderDto, OrderId, Orders, OrdersError, PlaceOrder};
+use shop_orders_facade::{LineDto, OrderDto, OrderId, OrdersError, PlaceOrder};
 
 pub mod cqrs;
 
@@ -61,7 +61,14 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn place_an_order(&self, cmd: PlaceOrder) -> PortResult<OrderDto> {
+    /// The side-effect-free part of placing an order: mint the id, build the domain
+    /// [`Order`] (enforcing its invariants) and serialise the `orders.placed` event
+    /// payload. No port is touched and no transaction is opened, so a failure here
+    /// is a pure validation/domain error that can be raised *before* any
+    /// transactional scope — which is what lets both the direct [`place`](Self::place)
+    /// and the bus's `Transactional` keep an invalid request from ever opening a
+    /// transaction.
+    fn prepare(&self, cmd: PlaceOrder) -> Result<(Order, Vec<u8>), OrdersError> {
         let id = u128::from_be_bytes(self.ids.new_id().0);
         let lines: Vec<Line> = cmd
             .lines
@@ -71,7 +78,8 @@ where
                 qty: l.qty,
             })
             .collect();
-        let order = Order::new(id, cmd.customer, lines).map_err(BoxError::from)?;
+        let order =
+            Order::new(id, cmd.customer, lines).map_err(|e| OrdersError::Invalid(e.to_string()))?;
 
         let event = serde_json::to_vec(&serde_json::json!({
             "id": order.id.to_string(),
@@ -85,43 +93,61 @@ where
                 }))
                 .collect::<Vec<_>>(),
         }))
-        .map_err(BoxError::from)?;
+        .map_err(|e| OrdersError::Invalid(e.to_string()))?;
 
-        // One transaction per use case (ADR 0004): save AND event publish run
-        // together, so with the DORM gateway the event lands in the outbox in the
-        // SAME transaction as the business change.
+        Ok((order, event))
+    }
+
+    /// The use case body **without** its own transaction: persist the order and
+    /// publish `orders.placed`.
+    ///
+    /// This is the transaction-free core so it can be nested as the innermost link
+    /// of the ADR 0020 command bus chain `Validate → Transactional{ Idempotent →
+    /// handler }`, where the enclosing `Transactional` owns the transaction and the
+    /// inner `Idempotent` the dedup — the save, the publish and the key reservation
+    /// must all commit as one atom, so this must not open a nested transaction of
+    /// its own. The in-process [`place`](Self::place) wraps the same work in a
+    /// transaction for the direct (non-bus) caller.
+    ///
+    /// The service stays transport-free: it names no `seiva-http` item and never
+    /// sees a `Ctx`.
+    pub async fn place_work(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError> {
+        let (order, event) = self.prepare(cmd)?;
+        // Save AND publish together (ADR 0004/0021): with the DORM gateway the event
+        // lands in the outbox in the SAME transaction as the business change — but
+        // the transaction itself is opened by the caller (`place` or the bus's
+        // `Transactional`), not here.
+        self.repository
+            .save_order(&order)
+            .await
+            .map_err(|e| OrdersError::Invalid(e.to_string()))?;
+        self.events
+            .publish("orders.placed", &event)
+            .await
+            .map_err(|e| OrdersError::Invalid(e.to_string()))?;
+        Ok(to_order_dto(order))
+    }
+
+    /// Place an order in one transaction (the direct, non-bus path). Validates and
+    /// builds the order *before* opening the transaction (so an invalid request
+    /// opens none), then runs the save and publish inside a [`UnitOfWork`]
+    /// transaction, committing on `Ok` and rolling back on `Err` — the behaviour the
+    /// module had before the bus cutover, kept for direct/unit use.
+    pub async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError> {
+        let (order, event) = self.prepare(cmd)?;
         self.uow
             .transaction(|| async {
                 self.repository.save_order(&order).await?;
                 self.events.publish("orders.placed", &event).await
             })
-            .await?;
-
+            .await
+            .map_err(|err| OrdersError::Invalid(err.to_string()))?;
         Ok(to_order_dto(order))
     }
 
-    async fn all_orders(&self) -> PortResult<Vec<OrderDto>> {
-        let orders = self.repository.list_orders().await?;
-        Ok(orders.into_iter().map(to_order_dto).collect())
-    }
-}
-
-impl<R, G, U, E> Orders for OrdersService<R, G, U, E>
-where
-    R: OrderRepository + Sync,
-    G: IdGenerator,
-    U: UnitOfWork,
-    E: EventPublisher,
-{
-    async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError> {
-        self.place_an_order(cmd)
-            .await
-            .map_err(|err| OrdersError::Invalid(err.to_string()))
-    }
-
-    async fn get(&self, id: OrderId) -> Result<OrderDto, OrdersError> {
-        // A missing order is a typed `NotFound` (→ `404`), distinct from a
-        // repository error (→ `422`).
+    /// Fetch one order by id. A missing order is a typed `NotFound` (→ `404`),
+    /// distinct from a repository error (→ `422`).
+    pub async fn get(&self, id: OrderId) -> Result<OrderDto, OrdersError> {
         let order = self
             .repository
             .get_order(id.id)
@@ -131,10 +157,14 @@ where
         Ok(to_order_dto(order))
     }
 
-    async fn list(&self) -> Result<Vec<OrderDto>, OrdersError> {
-        self.all_orders()
+    /// Every order placed so far.
+    pub async fn list(&self) -> Result<Vec<OrderDto>, OrdersError> {
+        let orders = self
+            .repository
+            .list_orders()
             .await
-            .map_err(|err| OrdersError::Invalid(err.to_string()))
+            .map_err(|err| OrdersError::Invalid(err.to_string()))?;
+        Ok(orders.into_iter().map(to_order_dto).collect())
     }
 }
 
