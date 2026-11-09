@@ -22,13 +22,21 @@ Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`
     passou a ser *downcast-aware* → erros das behaviors são status-bearing (403/409
     não remapeados para 500; erros opacos continuam 500 no-leak). Prova:
     `tests/bus_pipeline.rs` (cadeia `Authorize→Validate→Transactional{Idempotent}`).
-  - **F3 (por fazer, decisão de desenho):** migrar um módulo HTTP real (orders)
-    para despachar pelo bus exige **inverter o controlo da tx** — hoje o
-    `OrdersService` encapsula `uow.transaction`+publish; o bus `Transactional` tem
-    de ser quem abre a tx para a `Idempotent` ficar dentro dela. A prova de
-    *composição* completa já existe (`bus_pipeline.rs`); a migração real coexistir
-    com o padrão service-encapsula-tx merece desenho próprio. Activar os seams
-    `#[cached]`/`#[policy]` na macro é o default-no-controller que o ADR 0020 adiou.
+  - **F3 (FEITA)** — o módulo real `orders` despacha `place` pela **cadeia do bus**.
+    Desenho (resolve a inversão de tx + camadas): facade `place(&ctx, cmd)` (o
+    `&Ctx` é saltado do wire pela macro); `OrdersService::place_work` = a lógica
+    **sem** abrir tx (o `place` directo = `uow.transaction(place_work)` fica p/
+    compat); a cadeia monta-se na **interface** (que já depende de seiva-http):
+    `Validate → Transactional{ Idempotent → handler(place_work) }` com key, ou
+    `Validate → Transactional{ handler }` sem. Como o facade passa a exigir `&Ctx`,
+    quem o implementa é o **controller** (não a application) — mesmo padrão do
+    `admin-data-e2e` catalog. `OrdersController<R,E,S>` ganha `with_idempotency`;
+    `409` status-bearing via `OrdersError::Conflict`. Prova:
+    `apps/shop-api/tests/orders_idempotency_e2e.rs` (mesma key = 1 order + 1 evento;
+    key+corpo diferente = 409) + testes de interface. Substitui o boilerplate manual
+    de idempotência (que o catalog ainda faz à mão) por uma cadeia declarativa.
+  - **Ainda por fazer:** activar os seams `#[cached]`/`#[policy]` na macro é o
+    default-no-controller que o ADR 0020 adiou (ADR futuro reavalia).
 - **[ADR 0021](adr/0021-in-process-event-bus-and-choreography.md) — Event bus
   in-process + choreography.** Fecha o lado que faltava do outbox (já construído).
   - **F1** (`seiva-events`, DORM-free): `EventSubscriber`, `SubscriberRegistry`,
