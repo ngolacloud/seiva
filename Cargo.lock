@@ -2751,6 +2751,7 @@ name = "seiva-events"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "delonix-seiva",
  "seiva-messaging",
  "seiva-ports",
  "seiva-testing",

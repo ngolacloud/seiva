@@ -46,6 +46,12 @@ seiva-messaging = { version = "0.1.0", path = "../seiva-messaging", default-feat
 # The subscriber trait is object-safe (stored as `Arc<dyn EventSubscriber>` at the
 # composition edge), so its async method is erased with `async-trait`.
 async-trait = { workspace = true }
+# The worker runtime (`run_worker`/`WorkerConfig`/`WorkerReport`) the in-process
+# dispatch worker loops on — the SAME engine the relay worker uses, so the two
+# dispatchers share their shutdown/metrics behaviour. `default-features = false`
+# keeps this DORM-free (the `dorm` feature is a marker and pulls no gateway, but we
+# stay explicit); the crate carries no data layer.
+delonix-seiva = { workspace = true, default-features = false }
 # Only the `testing` double `InMemoryOutboxPublisher` parses the already-serialised
 # event payload into the CloudEvent `data`, so serde_json rides in exclusively with
 # that feature (a `--no-default-features` production build pulls none of it).
