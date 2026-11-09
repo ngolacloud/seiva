@@ -13,8 +13,9 @@
 
 #![allow(async_fn_in_trait)]
 
+use axum::http::StatusCode;
 use delonix_seiva::{facade, WireId, WireSchema};
-use seiva_http::{Problem, Validate, ValidationError};
+use seiva_http::{Ctx, Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
 /// A single line of an order: a quantity of one product.
@@ -64,19 +65,28 @@ pub struct OrderDto {
 }
 
 /// The `orders` module's error type. A rule violation is a `422`, a missing order
-/// a `404`.
+/// a `404`, and an idempotency conflict a `409`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrdersError {
     /// A domain rule was violated (no lines, zero-quantity line, …).
     Invalid(String),
     /// No order exists for the requested id.
     NotFound(String),
+    /// An idempotency conflict surfaced by the command bus (ADR 0011/0020): an
+    /// `Idempotency-Key` reused with different content, or whose first request is
+    /// still in flight. Maps to a `409`. Carried as a distinct variant so the
+    /// status the `Idempotent` behavior produced survives the round trip back from
+    /// the bus — the controller recovers it and re-maps it here rather than
+    /// flattening it to a generic `422`.
+    Conflict(String),
 }
 
 impl std::fmt::Display for OrdersError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OrdersError::Invalid(m) | OrdersError::NotFound(m) => f.write_str(m),
+            OrdersError::Invalid(m) | OrdersError::NotFound(m) | OrdersError::Conflict(m) => {
+                f.write_str(m)
+            }
         }
     }
 }
@@ -88,6 +98,9 @@ impl From<OrdersError> for Problem {
         match error {
             OrdersError::Invalid(m) => Problem::unprocessable_entity(m),
             OrdersError::NotFound(m) => Problem::not_found(m),
+            OrdersError::Conflict(m) => {
+                Problem::new(StatusCode::CONFLICT, "Conflict").with_detail(m)
+            }
         }
     }
 }
@@ -97,8 +110,16 @@ impl From<OrdersError> for Problem {
 #[facade(version = "v1")]
 pub trait Orders {
     /// Place an order and return it with its assigned id and status.
+    ///
+    /// Takes the request [`Ctx`] (the caller's principal, the operation
+    /// coordinates and the optional `Idempotency-Key`) so the implementation can
+    /// dispatch the write through the ADR 0020 command bus — the `Idempotent`
+    /// behavior folds the key and body out of the `Ctx`. The `#[controller]` macro
+    /// recognises the `&Ctx` parameter and supplies it from the request, so it is
+    /// **not** part of the wire contract: the route stays `POST /v1/orders/place`
+    /// with the same `PlaceOrder` body.
     #[requires("orders.manage")]
-    async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError>;
+    async fn place(&self, ctx: &Ctx, cmd: PlaceOrder) -> Result<OrderDto, OrdersError>;
 
     /// A single order by id. The parameter is named `id` so the generated
     /// OpenAPI path (`/v1/orders/{id}`) matches the served route.

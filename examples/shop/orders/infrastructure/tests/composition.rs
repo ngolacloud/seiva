@@ -1,11 +1,11 @@
 //! Composition-level test for the `orders` example: wire the `OrdersService`
 //! over the **real** in-memory adapter ([`InMemoryOrderRepository`]) and the
-//! framework's test ports, then drive the module through its public [`Orders`]
-//! facade.
+//! framework's test ports, then drive the module through the service's inherent
+//! use-case methods (`place`/`get`/`list`).
 
 use seiva_testing::{InMemoryUnitOfWork, RecordingEventPublisher, SequenceIdGenerator};
 use shop_orders_application::OrdersService;
-use shop_orders_facade::{LineDto, OrderId, Orders, PlaceOrder};
+use shop_orders_facade::{LineDto, OrderId, PlaceOrder};
 use shop_orders_infrastructure::InMemoryOrderRepository;
 
 fn service() -> OrdersService<

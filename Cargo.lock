@@ -3250,6 +3250,7 @@ version = "0.1.0"
 name = "shop-orders-facade"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "delonix-seiva",
  "seiva-http",
  "serde",
@@ -3274,10 +3275,13 @@ dependencies = [
  "async-trait",
  "axum",
  "delonix-seiva",
+ "seiva-cqrs",
  "seiva-http",
  "seiva-ports",
+ "seiva-testing",
  "serde_json",
  "shop-orders-application",
+ "shop-orders-domain",
  "shop-orders-facade",
  "shop-orders-infrastructure",
  "tokio",
