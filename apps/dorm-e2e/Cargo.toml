@@ -46,6 +46,11 @@ seiva-ports = { path = "../../crates/seiva-ports" }
 # repository, and RelayConfig for the relay worker. Depended on by published
 # version (owner decision, roadmap P0-1), same as the gateway; resolved from crates.io.
 dorm-core = "0.6"
+# The `#[derive(Model)]` for the tenant-scoped accounts user table (SG1 P0-2b):
+# the ORM model whose `tenant_scoped` marker makes `scope.rs` inject the tenant
+# predicate on reads and force the tenant column on inserts — so the repository
+# below never names the tenant. Resolved from crates.io, same as dorm-core.
+dorm-derive = "0.3"
 dorm-outbox = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros", "net", "sync"] }
 tracing = "0.1"

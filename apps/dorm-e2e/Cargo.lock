@@ -474,6 +474,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dorm-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efa29673752235041aa1a18aa4bdc2d7f76b8ca72386f888ace658d530287b73"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "dorm-e2e"
 version = "0.1.0"
 dependencies = [
@@ -482,6 +493,7 @@ dependencies = [
  "accounts-facade",
  "delonix-seiva",
  "dorm-core",
+ "dorm-derive",
  "dorm-outbox",
  "seiva-auth",
  "seiva-data-dorm",
