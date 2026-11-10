@@ -14,5 +14,5 @@ delonix-seiva = { workspace = true }
 # The generated controller uses the facade's own DTOs as the wire types, so the
 # write DTOs implement `seiva_http::Validate` and the error maps to
 # `seiva_http::Problem` here (matching the scaffold-generated facade).
-seiva-http = { path = "../../../crates/seiva-http" }
+seiva-contract = { path = "../../../crates/seiva-contract" }
 serde = { workspace = true }

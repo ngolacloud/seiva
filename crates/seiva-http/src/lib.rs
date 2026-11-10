@@ -62,7 +62,7 @@ pub use idempotency::{
     fingerprint, in_progress_problem, mismatch_problem, scoped_key, IdempotencyKey,
     OptionalIdempotencyKey, IDEMPOTENCY_HEADER, MAX_KEY_LEN,
 };
-pub use problem::{Problem, PROBLEM_JSON};
+pub use problem::{Problem, ProblemResponse, PROBLEM_JSON};
 pub use rate_limit::{
     rate_limit, rate_limit_with_store, DistributedRateLimit, RateLimit, RateLimiter,
 };

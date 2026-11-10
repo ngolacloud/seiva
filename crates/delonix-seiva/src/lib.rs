@@ -31,6 +31,7 @@ pub mod lint;
 pub mod manifest;
 pub mod scaffold;
 pub mod schema;
+pub mod seed;
 pub mod worker;
 
 /// A 128-bit identifier that crosses the wire as a JSON string (ADR 0018), so no
@@ -39,6 +40,11 @@ pub use id::WireId;
 
 /// Marks a trait as a module's versioned public contract (ADR 0001). See
 /// [`contract`] for what it generates and the hand-written equivalent.
+///
+/// Despite the name, this is NOT the GoF *Facade* pattern (which hides a complex
+/// subsystem). It is the module's **inbound port / Published Language** — the one
+/// versioned, permission-guarded contract other modules and the HTTP/gRPC
+/// transports see. "facade" is the project's established term for that role.
 pub use seiva_macros::facade;
 
 /// Re-exported so the code `#[seiva::facade]` generates can submit each facade

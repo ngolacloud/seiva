@@ -51,10 +51,28 @@ facade"** — a sua própria crate `facade`.
 
 ## Consequências
 
-- O grafo de dependências de um módulo é: `facade → delonix-seiva`; `domain →`
-  (nada / `shared/kernel`); `application → domain, facade, seiva-ports`;
-  `infrastructure → application, domain, seiva-ports`; `interface →
-  application, facade`.
+- O grafo de dependências de um módulo é: `facade → delonix-seiva, seiva-contract`;
+  `domain →` (nada / `shared/kernel`); `application → domain, facade, seiva-ports`;
+  `infrastructure → application, domain, seiva-ports`; `interface → application,
+  facade`.
+- **A facade é transporte-neutra (F1, fechado).** O `Validate`/`ValidationError` do
+  DTO de escrita E o `Problem` RFC 9457 para onde o erro mapeia vivem em
+  `seiva-contract` (sem axum; o `Problem` carrega um `http::StatusCode`, o tipo de
+  estado ao nível do protocolo que HTTP e gRPC partilham). Logo a facade declara
+  todo o seu contrato — DTOs, validação, erro — **sem nomear nenhum crate de
+  transporte**. O transporte HTTP embrulha um `Problem` num
+  `seiva_http::ProblemResponse` (a borda `IntoResponse` do axum) para render
+  `application/problem+json`; outro transporte mapeia o mesmo `Problem` à sua
+  maneira. O macro `#[controller]` exige que o erro da facade seja
+  `Into<seiva_contract::Problem>`.
+- **O único tipo de transporte que uma facade ainda pode nomear é o
+  `seiva_http::Ctx`**, quando um caso de uso recebe o contexto do pedido (`&Ctx`:
+  principal, inquilino, chave de idempotência). O `Ctx` é um conceito de
+  transporte/pedido (lê cabeçalhos e partes do pedido via um extractor axum), logo
+  fica no `seiva-http`; uma facade opta por ele só quando o caso de uso precisa do
+  contexto. O módulo *gerado* não usa `&Ctx` e não nomeia transporte nenhum. (Mover
+  os dados do `Ctx` para um crate neutro é um refinamento possível mais tarde, mais
+  estreito que o contrato erro/validação que este ADR resolve.)
 - Um caso de uso é testado construindo o serviço de aplicação com os duplos de
   `seiva-testing` mais um repositório falso — sem servidor, broker ou base de
   dados (ADR 0002), provado por `examples/notes`.

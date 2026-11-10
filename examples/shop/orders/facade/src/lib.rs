@@ -8,14 +8,18 @@
 //! nested structs, so `LineDto` derives `WireSchema` too. The generated
 //! `#[seiva::controller]` (wired in `shop-orders-interface`) uses these DTOs as
 //! the wire types: the write DTO derives `serde` and implements
-//! [`seiva_http::Validate`], the response DTO derives [`serde::Serialize`], and
+//! [`seiva_contract::Validate`], the response DTO derives [`serde::Serialize`], and
 //! the error maps to an RFC 9457 [`Problem`] here.
 
 #![allow(async_fn_in_trait)]
 
 use axum::http::StatusCode;
 use delonix_seiva::{facade, WireId, WireSchema};
-use seiva_http::{Ctx, Problem, Validate, ValidationError};
+use seiva_contract::{Problem, Validate, ValidationError};
+// `Ctx` (the request context: principal, tenant, idempotency key) is a transport
+// concept and stays in `seiva-http`; a facade opts into it only when the use case
+// needs the request context. The error/validation contract is neutral (F1).
+use seiva_http::Ctx;
 use serde::{Deserialize, Serialize};
 
 /// A single line of an order: a quantity of one product.

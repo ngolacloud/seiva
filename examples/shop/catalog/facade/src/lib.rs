@@ -9,14 +9,14 @@
 //! (`#[facade]`); the HTTP routes, the OpenAPI document and the gRPC service are
 //! all derived from it. The generated `#[seiva::controller]` (wired in
 //! `shop-catalog-interface`) uses these DTOs as the wire types, so the write DTOs
-//! derive `serde` and implement [`seiva_http::Validate`], the response DTO
+//! derive `serde` and implement [`seiva_contract::Validate`], the response DTO
 //! derives [`serde::Serialize`], and the error maps to an RFC 9457 [`Problem`]
 //! here — hence this layer depends on `delonix-seiva`, `serde` and `seiva-http`.
 
 #![allow(async_fn_in_trait)]
 
 use delonix_seiva::{facade, WireId, WireSchema};
-use seiva_http::{Problem, Validate, ValidationError};
+use seiva_contract::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
 /// Command DTO: add a product to the catalog. Validated by the controller's

@@ -18,7 +18,7 @@ use axum::response::{IntoResponse, Response};
 
 use seiva_identity::Principal;
 
-use crate::problem::Problem;
+use crate::problem::{Problem, ProblemResponse};
 use crate::request_id::RequestIdExt;
 
 /// HTTP-flavoured object-level authorization helpers on the transport-free
@@ -177,10 +177,12 @@ pub async fn permission_guard(
     };
 
     let request_id = request.extensions().request_id();
-    problem
-        .with_instance(request.uri().path().to_owned())
-        .with_request_id_opt(request_id)
-        .into_response()
+    ProblemResponse(
+        problem
+            .with_instance(request.uri().path().to_owned())
+            .with_request_id_opt(request_id),
+    )
+    .into_response()
 }
 
 #[cfg(test)]

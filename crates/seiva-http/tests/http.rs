@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use seiva_http::{
     authn, permission_guard, request_id, router, router_with_modules, Authenticator, Health,
-    HttpSecurity, Principal, Problem, RequiredPermission, TokenAuthenticator, Valid, Validate,
+    HttpSecurity, Principal, RequiredPermission, TokenAuthenticator, Valid, Validate,
     ValidationError, PROBLEM_JSON, REQUEST_ID_HEADER,
 };
 
@@ -46,12 +46,12 @@ impl Validate for DemoBody {
     }
 }
 
-async fn demo_create(Valid(body): Valid<DemoBody>) -> Result<Response, Problem> {
-    Ok((
+async fn demo_create(Valid(body): Valid<DemoBody>) -> Response {
+    (
         StatusCode::CREATED,
         Json(json!({ "id": 1, "title": body.title })),
     )
-        .into_response())
+        .into_response()
 }
 
 /// A route guarded by `demo.create` and validated by `Valid<DemoBody>`, wrapped

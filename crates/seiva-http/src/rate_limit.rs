@@ -53,7 +53,7 @@ use axum::response::{IntoResponse, Response};
 use seiva_identity::Principal;
 use seiva_ports::Clock;
 
-use crate::problem::Problem;
+use crate::problem::{Problem, ProblemResponse};
 use crate::request_id::RequestIdExt;
 
 /// How many requests a single client may make per window.
@@ -328,10 +328,12 @@ fn rate_limited_response(
     request_id: Option<String>,
 ) -> Response {
     let seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
-    let mut response = Problem::too_many_requests("request rate limit exceeded")
-        .with_instance(path.to_owned())
-        .with_request_id_opt(request_id)
-        .into_response();
+    let mut response = ProblemResponse(
+        Problem::too_many_requests("request rate limit exceeded")
+            .with_instance(path.to_owned())
+            .with_request_id_opt(request_id),
+    )
+    .into_response();
     if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
         response.headers_mut().insert("retry-after", value);
     }

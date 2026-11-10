@@ -23,7 +23,7 @@ use tower::ServiceExt;
 
 use seiva_http::{
     fingerprint, in_progress_problem, mismatch_problem, scoped_key, OptionalIdempotencyKey,
-    Principal, Problem,
+    Principal, Problem, ProblemResponse,
 };
 use seiva_ports::{IdempotencyOutcome, IdempotencyStore};
 use seiva_testing::InMemoryIdempotencyStore;
@@ -42,7 +42,7 @@ async fn create(
     State(app): State<App>,
     key: OptionalIdempotencyKey,
     Json(body): Json<Value>,
-) -> Result<Response, Problem> {
+) -> Result<Response, ProblemResponse> {
     let fp = fingerprint("POST", "/things", None, &body);
 
     let do_effect = |app: &App| {
@@ -76,8 +76,8 @@ async fn create(
             let result: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             Ok((StatusCode::OK, Json(result)).into_response())
         }
-        IdempotencyOutcome::Mismatch => Err(mismatch_problem()),
-        IdempotencyOutcome::InProgress => Err(in_progress_problem()),
+        IdempotencyOutcome::Mismatch => Err(mismatch_problem().into()),
+        IdempotencyOutcome::InProgress => Err(in_progress_problem().into()),
     }
 }
 

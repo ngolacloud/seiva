@@ -446,8 +446,9 @@ fn is_ctx_type(ty: &Type) -> bool {
 ///
 /// For every route the handler extracts the injected service from axum state,
 /// deserialises the request into the facade's parameter DTO, calls the facade
-/// method, maps the error to a `seiva_http::Problem` and serialises the `Ok`
-/// value to JSON:
+/// method, maps the error to a transport-neutral `seiva_contract::Problem` and
+/// serialises the `Ok` value to JSON (the HTTP edge wraps the `Problem` in
+/// `seiva_http::ProblemResponse` to render it — ADR 0003):
 ///
 /// - **write** methods (`create` and the `POST` fallback): the single primary
 ///   parameter is read with `seiva_http::Valid<T>` (a validated JSON body); a
@@ -463,9 +464,11 @@ fn is_ctx_type(ty: &Type) -> bool {
 ///   implement `serde::Deserialize` + `seiva_http::Validate`, a `get`/`list`
 ///   parameter must implement `serde::Deserialize`, and every `Ok` type must
 ///   implement `serde::Serialize`.
-/// - The method's **error** type must implement `Into<seiva_http::Problem>`, so
-///   each facade maps its failures to an RFC 9457 document (define
-///   `impl From<MyError> for seiva_http::Problem` in the interface layer).
+/// - The method's **error** type must implement `Into<seiva_contract::Problem>`,
+///   so each facade maps its failures to an RFC 9457 document (define
+///   `impl From<MyError> for seiva_contract::Problem` in the facade) WITHOUT
+///   depending on any transport crate; the HTTP edge wraps it in
+///   `seiva_http::ProblemResponse`.
 /// - A `&Ctx`/`Ctx` parameter is a framework context and is **skipped** when
 ///   mapping to the wire; it leaves at most one *primary* parameter per method.
 /// - The service is injected as axum state, so its type must be
@@ -681,22 +684,28 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ::axum::extract::State(__service): ::axum::extract::State<#self_ty>
                             #(, #extractor)*
                         | async move {
-                            match <#self_ty as #trait_path>::#method_ident(
-                                &__service #(, #ordered_call)*
-                            ).await {
-                                ::core::result::Result::Ok(__value) =>
-                                    ::core::result::Result::<
-                                        ::axum::response::Response,
-                                        ::seiva_http::Problem,
-                                    >::Ok(::axum::response::IntoResponse::into_response((
-                                        #ok_status,
-                                        ::axum::Json(__value),
-                                    ))),
-                                ::core::result::Result::Err(__err) =>
-                                    ::core::result::Result::Err(
-                                        ::core::convert::Into::into(__err),
-                                    ),
-                            }
+                            // Both arms yield an `axum::Response`. The error maps
+                            // to a transport-neutral `seiva_contract::Problem` (via
+                            // the facade's `Into<Problem>`) and the HTTP edge wraps
+                            // it in `ProblemResponse` — so the facade never names a
+                            // transport crate (ADR 0003, F1).
+                            let __response: ::axum::response::Response =
+                                match <#self_ty as #trait_path>::#method_ident(
+                                    &__service #(, #ordered_call)*
+                                ).await {
+                                    ::core::result::Result::Ok(__value) =>
+                                        ::axum::response::IntoResponse::into_response((
+                                            #ok_status,
+                                            ::axum::Json(__value),
+                                        )),
+                                    ::core::result::Result::Err(__err) =>
+                                        ::axum::response::IntoResponse::into_response(
+                                            ::seiva_http::ProblemResponse(
+                                                ::core::convert::Into::into(__err),
+                                            ),
+                                        ),
+                                };
+                            __response
                         },
                     )
                     .layer(::axum::middleware::from_fn_with_state(

@@ -33,6 +33,10 @@ members = [
     # SemVer-stable by policy so a module's `application` can declare what it
     # needs without depending on the framework.
     "crates/seiva-ports",
+    # Transport-neutral wire-contract types (Validate, ValidationError) a module's
+    # `facade` validates against without naming a transport crate (ADR 0003). No
+    # axum, no http. `seiva-http` re-exports them. Kept SemVer-stable by policy.
+    "crates/seiva-contract",
     # In-memory reference doubles for the ports, so a module's application layer
     # unit-tests with no server, broker or database. A dev-dependency only.
     "crates/seiva-testing",
