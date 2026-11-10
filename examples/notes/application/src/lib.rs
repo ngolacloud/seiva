@@ -9,16 +9,12 @@
 #![allow(async_fn_in_trait)]
 
 use notes_domain::Note;
+// Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
+// here so `interface` imports it from `application` (never naming `domain`), keeping
+// the layer rule intact; the application maps its domain error to `PortResult`.
+pub use notes_domain::{NoteRepository, RepositoryError};
 use notes_facade::{CreateNote, NoteDto, Notes};
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
-
-/// Outbound port: persistence of notes, in the domain's language. Implemented
-/// in `infrastructure` (over DORM or an external library). The future is `Send`
-/// so a use case can `.await` it inside a `UnitOfWork::transaction`, which runs
-/// on a multi-threaded runtime.
-pub trait NoteRepository {
-    fn save(&self, note: &Note) -> impl std::future::Future<Output = PortResult<()>> + Send;
-}
 
 /// The application service. It implements the [`Notes`] facade by running the
 /// use case and mapping the domain entity to the DTO.
@@ -98,7 +94,7 @@ mod tests {
     }
 
     impl NoteRepository for FakeRepo {
-        async fn save(&self, note: &Note) -> PortResult<()> {
+        async fn save(&self, note: &Note) -> Result<(), RepositoryError> {
             self.saved.lock().unwrap().push(note.clone());
             Ok(())
         }

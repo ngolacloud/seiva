@@ -43,11 +43,19 @@ facade"** — a sua própria crate `facade`.
    trait da fachada (`S: Notes`) e expõe-no sobre transporte (HTTP/gRPC, uma fase
    posterior). Nunca vê `domain`.
 
-4. **A porta de saída (`NoteRepository`) vive em `application`** na linguagem do
-   domínio, e é implementada em `infrastructure`. É uma porta específica do
-   módulo, distinta das portas transversais do framework em `seiva-ports`
-   (`UnitOfWork`, `EventPublisher`, `Clock`, `IdGenerator`), que a aplicação
-   também consome.
+4. **A porta de repositório (`NoteRepository`) vive no `domain`** (DDD clássico —
+   Evans: a interface de repositório faz parte da linguagem ubíqua do domínio),
+   formulada num erro de **domínio** (`RepositoryError`), não no do framework. É
+   implementada em `infrastructure`; a **application adapta** o `RepositoryError`
+   ao `PortResult` do framework na fronteira do caso de uso. As portas transversais
+   do *framework* (`UnitOfWork`, `EventPublisher`, `Clock`, `IdGenerator`, de
+   `seiva-ports`) são técnicas, não conceitos de domínio, logo ficam na
+   `application`. (Actualizado — reverte o original «porta na application» do achado
+   F4: o repositório é uma abstracção de domínio; as portas técnicas são abstracções
+   de aplicação.) A `application` **re-exporta** a porta de repositório do `domain`,
+   logo o `interface` importa-a da `application` e continua a nunca nomear o
+   `domain` — a regra de camadas (§3) mantém-se, e o domínio fica livre do framework
+   (o `seiva lint` continua a passar sem mudar regra).
 
 ## Consequências
 

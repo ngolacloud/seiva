@@ -40,11 +40,19 @@ depend on **"DTOs da própria facade"** — its own facade crate.
    the facade trait (`S: Notes`) and exposes it over transport (HTTP/gRPC, a
    later phase). It never sees `domain`.
 
-4. **The outbound port (`NoteRepository`) lives in `application`** in the
-   domain's language, and is implemented in `infrastructure`. It is a
-   module-specific port, distinct from the framework's cross-cutting ports in
-   `seiva-ports` (`UnitOfWork`, `EventPublisher`, `Clock`, `IdGenerator`), which
-   the application also consumes.
+4. **The repository port (`NoteRepository`) lives in `domain`** (classic DDD —
+   Evans: the repository interface is part of the domain's ubiquitous language),
+   framed in a **domain** error (`RepositoryError`), not the framework's. It is
+   implemented in `infrastructure`; the **application adapts** `RepositoryError` to
+   the framework's `PortResult` at the use-case boundary. The *framework's*
+   cross-cutting ports (`UnitOfWork`, `EventPublisher`, `Clock`, `IdGenerator`,
+   from `seiva-ports`) are technical, not domain concepts, so they stay in
+   `application`. (Updated — this reverses the original "port in application" from
+   finding F4: the repository is a domain abstraction; the technical ports are
+   application abstractions.) The `application` **re-exports** `domain`'s repository
+   port, so `interface` imports it from `application` and still never names
+   `domain` — the layer rule (§3) holds unchanged, and the domain stays
+   framework-free (`seiva lint` still passes with no rule change).
 
 ## Consequences
 
