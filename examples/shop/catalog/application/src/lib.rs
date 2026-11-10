@@ -12,23 +12,9 @@ use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork}
 use shop_catalog_domain::Product;
 use shop_catalog_facade::{Catalog, CatalogError, CreateProduct, ProductDto, ProductId};
 
-/// Outbound port: persistence of products, in the domain's language.
-/// Implemented in `infrastructure` (over DORM or an external library). Each
-/// future is `Send` so a use case can `.await` it inside a
-/// `UnitOfWork::transaction` on a multi-threaded runtime.
-pub trait ProductRepository {
-    fn save_product(
-        &self,
-        product: &Product,
-    ) -> impl std::future::Future<Output = PortResult<()>> + Send;
-
-    fn list_products(&self) -> impl std::future::Future<Output = PortResult<Vec<Product>>> + Send;
-
-    fn get_product(
-        &self,
-        id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Option<Product>>> + Send;
-}
+// The repository port now lives in the domain (classic DDD, ADR 0003);
+// re-exported here so infrastructure and tests keep their familiar path.
+pub use shop_catalog_domain::{ProductRepository, RepositoryError};
 
 /// The application service. It implements the [`Catalog`] facade by running each
 /// use case over the ports and mapping the domain entities to DTOs.
@@ -132,16 +118,16 @@ mod tests {
     }
 
     impl ProductRepository for FakeRepo {
-        async fn save_product(&self, product: &Product) -> PortResult<()> {
+        async fn save_product(&self, product: &Product) -> Result<(), RepositoryError> {
             self.products.lock().unwrap().push(product.clone());
             Ok(())
         }
 
-        async fn list_products(&self) -> PortResult<Vec<Product>> {
+        async fn list_products(&self) -> Result<Vec<Product>, RepositoryError> {
             Ok(self.products.lock().unwrap().clone())
         }
 
-        async fn get_product(&self, id: u128) -> PortResult<Option<Product>> {
+        async fn get_product(&self, id: u128) -> Result<Option<Product>, RepositoryError> {
             Ok(self
                 .products
                 .lock()

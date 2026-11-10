@@ -11,6 +11,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::future::Future;
+
 /// The maximum length, in bytes, of a username. A small, explicit bound so a
 /// pathological input cannot be stored.
 pub const MAX_USERNAME_LEN: usize = 64;
@@ -104,6 +106,34 @@ impl std::fmt::Display for DomainError {
 }
 
 impl std::error::Error for DomainError {}
+
+/// A repository operation failed. A DOMAIN-level error: the repository is part of the domain's language (ADR 0003).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryError(pub String);
+impl std::fmt::Display for RepositoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for RepositoryError {}
+
+/// Outbound port: persistence of user credentials, in the domain's language. In
+/// classic DDD the repository interface lives in the DOMAIN (its ubiquitous
+/// language, ADR 0003); `infrastructure` implements it and the application
+/// adapts its [`RepositoryError`] to the framework's `PortResult`. The futures
+/// are `Send` so a use case can `.await` them inside a `UnitOfWork::transaction`
+/// on a multi-threaded runtime.
+pub trait CredentialRepository {
+    /// Persists a user. The stored `password_hash` is a PHC string; the
+    /// plaintext password never reaches this port.
+    fn save(&self, user: &User) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    /// Finds a user by exact username, or `None` when none exists.
+    fn find_by_username(
+        &self,
+        username: &str,
+    ) -> impl Future<Output = Result<Option<User>, RepositoryError>> + Send;
+}
 
 #[cfg(test)]
 mod tests {

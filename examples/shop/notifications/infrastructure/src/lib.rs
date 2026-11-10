@@ -5,9 +5,7 @@
 //! wiring is provable without a database; the real module is DORM-backed (and a
 //! real adapter would also hand the message to an email/SMS gateway).
 
-use seiva_ports::PortResult;
-use shop_notifications_application::NotificationRepository;
-use shop_notifications_domain::Notification;
+use shop_notifications_domain::{Notification, NotificationRepository, RepositoryError};
 use std::sync::Mutex;
 
 /// An in-memory [`NotificationRepository`]. Replace with the DORM-backed
@@ -29,19 +27,19 @@ impl InMemoryNotificationRepository {
 }
 
 impl NotificationRepository for InMemoryNotificationRepository {
-    async fn save_notification(&self, notification: &Notification) -> PortResult<()> {
+    async fn save_notification(&self, notification: &Notification) -> Result<(), RepositoryError> {
         self.sent
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .push(notification.clone());
         Ok(())
     }
 
-    async fn list_notifications(&self) -> PortResult<Vec<Notification>> {
+    async fn list_notifications(&self) -> Result<Vec<Notification>, RepositoryError> {
         Ok(self
             .sent
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .clone())
     }
 }

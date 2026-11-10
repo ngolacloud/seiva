@@ -8,26 +8,15 @@
 
 #![allow(async_fn_in_trait)]
 
-use seiva_ports::{EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{EventPublisher, IdGenerator, UnitOfWork};
 use shop_orders_domain::{Line, Order};
+// Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
+// here so `interface`/`cqrs` import it from `application` (never naming `domain`),
+// keeping the layer rule intact; the application maps its domain error to `PortResult`.
+pub use shop_orders_domain::{OrderRepository, RepositoryError};
 use shop_orders_facade::{LineDto, OrderDto, OrderId, OrdersError, PlaceOrder};
 
 pub mod cqrs;
-
-/// Outbound port: persistence of orders, in the domain's language. Implemented
-/// in `infrastructure`. Each future is `Send` so a use case can `.await` it
-/// inside a `UnitOfWork::transaction` on a multi-threaded runtime.
-pub trait OrderRepository {
-    fn save_order(&self, order: &Order)
-        -> impl std::future::Future<Output = PortResult<()>> + Send;
-
-    fn get_order(
-        &self,
-        id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Option<Order>>> + Send;
-
-    fn list_orders(&self) -> impl std::future::Future<Output = PortResult<Vec<Order>>> + Send;
-}
 
 /// The application service. Generic over the port and the framework's
 /// cross-cutting ports, exactly like the other shop modules.
@@ -182,12 +171,12 @@ mod tests {
     }
 
     impl OrderRepository for FakeRepo {
-        async fn save_order(&self, order: &Order) -> PortResult<()> {
+        async fn save_order(&self, order: &Order) -> Result<(), RepositoryError> {
             self.orders.lock().unwrap().push(order.clone());
             Ok(())
         }
 
-        async fn get_order(&self, id: u128) -> PortResult<Option<Order>> {
+        async fn get_order(&self, id: u128) -> Result<Option<Order>, RepositoryError> {
             Ok(self
                 .orders
                 .lock()
@@ -197,7 +186,7 @@ mod tests {
                 .cloned())
         }
 
-        async fn list_orders(&self) -> PortResult<Vec<Order>> {
+        async fn list_orders(&self) -> Result<Vec<Order>, RepositoryError> {
             Ok(self.orders.lock().unwrap().clone())
         }
     }

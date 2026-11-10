@@ -11,47 +11,13 @@
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_inventory_domain::StockItem;
+// Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
+// here so `interface` imports it from `application` (never naming `domain`), keeping
+// the layer rule intact; the application maps its domain error to `PortResult`.
+pub use shop_inventory_domain::{RepositoryError, StockRepository};
 use shop_inventory_facade::{
     Inventory, InventoryError, ProductId, ReceiveStock, Reserve, StockDto,
 };
-
-/// Outbound port: persistence of per-product stock, in the domain's language.
-/// Implemented in `infrastructure`. Each future is `Send` so a use case can
-/// `.await` it inside a `UnitOfWork::transaction` on a multi-threaded runtime.
-pub trait StockRepository {
-    fn get_stock(
-        &self,
-        product_id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Option<StockItem>>> + Send;
-
-    /// Inserts or replaces the stock record for its product.
-    fn save_stock(
-        &self,
-        stock: &StockItem,
-    ) -> impl std::future::Future<Output = PortResult<()>> + Send;
-}
-
-/// A shared [`StockRepository`] is itself a `StockRepository`: delegating through
-/// the `Arc` lets the composition root hold ONE stock state behind an
-/// `Arc<impl StockRepository>` and inject a clone into both the HTTP controller and
-/// an event subscriber, so an `orders.placed` reservation and an
-/// `available` query read and write the very same stock (ADR 0021, Fase 3). It
-/// stays here, next to the port, because the port trait is local to this crate.
-impl<R: StockRepository + Send + Sync> StockRepository for std::sync::Arc<R> {
-    fn get_stock(
-        &self,
-        product_id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Option<StockItem>>> + Send {
-        (**self).get_stock(product_id)
-    }
-
-    fn save_stock(
-        &self,
-        stock: &StockItem,
-    ) -> impl std::future::Future<Output = PortResult<()>> + Send {
-        (**self).save_stock(stock)
-    }
-}
 
 /// The application service. Generic over the port and the framework's
 /// cross-cutting ports, exactly like the other shop modules.
@@ -184,7 +150,7 @@ mod tests {
     }
 
     impl StockRepository for FakeRepo {
-        async fn get_stock(&self, product_id: u128) -> PortResult<Option<StockItem>> {
+        async fn get_stock(&self, product_id: u128) -> Result<Option<StockItem>, RepositoryError> {
             Ok(self
                 .stock
                 .lock()
@@ -194,7 +160,7 @@ mod tests {
                 .cloned())
         }
 
-        async fn save_stock(&self, stock: &StockItem) -> PortResult<()> {
+        async fn save_stock(&self, stock: &StockItem) -> Result<(), RepositoryError> {
             let mut all = self.stock.lock().unwrap();
             match all.iter_mut().find(|s| s.product_id == stock.product_id) {
                 Some(existing) => *existing = stock.clone(),

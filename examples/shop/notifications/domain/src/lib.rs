@@ -2,7 +2,11 @@
 //! rule.
 //!
 //! Depends on nothing but `shared/kernel`. The rule — a notification must have a
-//! non-empty recipient — lives here, not in the application or the database.
+//! non-empty recipient — lives here, not in the application or the database. The
+//! REPOSITORY PORT also lives here: classic DDD puts the repository interface in
+//! the domain's ubiquitous language, framed in a domain error (ADR 0003).
+
+use std::future::Future;
 
 /// A message sent to a recipient. Construct it through [`Notification::new`] so
 /// the rule is always enforced.
@@ -52,6 +56,36 @@ impl std::fmt::Display for DomainError {
 }
 
 impl std::error::Error for DomainError {}
+
+/// A repository operation failed. A DOMAIN-level error: the repository is part of
+/// the domain's language, so it speaks in domain terms, not the framework's. The
+/// application maps it to `seiva_ports::PortResult` at the use-case boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryError(pub String);
+
+impl std::fmt::Display for RepositoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RepositoryError {}
+
+/// Outbound repository port, in the domain's language (classic DDD — the
+/// repository interface lives in the domain, ADR 0003). Implemented in
+/// `infrastructure`; the application adapts its [`RepositoryError`] to the
+/// framework's `PortResult`. Each future is `Send` so a use case can `.await` it
+/// inside a `UnitOfWork::transaction` on a multi-threaded runtime.
+pub trait NotificationRepository {
+    fn save_notification(
+        &self,
+        notification: &Notification,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    fn list_notifications(
+        &self,
+    ) -> impl Future<Output = Result<Vec<Notification>, RepositoryError>> + Send;
+}
 
 #[cfg(test)]
 mod tests {

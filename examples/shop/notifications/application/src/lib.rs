@@ -10,24 +10,14 @@
 #![allow(async_fn_in_trait)]
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+// Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
+// here so `interface` imports it from `application` (never naming `domain`), keeping
+// the layer rule intact; the application maps its domain error to `PortResult`.
 use shop_notifications_domain::Notification;
+pub use shop_notifications_domain::{NotificationRepository, RepositoryError};
 use shop_notifications_facade::{
     NotificationDto, Notifications, NotificationsError, SendNotification,
 };
-
-/// Outbound port: persistence of sent notifications, in the domain's language.
-/// Implemented in `infrastructure`. Each future is `Send` so a use case can
-/// `.await` it inside a `UnitOfWork::transaction` on a multi-threaded runtime.
-pub trait NotificationRepository {
-    fn save_notification(
-        &self,
-        notification: &Notification,
-    ) -> impl std::future::Future<Output = PortResult<()>> + Send;
-
-    fn list_notifications(
-        &self,
-    ) -> impl std::future::Future<Output = PortResult<Vec<Notification>>> + Send;
-}
 
 /// The application service. Generic over the port and the framework's
 /// cross-cutting ports, exactly like the other shop modules.
@@ -119,12 +109,15 @@ mod tests {
     }
 
     impl NotificationRepository for FakeRepo {
-        async fn save_notification(&self, notification: &Notification) -> PortResult<()> {
+        async fn save_notification(
+            &self,
+            notification: &Notification,
+        ) -> Result<(), RepositoryError> {
             self.sent.lock().unwrap().push(notification.clone());
             Ok(())
         }
 
-        async fn list_notifications(&self) -> PortResult<Vec<Notification>> {
+        async fn list_notifications(&self) -> Result<Vec<Notification>, RepositoryError> {
             Ok(self.sent.lock().unwrap().clone())
         }
     }

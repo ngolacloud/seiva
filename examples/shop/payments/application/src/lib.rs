@@ -14,22 +14,12 @@
 
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
 use shop_payments_domain::Payment;
+// Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
+// here so `infrastructure` imports it from `application` (never naming `domain`
+// twice), keeping the layer rule intact; the application maps its domain error to
+// `PortResult`.
+pub use shop_payments_domain::{PaymentRepository, RepositoryError};
 use shop_payments_facade::{Charge, PaymentDto, PaymentId, Payments, PaymentsError};
-
-/// Outbound port: persistence of payments, in the domain's language.
-/// Implemented in `infrastructure`. Each future is `Send` so a use case can
-/// `.await` it inside a `UnitOfWork::transaction` on a multi-threaded runtime.
-pub trait PaymentRepository {
-    fn save_payment(
-        &self,
-        payment: &Payment,
-    ) -> impl std::future::Future<Output = PortResult<()>> + Send;
-
-    fn get_payment(
-        &self,
-        id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Option<Payment>>> + Send;
-}
 
 /// The application service. Generic over the port and the framework's
 /// cross-cutting ports, exactly like the other shop modules.
@@ -134,12 +124,12 @@ mod tests {
     }
 
     impl PaymentRepository for FakeRepo {
-        async fn save_payment(&self, payment: &Payment) -> PortResult<()> {
+        async fn save_payment(&self, payment: &Payment) -> Result<(), RepositoryError> {
             self.payments.lock().unwrap().push(payment.clone());
             Ok(())
         }
 
-        async fn get_payment(&self, id: u128) -> PortResult<Option<Payment>> {
+        async fn get_payment(&self, id: u128) -> Result<Option<Payment>, RepositoryError> {
             Ok(self
                 .payments
                 .lock()

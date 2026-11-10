@@ -9,9 +9,7 @@
 
 #![forbid(unsafe_code)]
 
-use accounts_application::CredentialRepository;
-use accounts_domain::User;
-use seiva_ports::PortResult;
+use accounts_domain::{CredentialRepository, RepositoryError, User};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -40,19 +38,19 @@ impl InMemoryCredentialRepository {
 }
 
 impl CredentialRepository for InMemoryCredentialRepository {
-    async fn save(&self, user: &User) -> PortResult<()> {
+    async fn save(&self, user: &User) -> Result<(), RepositoryError> {
         self.users
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .insert(user.username.clone(), user.clone());
         Ok(())
     }
 
-    async fn find_by_username(&self, username: &str) -> PortResult<Option<User>> {
+    async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepositoryError> {
         Ok(self
             .users
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .get(username)
             .cloned())
     }

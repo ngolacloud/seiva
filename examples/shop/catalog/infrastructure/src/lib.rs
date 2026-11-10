@@ -5,9 +5,7 @@
 //! the DORM-backed repository; here it is an in-memory adapter so the wiring is
 //! provable without a database.
 
-use seiva_ports::PortResult;
-use shop_catalog_application::ProductRepository;
-use shop_catalog_domain::Product;
+use shop_catalog_domain::{Product, ProductRepository, RepositoryError};
 use std::sync::Mutex;
 
 /// An in-memory [`ProductRepository`]. Replace with the DORM-backed adapter.
@@ -28,27 +26,27 @@ impl InMemoryProductRepository {
 }
 
 impl ProductRepository for InMemoryProductRepository {
-    async fn save_product(&self, product: &Product) -> PortResult<()> {
+    async fn save_product(&self, product: &Product) -> Result<(), RepositoryError> {
         self.products
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .push(product.clone());
         Ok(())
     }
 
-    async fn list_products(&self) -> PortResult<Vec<Product>> {
+    async fn list_products(&self) -> Result<Vec<Product>, RepositoryError> {
         Ok(self
             .products
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .clone())
     }
 
-    async fn get_product(&self, id: u128) -> PortResult<Option<Product>> {
+    async fn get_product(&self, id: u128) -> Result<Option<Product>, RepositoryError> {
         Ok(self
             .products
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .iter()
             .find(|p| p.id == id)
             .cloned())

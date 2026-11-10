@@ -6,9 +6,7 @@
 //! provable without a database — the Seiva equivalent of running the Django
 //! tutorial against SQLite before switching to Postgres.
 
-use polls_application::PollRepository;
-use polls_domain::{Choice, Question};
-use seiva_ports::PortResult;
+use polls_domain::{Choice, PollRepository, Question, RepositoryError};
 use std::sync::Mutex;
 
 /// An in-memory [`PollRepository`]. Replace with the DORM-backed adapter.
@@ -35,56 +33,56 @@ impl InMemoryPollRepository {
 }
 
 impl PollRepository for InMemoryPollRepository {
-    async fn save_question(&self, question: &Question) -> PortResult<()> {
+    async fn save_question(&self, question: &Question) -> Result<(), RepositoryError> {
         self.questions
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .push(question.clone());
         Ok(())
     }
 
-    async fn save_choice(&self, choice: &Choice) -> PortResult<()> {
+    async fn save_choice(&self, choice: &Choice) -> Result<(), RepositoryError> {
         self.choices
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .push(choice.clone());
         Ok(())
     }
 
-    async fn list_questions(&self) -> PortResult<Vec<Question>> {
+    async fn list_questions(&self) -> Result<Vec<Question>, RepositoryError> {
         Ok(self
             .questions
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .clone())
     }
 
-    async fn get_question(&self, id: u128) -> PortResult<Option<Question>> {
+    async fn get_question(&self, id: u128) -> Result<Option<Question>, RepositoryError> {
         Ok(self
             .questions
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .iter()
             .find(|q| q.id == id)
             .cloned())
     }
 
-    async fn choices_for(&self, question_id: u128) -> PortResult<Vec<Choice>> {
+    async fn choices_for(&self, question_id: u128) -> Result<Vec<Choice>, RepositoryError> {
         Ok(self
             .choices
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .iter()
             .filter(|c| c.question_id == question_id)
             .cloned()
             .collect())
     }
 
-    async fn record_vote(&self, choice_id: u128) -> PortResult<Option<Choice>> {
+    async fn record_vote(&self, choice_id: u128) -> Result<Option<Choice>, RepositoryError> {
         let mut choices = self
             .choices
             .lock()
-            .map_err(|_| "repository lock poisoned")?;
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?;
         match choices.iter_mut().find(|c| c.id == choice_id) {
             Some(choice) => {
                 choice.cast_vote();

@@ -4,6 +4,12 @@
 //! amount is captured or declined) is an application-level policy and lives in
 //! the use case; the domain enforces the invariant that a **captured** payment
 //! can never be for a zero amount.
+//!
+//! Classic DDD also puts the REPOSITORY PORT here: the repository interface is
+//! part of the domain's ubiquitous language, framed in a domain error, not the
+//! framework's (ADR 0003). The application adapts it.
+
+use std::future::Future;
 
 /// A recorded payment against an order. Construct it through
 /// [`Payment::captured`] or [`Payment::declined`]; both set the `status` so an
@@ -67,6 +73,37 @@ impl std::fmt::Display for DomainError {
 }
 
 impl std::error::Error for DomainError {}
+
+/// A repository operation failed. A DOMAIN-level error: the repository is part of
+/// the domain's language, so it speaks in domain terms, not the framework's. The
+/// application maps it to `seiva_ports::PortResult` at the use-case boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryError(pub String);
+
+impl std::fmt::Display for RepositoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RepositoryError {}
+
+/// Outbound port: persistence of payments, in the domain's language (classic DDD
+/// — the repository interface lives in the domain, ADR 0003). Implemented in
+/// `infrastructure`; the application adapts its [`RepositoryError`] to the
+/// framework's `PortResult`. Each future is `Send` so a use case can `.await` it
+/// inside a `UnitOfWork::transaction` on a multi-threaded runtime.
+pub trait PaymentRepository {
+    fn save_payment(
+        &self,
+        payment: &Payment,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    fn get_payment(
+        &self,
+        id: u128,
+    ) -> impl Future<Output = Result<Option<Payment>, RepositoryError>> + Send;
+}
 
 #[cfg(test)]
 mod tests {
