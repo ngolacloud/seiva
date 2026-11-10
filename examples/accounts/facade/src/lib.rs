@@ -19,6 +19,7 @@
 
 use delonix_seiva::{facade, WireSchema};
 use seiva_contract::{Problem, Validate, ValidationError};
+use seiva_http::Ctx;
 use serde::{Deserialize, Serialize};
 
 /// Command DTO: the input to [`Accounts::create_user`] and the JSON body of the
@@ -106,15 +107,23 @@ impl From<UserError> for Problem {
 }
 
 /// The `accounts` module's public contract.
+///
+/// Each method takes the framework request context `&Ctx` (the authenticated
+/// caller: tenant + permissions). The `#[seiva::controller]` macro **skips it from
+/// the wire** (ADR 0006) and injects it from the request, so it never appears in a
+/// DTO; the interface derives the tenant [`Scope`](seiva_http) from it **server-side**
+/// — the tenant is never read from the request body (OWASP API1). The application
+/// stays HTTP-free: it receives a `Scope`, not a `Ctx`.
 #[facade(version = "v1")]
 pub trait Accounts {
-    /// Creates a user from a [`CreateUser`] command, returning the new
-    /// account's public [`UserDto`]. Rejects a duplicate username.
+    /// Creates a user from a [`CreateUser`] command, under the caller's tenant,
+    /// returning the new account's public [`UserDto`]. Rejects a duplicate
+    /// username **within that tenant**.
     #[requires("accounts.create")]
-    async fn create_user(&self, cmd: CreateUser) -> Result<UserDto, UserError>;
+    async fn create_user(&self, ctx: &Ctx, cmd: CreateUser) -> Result<UserDto, UserError>;
 
-    /// Looks a user up by username (carried in a [`GetUser`] query), returning
-    /// its public [`UserDto`].
+    /// Looks a user up by username (carried in a [`GetUser`] query) **within the
+    /// caller's tenant**, returning its public [`UserDto`].
     #[requires("accounts.read")]
-    async fn get_user(&self, query: GetUser) -> Result<UserDto, UserError>;
+    async fn get_user(&self, ctx: &Ctx, query: GetUser) -> Result<UserDto, UserError>;
 }

@@ -831,7 +831,15 @@ fn create_user_via_module(username: &str, password: &str) -> Result<serde_json::
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .map_err(|err| format!("failed to start a runtime: {err}"))?;
-    let dto = runtime.block_on(api.create_user(username.to_string(), password.to_string()))?;
+    // `seiva user create` is local single-tenant admin with no request context, so
+    // it drives the use case under the audited `Scope::Global` (the behaviour it had
+    // before the `accounts` facade became tenant-aware — SG1). A per-tenant create
+    // goes through the HTTP transport, where `Ctx` supplies the tenant.
+    let dto = runtime.block_on(api.create_user(
+        seiva_ports::Scope::Global,
+        username.to_string(),
+        password.to_string(),
+    ))?;
 
     Ok(serde_json::json!({
         // `id` is a u128; render it as a string so it survives any JSON consumer.

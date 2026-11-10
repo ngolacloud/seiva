@@ -15,4 +15,9 @@ delonix-seiva = { workspace = true }
 # write DTOs implement `seiva_http::Validate` and the error maps to
 # `seiva_http::Problem` here (matching the scaffold-generated facade).
 seiva-contract = { path = "../../../crates/seiva-contract" }
+# The contract carries the framework request context `&Ctx` on its write methods
+# (the macro skips it from the wire, ADR 0006): the controller derives the tenant
+# `Scope` from it server-side. The layer rule (`seiva lint`) allows this — it
+# forbids only DORM and the lower layers, never the HTTP kernel.
+seiva-http = { path = "../../../crates/seiva-http" }
 serde = { workspace = true }

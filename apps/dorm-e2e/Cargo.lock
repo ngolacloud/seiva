@@ -23,6 +23,7 @@ version = "0.1.0"
 dependencies = [
  "delonix-seiva",
  "seiva-contract",
+ "seiva-http",
  "serde",
 ]
 
@@ -497,6 +498,7 @@ dependencies = [
  "dorm-outbox",
  "seiva-auth",
  "seiva-data-dorm",
+ "seiva-http",
  "seiva-messaging",
  "seiva-outbox-relay",
  "seiva-ports",

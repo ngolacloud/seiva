@@ -1,6 +1,7 @@
-//! Application layer of the `accounts` module: the `AccountsService` (which
-//! implements the public facade), the `CredentialRepository` outbound port, and
-//! the create/get use cases.
+//! Application layer of the `accounts` module: the `AccountsService` (whose
+//! inherent `create_user`/`get_user` run the use cases under the caller's tenant
+//! [`Scope`]), the `CredentialRepository` outbound port, and the create/get use
+//! cases.
 //!
 //! Depends on `domain`, its own `facade` (DTOs + trait), `seiva-ports` and
 //! `seiva-auth`. It names no `delonix_seiva::` item — the framework coupling is
@@ -17,7 +18,7 @@ use accounts_domain::User;
 // lives in the domain, ADR 0003), so `infrastructure` and `interface` can keep
 // importing it from the application.
 pub use accounts_domain::{CredentialRepository, RepositoryError};
-use accounts_facade::{Accounts, CreateUser, GetUser, UserDto, UserError};
+use accounts_facade::{CreateUser, GetUser, UserDto, UserError};
 use seiva_auth::hash_password;
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};
 
@@ -44,8 +45,13 @@ impl std::fmt::Display for AccountsError {
 
 impl std::error::Error for AccountsError {}
 
-/// The application service. It implements the [`Accounts`] facade by running the
-/// use cases and mapping the domain entity to the secret-free DTO.
+/// The application service. It runs the use cases (under the caller's tenant
+/// [`Scope`]) and maps the domain entity to the secret-free DTO, exposing them as
+/// inherent `create_user`/`get_user` methods. It does NOT implement the
+/// [`Accounts`](accounts_facade::Accounts) facade itself: that trait carries the
+/// HTTP `&Ctx`, which this layer must not name (it is transport-free, ADR 0003).
+/// The interface implements the facade, derives the `Scope` from the `&Ctx`, and
+/// delegates here.
 pub struct AccountsService<R, G, U, E> {
     /// The credential repository (outbound port).
     pub repository: R,
@@ -64,7 +70,7 @@ where
     U: UnitOfWork,
     E: EventPublisher,
 {
-    async fn create_user_uc(&self, cmd: CreateUser) -> PortResult<UserDto> {
+    async fn create_user_uc(&self, scope: Scope, cmd: CreateUser) -> PortResult<UserDto> {
         // Hash the plaintext BEFORE building the entity: the domain and the
         // repository only ever see the Argon2id PHC string, never the password.
         let password_hash = hash_password(&cmd.password).map_err(BoxError::from)?;
@@ -89,9 +95,12 @@ where
         // the DORM gateway the event lands in the transactional outbox in the
         // SAME transaction as the business change — they commit together or not
         // at all. On a duplicate the body returns `Err`, so nothing is saved and
-        // the transaction rolls back.
+        // the transaction rolls back. The `scope` is the caller's tenant (SG1):
+        // the gateway binds it so the duplicate check and the save see only that
+        // tenant's rows, and the insert lands under it — the application never
+        // names the tenant, and a forgotten scope fails closed at the gateway.
         self.uow
-            .transaction(Scope::Global, || async {
+            .transaction(scope, || async {
                 if self
                     .repository
                     .find_by_username(&user.username)
@@ -113,36 +122,44 @@ where
         })
     }
 
-    async fn get_user_uc(&self, username: String) -> PortResult<UserDto> {
-        let user = self
-            .repository
-            .find_by_username(&username)
-            .await?
-            .ok_or_else(|| BoxError::from(AccountsError::NotFound))?;
-        Ok(UserDto {
-            id: user.id,
-            username: user.username,
-        })
+    async fn get_user_uc(&self, scope: Scope, username: String) -> PortResult<UserDto> {
+        // The read runs under the caller's tenant `scope` too (SG1): the gateway
+        // binds it so `find_by_username` can only resolve a row belonging to that
+        // tenant — a read is one (read-only) transaction, exactly like the write.
+        self.uow
+            .transaction(scope, || async {
+                let user = self
+                    .repository
+                    .find_by_username(&username)
+                    .await?
+                    .ok_or_else(|| BoxError::from(AccountsError::NotFound))?;
+                Ok(UserDto {
+                    id: user.id,
+                    username: user.username,
+                })
+            })
+            .await
     }
-}
 
-impl<R, G, U, E> Accounts for AccountsService<R, G, U, E>
-where
-    R: CredentialRepository + Sync,
-    G: IdGenerator,
-    U: UnitOfWork,
-    E: EventPublisher,
-{
-    async fn create_user(&self, cmd: CreateUser) -> Result<UserDto, UserError> {
-        // Map the internal error to the contract's error type: no internal
-        // detail leaks across the module boundary beyond a message.
-        self.create_user_uc(cmd)
+    /// Creates a user under `scope` (the caller's tenant), mapping the internal
+    /// error to the contract's [`UserError`] — no internal detail leaks across the
+    /// module boundary beyond a message.
+    ///
+    /// This is an INHERENT method, not the [`Accounts`](accounts_facade::Accounts)
+    /// facade: the facade carries the HTTP `&Ctx`, which the application must not
+    /// name (it stays transport-free). The interface implements the facade, derives
+    /// the [`Scope`] from the `&Ctx` and calls this.
+    pub async fn create_user(&self, scope: Scope, cmd: CreateUser) -> Result<UserDto, UserError> {
+        self.create_user_uc(scope, cmd)
             .await
             .map_err(|err| UserError(err.to_string()))
     }
 
-    async fn get_user(&self, query: GetUser) -> Result<UserDto, UserError> {
-        self.get_user_uc(query.username)
+    /// Looks a user up by username under `scope` (the caller's tenant), mapping the
+    /// internal error to [`UserError`]. See [`create_user`](Self::create_user) on
+    /// why this is inherent and takes a `Scope`, not a `Ctx`.
+    pub async fn get_user(&self, scope: Scope, query: GetUser) -> Result<UserDto, UserError> {
+        self.get_user_uc(scope, query.username)
             .await
             .map_err(|err| UserError(err.to_string()))
     }
@@ -205,10 +222,20 @@ mod tests {
         }
     }
 
+    /// A tenant scope for the use case under test. The in-memory `UnitOfWork`
+    /// ignores it (it has no tenant table), so these tests assert the use case
+    /// wiring; the DORM path proves the tenant binding end to end (`dorm-e2e`).
+    fn scope() -> Scope {
+        Scope::tenant("acme").expect("a non-empty tenant")
+    }
+
     #[tokio::test]
     async fn create_persists_commits_and_emits() {
         let svc = service();
-        let dto = svc.create_user(cmd("alice", "hunter2")).await.unwrap();
+        let dto = svc
+            .create_user(scope(), cmd("alice", "hunter2"))
+            .await
+            .unwrap();
 
         assert_eq!(dto.id, 1);
         assert_eq!(dto.username, "alice");
@@ -220,7 +247,9 @@ mod tests {
     #[tokio::test]
     async fn stored_credential_is_a_phc_hash_never_the_plaintext() {
         let svc = service();
-        svc.create_user(cmd("alice", "hunter2")).await.unwrap();
+        svc.create_user(scope(), cmd("alice", "hunter2"))
+            .await
+            .unwrap();
 
         let stored = svc.repository.get("alice").expect("user was saved");
         // The plaintext was never persisted: the stored credential is an
@@ -239,7 +268,10 @@ mod tests {
     #[tokio::test]
     async fn dto_carries_no_secret() {
         let svc = service();
-        let dto = svc.create_user(cmd("alice", "hunter2")).await.unwrap();
+        let dto = svc
+            .create_user(scope(), cmd("alice", "hunter2"))
+            .await
+            .unwrap();
 
         // The DTO structurally cannot hold a secret (no password/hash field).
         // Prove the returned value equals the public projection exactly, and
@@ -257,9 +289,11 @@ mod tests {
     #[tokio::test]
     async fn duplicate_username_is_rejected() {
         let svc = service();
-        svc.create_user(cmd("alice", "hunter2")).await.unwrap();
+        svc.create_user(scope(), cmd("alice", "hunter2"))
+            .await
+            .unwrap();
 
-        let err = svc.create_user(cmd("alice", "different")).await;
+        let err = svc.create_user(scope(), cmd("alice", "different")).await;
         assert!(err.is_err());
         assert_eq!(err.unwrap_err().0, "username already taken");
 
@@ -276,7 +310,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_username_is_rejected_by_the_domain_rule() {
         let svc = service();
-        let err = svc.create_user(cmd("   ", "hunter2")).await;
+        let err = svc.create_user(scope(), cmd("   ", "hunter2")).await;
         assert!(err.is_err());
         // Nothing was committed or emitted when the rule rejected the command.
         assert_eq!(svc.repository.len(), 0);
@@ -287,20 +321,28 @@ mod tests {
     #[tokio::test]
     async fn get_user_returns_the_dto_or_not_found() {
         let svc = service();
-        svc.create_user(cmd("alice", "hunter2")).await.unwrap();
+        svc.create_user(scope(), cmd("alice", "hunter2"))
+            .await
+            .unwrap();
 
         let dto = svc
-            .get_user(GetUser {
-                username: "alice".into(),
-            })
+            .get_user(
+                scope(),
+                GetUser {
+                    username: "alice".into(),
+                },
+            )
             .await
             .unwrap();
         assert_eq!(dto.username, "alice");
 
         let missing = svc
-            .get_user(GetUser {
-                username: "nobody".into(),
-            })
+            .get_user(
+                scope(),
+                GetUser {
+                    username: "nobody".into(),
+                },
+            )
             .await;
         assert_eq!(missing.unwrap_err().0, "user not found");
     }
