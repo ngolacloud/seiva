@@ -96,10 +96,23 @@ async fn mcp_handler(State(state): State<AppState>, headers: HeaderMap, body: By
         Err(e) => return deny(e),
     };
 
-    // 2. Per-request config: tenant and write scope come from the principal, not
-    //    from the request. `writable` is floored by the server-wide ceiling.
+    // 2. Per-request config: the tenant and write scope come from the AUTHENTICATED
+    //    principal, never from the request body (OWASP API1). Fail CLOSED on an
+    //    untenanted caller — parity with the HTTP edge's `scope_of` (SE-4 / P0-4):
+    //    a request with no tenant is DENIED, not served with `None`, which DORM
+    //    reads as unscoped/global access across every tenant (the old fail-open).
+    //    A single-tenant deployment may pin a base `cfg.tenant`; that is the only
+    //    way a principal without its own tenant is served, and then only within
+    //    that one pinned tenant — never globally.
+    let Some(tenant) = principal
+        .tenant
+        .clone()
+        .or_else(|| state.cfg.tenant.clone())
+    else {
+        return deny(AuthError::Forbidden);
+    };
     let mut req_cfg = (*state.cfg).clone();
-    req_cfg.tenant = principal.tenant.clone();
+    req_cfg.tenant = Some(tenant);
     req_cfg.writable = state.cfg.writable && principal.can_write;
 
     // 3. Body must be a UTF-8 JSON-RPC line; dispatch it to DORM's core.
@@ -241,6 +254,34 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["id"], serde_json::json!(1));
         assert_eq!(v["result"]["protocolVersion"], "2024-11-05");
+    }
+
+    #[tokio::test]
+    async fn an_untenanted_caller_is_denied_not_served_globally() {
+        // SE-4 / P0-4: a principal with no tenant must be REFUSED (fail-closed),
+        // mirroring the HTTP edge — never served with `None`, which DORM reads as
+        // unscoped access across every tenant. `ServerConfig::default()` pins no
+        // base tenant, so there is no fallback and the request is forbidden.
+        let app = router(state_with(TokenAuthenticator::new().with_token(
+            "notenant",
+            Principal {
+                subject: "root".into(),
+                tenant: None,
+                can_write: false,
+            },
+        )));
+        let resp = app
+            .oneshot(post_mcp(
+                Some("notenant"),
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "an untenanted MCP caller must be denied, not served globally"
+        );
     }
 
     #[tokio::test]
