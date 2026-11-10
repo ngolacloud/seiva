@@ -34,7 +34,7 @@ use axum::http::StatusCode;
 use seiva_identity::Principal;
 use sha2::{Digest, Sha256};
 
-use crate::problem::Problem;
+use crate::problem::{Problem, ProblemResponse};
 
 /// The header carrying the client's idempotency key.
 pub const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -89,7 +89,8 @@ fn bad_key(detail: &str) -> Problem {
 pub struct OptionalIdempotencyKey(pub Option<IdempotencyKey>);
 
 impl<S: Sync> FromRequestParts<S> for OptionalIdempotencyKey {
-    type Rejection = Problem;
+    // The `?` operator converts a `Problem` into the HTTP edge wrapper.
+    type Rejection = ProblemResponse;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         match parts.headers.get(IDEMPOTENCY_HEADER) {

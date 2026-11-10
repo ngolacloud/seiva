@@ -24,7 +24,7 @@ name = "accounts-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
- "seiva-http",
+ "seiva-contract",
  "serde",
 ]
 
@@ -2725,6 +2725,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-contract"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "seiva-ports",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-controller-test"
 version = "0.1.0"
 dependencies = [
@@ -2773,6 +2783,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "delonix-seiva",
+ "seiva-contract",
  "seiva-cqrs",
  "seiva-identity",
  "seiva-openapi",
@@ -3088,7 +3099,7 @@ name = "shop-catalog-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
- "seiva-http",
+ "seiva-contract",
  "serde",
 ]
 
@@ -3142,7 +3153,7 @@ name = "shop-inventory-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
- "seiva-http",
+ "seiva-contract",
  "serde",
 ]
 
@@ -3196,7 +3207,7 @@ name = "shop-notifications-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
- "seiva-http",
+ "seiva-contract",
  "serde",
 ]
 
@@ -3252,6 +3263,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "delonix-seiva",
+ "seiva-contract",
  "seiva-http",
  "serde",
 ]
@@ -3309,7 +3321,7 @@ name = "shop-payments-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
- "seiva-http",
+ "seiva-contract",
  "serde",
 ]
 

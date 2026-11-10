@@ -10,42 +10,14 @@ use axum::body::Bytes;
 use axum::extract::{FromRequest, Request};
 use serde::de::DeserializeOwned;
 
-use crate::problem::Problem;
+use crate::problem::{Problem, ProblemResponse};
 use crate::request_id::RequestIdExt;
 
-/// A domain-shaped validation check on a deserialized body. Keep it cheap and
-/// synchronous: structural and range checks, not I/O. Business rules that need
-/// ports belong in the application layer, not here.
-pub trait Validate {
-    /// Returns `Ok(())` when the value is acceptable, or a human-readable reason
-    /// why it is not.
-    fn validate(&self) -> Result<(), ValidationError>;
-}
-
-/// Why a body was rejected as invalid. A single message in this first cut; a
-/// later phase can carry a per-field map.
-#[derive(Debug, Clone)]
-pub struct ValidationError {
-    /// A human-readable reason, surfaced as the problem's `detail`.
-    pub message: String,
-}
-
-impl ValidationError {
-    /// A validation error with the given message.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ValidationError {}
+// `Validate`/`ValidationError` are transport-neutral contract types: they moved to
+// `seiva-contract` so a module's `facade` validates without depending on this HTTP
+// crate (ADR 0003). Re-exported here, so `seiva_http::{Validate, ValidationError}`
+// and the `Valid<T>` extractor below are unchanged for every existing caller.
+pub use seiva_contract::{Validate, ValidationError};
 
 /// A request body that deserialized into `T` and passed `T`'s [`Validate`]
 /// check. Destructure it as `Valid(value)` in a handler.
@@ -57,7 +29,9 @@ where
     T: DeserializeOwned + Validate,
     S: Send + Sync,
 {
-    type Rejection = Problem;
+    // The HTTP edge wrapper: a `Problem` built below is rendered through it. The
+    // `?` operator converts `Problem` into it via `From<Problem>`.
+    type Rejection = ProblemResponse;
 
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
         let request_id = request.extensions().request_id();
@@ -103,7 +77,8 @@ where
                 "unknown field `{field}` is not accepted"
             ))
             .with_instance(instance.clone())
-            .with_request_id_opt(request_id.clone()));
+            .with_request_id_opt(request_id.clone())
+            .into());
         }
 
         value.validate().map_err(|error| {
@@ -136,7 +111,7 @@ mod tests {
         }
     }
 
-    async fn extract(json: &str) -> Result<Valid<Dto>, Problem> {
+    async fn extract(json: &str) -> Result<Valid<Dto>, ProblemResponse> {
         let request = Request::builder()
             .uri("/v1/things")
             .body(Body::from(json.to_owned()))
@@ -159,8 +134,9 @@ mod tests {
         let err = extract(r#"{"name":"widget","is_admin":true}"#)
             .await
             .expect_err("unknown field must be rejected");
-        assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(err.0.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(err
+            .0
             .detail
             .as_deref()
             .unwrap_or_default()
@@ -172,6 +148,6 @@ mod tests {
         let err = extract(r#"{"name":""}"#)
             .await
             .expect_err("empty name invalid");
-        assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(err.0.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

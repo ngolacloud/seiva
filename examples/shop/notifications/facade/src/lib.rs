@@ -8,13 +8,13 @@
 //!
 //! The generated `#[seiva::controller]` (wired in `shop-notifications-interface`)
 //! uses these DTOs as the wire types: the write DTO derives `serde` and
-//! implements [`seiva_http::Validate`], the response DTO derives
+//! implements [`seiva_contract::Validate`], the response DTO derives
 //! [`serde::Serialize`], and the error maps to an RFC 9457 [`Problem`] here.
 
 #![allow(async_fn_in_trait)]
 
 use delonix_seiva::{facade, WireId, WireSchema};
-use seiva_http::{Problem, Validate, ValidationError};
+use seiva_contract::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
 /// Command DTO: send a notification to a recipient.

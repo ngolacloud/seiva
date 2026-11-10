@@ -14,5 +14,5 @@ publish = false
 
 [dependencies]
 delonix-seiva = { workspace = true }
-seiva-http = { path = "../../../../crates/seiva-http" }
+seiva-contract = { path = "../../../../crates/seiva-contract" }
 serde = { workspace = true }

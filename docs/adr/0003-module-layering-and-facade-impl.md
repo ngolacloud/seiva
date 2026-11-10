@@ -48,10 +48,26 @@ depend on **"DTOs da própria facade"** — its own facade crate.
 
 ## Consequences
 
-- The dependency graph of a module is: `facade → delonix-seiva`; `domain →`
-  (nothing / `shared/kernel`); `application → domain, facade, seiva-ports`;
-  `infrastructure → application, domain, seiva-ports`; `interface →
+- The dependency graph of a module is: `facade → delonix-seiva, seiva-contract`;
+  `domain →` (nothing / `shared/kernel`); `application → domain, facade,
+  seiva-ports`; `infrastructure → application, domain, seiva-ports`; `interface →
   application, facade`.
+- **The facade is transport-neutral (F1, closed).** The write DTO's
+  `Validate`/`ValidationError` AND the RFC 9457 `Problem` the error maps to live in
+  `seiva-contract` (no axum; `Problem` carries an `http::StatusCode`, the
+  protocol-level status type HTTP and gRPC share). So the facade declares its whole
+  contract — DTOs, validation, error — **without naming any transport crate**. The
+  HTTP transport wraps a `Problem` in `seiva_http::ProblemResponse` (the axum
+  `IntoResponse` edge) to render `application/problem+json`; another transport maps
+  the same `Problem` its own way. The `#[controller]` macro requires the facade
+  error to be `Into<seiva_contract::Problem>`.
+- **The one transport type a facade may still name is `seiva_http::Ctx`**, when a
+  use case takes the request context (`&Ctx`: principal, tenant, idempotency key).
+  `Ctx` is a transport/request concept (it reads HTTP headers and request parts via
+  an axum extractor), so it stays in `seiva-http`; a facade opts into it only when
+  the use case needs the context. The *generated* module uses no `&Ctx` and names
+  no transport crate at all. (Moving `Ctx`'s data to a neutral crate is a possible
+  later refinement, narrower than the error/validation contract this ADR settles.)
 - A use case is tested by constructing the application service with the
   `seiva-testing` doubles plus a fake repository — no server, broker or
   database (ADR 0002), proven by `examples/notes`.

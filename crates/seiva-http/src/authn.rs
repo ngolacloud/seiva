@@ -25,7 +25,7 @@ use axum::response::{IntoResponse, Response};
 
 use seiva_identity::{Authenticator, Principal};
 
-use crate::problem::Problem;
+use crate::problem::{Problem, ProblemResponse};
 use crate::request_id::RequestIdExt;
 
 /// Middleware that authenticates the bearer and inserts a [`Principal`].
@@ -66,10 +66,12 @@ pub async fn authn(
         }
         Err(_) => {
             let request_id = request.extensions().request_id();
-            let mut response = Problem::unauthorized("the bearer token did not authenticate")
-                .with_instance(request.uri().path().to_owned())
-                .with_request_id_opt(request_id)
-                .into_response();
+            let mut response = ProblemResponse(
+                Problem::unauthorized("the bearer token did not authenticate")
+                    .with_instance(request.uri().path().to_owned())
+                    .with_request_id_opt(request_id),
+            )
+            .into_response();
             response
                 .headers_mut()
                 .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));

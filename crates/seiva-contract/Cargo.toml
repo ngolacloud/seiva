@@ -1,0 +1,33 @@
+# seiva-contract — the transport-neutral wire-contract types a module's `facade`
+# depends on.
+#
+# NO axum, NO web server, NO framework runtime, NO data layer. Only the types a
+# versioned contract needs that are independent of HOW the contract is served: the
+# `Validate` check a write DTO runs, its `ValidationError`, and the RFC 9457
+# `Problem` a use case maps its error to. The HTTP transport (`seiva-http`) builds
+# an axum response from `Problem` (its `ProblemResponse`) and re-exports these, so
+# the `facade` layer validates and declares errors without naming a transport
+# crate (ADR 0003). `http` is the protocol-level status-code crate (used by HTTP
+# and gRPC alike), not a server — the facade stays transport-neutral.
+#
+# Kept SemVer-stable by policy: every facade and every transport codes against it.
+[package]
+name = "seiva-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Transport-neutral wire-contract types (Validate, ValidationError, RFC 9457 Problem) for the Delonix Seiva framework."
+
+[dependencies]
+# The trait-only ports: an opaque `BoxError` maps into a 500 `Problem`.
+seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
+# Protocol-level status codes (not a server): `Problem` carries an `http::StatusCode`.
+http = "1"
+# The problem document is serialised to JSON by the transport.
+serde_json = "1"
+# A 500-mapped internal error is logged, never returned (fail-closed).
+tracing = "0.1"

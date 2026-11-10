@@ -10,7 +10,7 @@
 //! The generated `#[seiva::controller]` (wired in `accounts-interface`) uses the
 //! facade's OWN DTOs as the wire types, so — mirroring the scaffold-generated
 //! module and `examples/notes` — the write DTOs derive `serde` and implement
-//! [`seiva_http::Validate`], the response DTO derives [`serde::Serialize`], and
+//! [`seiva_contract::Validate`], the response DTO derives [`serde::Serialize`], and
 //! the error maps to an RFC 9457 [`Problem`] here. Hence this layer depends on
 //! `delonix-seiva`, `serde` and `seiva-http`.
 
@@ -18,7 +18,7 @@
 #![allow(async_fn_in_trait)]
 
 use delonix_seiva::{facade, WireSchema};
-use seiva_http::{Problem, Validate, ValidationError};
+use seiva_contract::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 
 /// Command DTO: the input to [`Accounts::create_user`] and the JSON body of the
@@ -53,7 +53,7 @@ impl Validate for CreateUser {
 /// generated `get_user` route.
 ///
 /// The read takes a DTO (not a bare `String`) so the controller's `Valid<T>`
-/// extractor can deserialise and validate it: `seiva_http::Validate` cannot be
+/// extractor can deserialise and validate it: `seiva_contract::Validate` cannot be
 /// implemented for `String` (the orphan rule), so a bare-`String` parameter
 /// could not be mounted as an HTTP route. See the module docs on the generated
 /// routes for the resulting path shape.
