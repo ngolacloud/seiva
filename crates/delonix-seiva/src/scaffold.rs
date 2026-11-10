@@ -1533,11 +1533,15 @@ fn facade_lib(module: &str, pascal: &str) -> String {
 }
 
 fn domain_lib() -> String {
-    "//! Domain layer: entities, value objects and rules.\n\
+    "//! Domain layer: entities, value objects, rules AND the repository port.\n\
      //!\n\
-     //! Depends on nothing but `shared/kernel`. The rule — a record's title must\n\
-     //! not be empty — lives here, not in the application or the database. Must\n\
-     //! NOT depend on any other layer, the framework or DORM.\n\n\
+     //! Depends on nothing but `shared/kernel` and std. The rule — a record's title\n\
+     //! must not be empty — lives here, and so does the REPOSITORY PORT: classic DDD\n\
+     //! puts the repository interface in the domain (its ubiquitous language), framed\n\
+     //! in a DOMAIN error, not the framework's (ADR 0003). The application adapts it\n\
+     //! to the cross-cutting `seiva-ports`. Must NOT depend on any other layer, the\n\
+     //! framework or DORM.\n\n\
+     use std::future::Future;\n\n\
      /// A record. Construct it through [`Record::new`] so the rule is enforced.\n\
      #[derive(Debug, Clone, PartialEq, Eq)]\n\
      pub struct Record {\n    /// The record's identifier.\n    pub id: u128,\n    /// The record's title.\n    pub title: String,\n}\n\n\
@@ -1547,6 +1551,19 @@ fn domain_lib() -> String {
      pub enum DomainError {\n    /// The record's title was empty or whitespace only.\n    EmptyTitle,\n}\n\n\
      impl std::fmt::Display for DomainError {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        match self {\n            DomainError::EmptyTitle => write!(f, \"record title must not be empty\"),\n        }\n    }\n}\n\n\
      impl std::error::Error for DomainError {}\n\n\
+     /// A repository operation failed. A DOMAIN-level error: the repository is part\n\
+     /// of the domain's language, so it speaks in domain terms, not the framework's.\n\
+     /// The application maps it to `seiva_ports::PortResult` at the use-case boundary.\n\
+     #[derive(Debug, Clone, PartialEq, Eq)]\n\
+     pub struct RepositoryError(pub String);\n\n\
+     impl std::fmt::Display for RepositoryError {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        f.write_str(&self.0)\n    }\n}\n\n\
+     impl std::error::Error for RepositoryError {}\n\n\
+     /// Outbound repository port, in the domain's language (classic DDD — the\n\
+     /// repository interface lives in the domain, ADR 0003). Implemented in\n\
+     /// `infrastructure`; the application adapts its [`RepositoryError`] to the\n\
+     /// framework's `PortResult`. The future is `Send` so the use case can `.await`\n\
+     /// it inside a `UnitOfWork::transaction` on a multi-threaded runtime.\n\
+     pub trait RecordRepository {\n    /// Persists a record.\n    fn save(&self, record: &Record) -> impl Future<Output = Result<(), RepositoryError>> + Send;\n}\n\n\
      #[cfg(test)]\n\
      mod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_empty_title() {\n        assert_eq!(Record::new(1, \"   \"), Err(DomainError::EmptyTitle));\n        assert!(Record::new(1, \"hello\").is_ok());\n    }\n}\n"
         .to_owned()
@@ -1568,15 +1585,14 @@ fn application_lib(snake: &str, pascal: &str) -> String {
          //! DORM gateway the event lands in the transactional outbox in the SAME\n\
          //! transaction as the business change — they commit together or not at all.\n\
          #![allow(async_fn_in_trait)]\n\n\
-         use std::future::Future;\n\n\
          use {snake}_domain::Record;\n\
+         // Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. It is\n\
+         // re-exported here so `interface` imports it from `application` (never naming\n\
+         // `domain`), keeping the layer rule intact. The application maps the domain\n\
+         // `RepositoryError` to the framework's `PortResult` at the use-case boundary.\n\
+         pub use {snake}_domain::{{RecordRepository, RepositoryError}};\n\
          use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}}};\n\
          use seiva_ports::{{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork}};\n\n\
-         /// Outbound port: persistence of records in the domain's language.\n\
-         /// Implemented in `infrastructure` (in-memory by default, DORM-backed via\n\
-         /// the `dorm` feature). The future is `Send` so the use case can `.await`\n\
-         /// it inside a `UnitOfWork::transaction` on a multi-threaded runtime.\n\
-         pub trait RecordRepository {{\n    /// Persists a record.\n    fn save(&self, record: &Record) -> impl Future<Output = PortResult<()>> + Send;\n}}\n\n\
          /// The application service: it implements the [`{pascal}`] facade by running\n\
          /// the use case and mapping the domain entity to the DTO. Generic over the\n\
          /// repository port and the cross-cutting ports (`IdGenerator`, `UnitOfWork`,\n\
@@ -1587,7 +1603,7 @@ fn application_lib(snake: &str, pascal: &str) -> String {
          impl<R, G, U, E> {pascal} for RecordService<R, G, U, E>\n\
          where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n    U: UnitOfWork,\n    E: EventPublisher,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        // Map the internal error to the contract's error type: no internal\n        // detail leaks across the module boundary beyond a message.\n        self.create_record(cmd)\n            .await\n            .map_err(|err| RecordError(err.to_string()))\n    }}\n}}\n\n\
          #[cfg(test)]\n\
-         mod tests {{\n    use super::*;\n    use seiva_testing::{{InMemoryUnitOfWork, RecordingEventPublisher, SequenceIdGenerator, TxOutcome}};\n    use std::sync::Mutex;\n\n    #[derive(Default)]\n    struct FakeRepo {{\n        saved: Mutex<Vec<Record>>,\n    }}\n\n    impl RecordRepository for FakeRepo {{\n        async fn save(&self, record: &Record) -> PortResult<()> {{\n            self.saved.lock().unwrap().push(record.clone());\n            Ok(())\n        }}\n    }}\n\n    fn service(\n    ) -> RecordService<FakeRepo, SequenceIdGenerator, InMemoryUnitOfWork, RecordingEventPublisher> {{\n        RecordService {{\n            repository: FakeRepo::default(),\n            ids: SequenceIdGenerator::new(),\n            uow: InMemoryUnitOfWork::new(),\n            events: RecordingEventPublisher::new(),\n        }}\n    }}\n\n    #[tokio::test]\n    async fn create_persists_commits_and_emits() {{\n        let service = service();\n        let dto = service\n            .create(CreateRecord {{ title: \"hello\".into() }})\n            .await\n            .unwrap();\n        assert_eq!(dto.id, 1);\n        assert_eq!(dto.title, \"hello\");\n        assert_eq!(service.repository.saved.lock().unwrap().len(), 1);\n        // The use case committed exactly one transaction and emitted the event.\n        assert_eq!(service.uow.outcomes(), [TxOutcome::Committed]);\n        assert_eq!(service.events.topics(), [\"{snake}.record.created\"]);\n    }}\n\n    #[tokio::test]\n    async fn empty_title_is_rejected_before_any_transaction() {{\n        let service = service();\n        let result = service.create(CreateRecord {{ title: \"   \".into() }}).await;\n        assert!(result.is_err());\n        // Nothing committed or emitted when the domain rule rejected the command.\n        assert!(service.uow.outcomes().is_empty());\n        assert!(service.events.topics().is_empty());\n    }}\n}}\n"
+         mod tests {{\n    use super::*;\n    use seiva_testing::{{InMemoryUnitOfWork, RecordingEventPublisher, SequenceIdGenerator, TxOutcome}};\n    use std::sync::Mutex;\n\n    #[derive(Default)]\n    struct FakeRepo {{\n        saved: Mutex<Vec<Record>>,\n    }}\n\n    impl RecordRepository for FakeRepo {{\n        async fn save(&self, record: &Record) -> Result<(), RepositoryError> {{\n            self.saved.lock().unwrap().push(record.clone());\n            Ok(())\n        }}\n    }}\n\n    fn service(\n    ) -> RecordService<FakeRepo, SequenceIdGenerator, InMemoryUnitOfWork, RecordingEventPublisher> {{\n        RecordService {{\n            repository: FakeRepo::default(),\n            ids: SequenceIdGenerator::new(),\n            uow: InMemoryUnitOfWork::new(),\n            events: RecordingEventPublisher::new(),\n        }}\n    }}\n\n    #[tokio::test]\n    async fn create_persists_commits_and_emits() {{\n        let service = service();\n        let dto = service\n            .create(CreateRecord {{ title: \"hello\".into() }})\n            .await\n            .unwrap();\n        assert_eq!(dto.id, 1);\n        assert_eq!(dto.title, \"hello\");\n        assert_eq!(service.repository.saved.lock().unwrap().len(), 1);\n        // The use case committed exactly one transaction and emitted the event.\n        assert_eq!(service.uow.outcomes(), [TxOutcome::Committed]);\n        assert_eq!(service.events.topics(), [\"{snake}.record.created\"]);\n    }}\n\n    #[tokio::test]\n    async fn empty_title_is_rejected_before_any_transaction() {{\n        let service = service();\n        let result = service.create(CreateRecord {{ title: \"   \".into() }}).await;\n        assert!(result.is_err());\n        // Nothing committed or emitted when the domain rule rejected the command.\n        assert!(service.uow.outcomes().is_empty());\n        assert!(service.events.topics().is_empty());\n    }}\n}}\n"
     )
 }
 
@@ -1613,8 +1629,9 @@ fn infrastructure_lib(snake: &str) -> String {
          use std::sync::atomic::{{AtomicU64, Ordering}};\n\
          use std::sync::{{Arc, Mutex}};\n\n\
          use async_trait::async_trait;\n\
-         use {snake}_application::RecordRepository;\n\
-         use {snake}_domain::Record;\n\
+         // The repository PORT is the domain's (classic DDD, ADR 0003); this adapter\n\
+         // implements it and speaks its `RepositoryError`.\n\
+         use {snake}_domain::{{Record, RecordRepository, RepositoryError}};\n\
          use seiva_ports::{{EventPublisher, Id, IdGenerator, PortResult, UnitOfWork}};\n\n\
          /// An in-memory [`RecordRepository`], keyed by id so a repeated `save` of\n\
          /// the same id overwrites (upsert). Replace with the DORM-backed adapter\n\
@@ -1622,7 +1639,7 @@ fn infrastructure_lib(snake: &str) -> String {
          #[derive(Clone, Default)]\n\
          pub struct InMemoryRecordRepository {{\n    by_id: Arc<Mutex<HashMap<u128, Record>>>,\n}}\n\n\
          impl InMemoryRecordRepository {{\n    /// Creates an empty repository.\n    pub fn new() -> Self {{\n        Self::default()\n    }}\n\n    /// Every record saved so far, ordered by id — for composition-level assertions.\n    pub fn saved(&self) -> Vec<Record> {{\n        let guard = self.by_id.lock().expect(\"repository poisoned\");\n        let mut records: Vec<Record> = guard.values().cloned().collect();\n        records.sort_by_key(|record| record.id);\n        records\n    }}\n}}\n\n\
-         impl RecordRepository for InMemoryRecordRepository {{\n    async fn save(&self, record: &Record) -> PortResult<()> {{\n        // Upsert by id: idempotent, so seeding the same key twice is a no-op.\n        self.by_id\n            .lock()\n            .map_err(|_| \"repository lock poisoned\")?\n            .insert(record.id, record.clone());\n        Ok(())\n    }}\n}}\n\n\
+         impl RecordRepository for InMemoryRecordRepository {{\n    async fn save(&self, record: &Record) -> Result<(), RepositoryError> {{\n        // Upsert by id: idempotent, so seeding the same key twice is a no-op.\n        self.by_id\n            .lock()\n            .map_err(|_| RepositoryError(\"repository lock poisoned\".to_owned()))?\n            .insert(record.id, record.clone());\n        Ok(())\n    }}\n}}\n\n\
          /// The `seed/` reference data, embedded at build time (ADR 0022). Declared\n\
          /// in the link-time seed registry so a fitness test and `seiva db seed` can\n\
          /// discover it; applied by [`load_seed`] in the composition root.\n\
@@ -2293,7 +2310,23 @@ mod tests {
         assert!(app.contains(
             "use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};"
         ));
-        assert!(app.contains("pub trait RecordRepository {"));
+        // F4 (ADR 0003, Evans): the repository PORT is DEFINED in the domain, and the
+        // application RE-EXPORTS it (so `interface` imports it from `application`,
+        // never naming `domain`). The application does not define the trait itself.
+        let domain = contents(&files, "modules/notes/domain/src/lib.rs");
+        assert!(
+            domain.contains("pub trait RecordRepository {"),
+            "the repository port lives in the domain (F4):\n{domain}"
+        );
+        assert!(domain.contains("pub struct RepositoryError(pub String);"));
+        assert!(
+            app.contains("pub use notes_domain::{RecordRepository, RepositoryError};"),
+            "application re-exports the domain repository port:\n{app}"
+        );
+        assert!(
+            !app.contains("pub trait RecordRepository"),
+            "the application must NOT define the repository port (it is the domain's):\n{app}"
+        );
         assert!(app.contains("impl<R, G, U, E> Notes for RecordService<R, G, U, E>"));
         // F2 (ADR 0021): the write use case is ONE transaction and publishes a
         // domain event INSIDE it — the save and the publish both run within

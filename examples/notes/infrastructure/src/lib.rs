@@ -1,13 +1,12 @@
 //! Infrastructure layer of the `notes` module: adapters that implement the
-//! application's outbound ports.
+//! module's outbound ports.
 //!
-//! Depends on `application` + `domain` + `seiva-ports`. In a real module this
-//! is the DORM-backed (or external) repository; here it is an in-memory adapter
-//! so the wiring is provable without a database.
+//! Depends on `domain` (the repository port is the domain's — classic DDD, ADR
+//! 0003) and std. In a real module this is the DORM-backed (or external)
+//! repository; here it is an in-memory adapter so the wiring is provable without a
+//! database.
 
-use notes_application::NoteRepository;
-use notes_domain::Note;
-use seiva_ports::PortResult;
+use notes_domain::{Note, NoteRepository, RepositoryError};
 use std::sync::Mutex;
 
 /// An in-memory [`NoteRepository`]. Replace with the DORM-backed adapter.
@@ -28,10 +27,10 @@ impl InMemoryNoteRepository {
 }
 
 impl NoteRepository for InMemoryNoteRepository {
-    async fn save(&self, note: &Note) -> PortResult<()> {
+    async fn save(&self, note: &Note) -> Result<(), RepositoryError> {
         self.saved
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .push(note.clone());
         Ok(())
     }
