@@ -323,4 +323,6 @@ nav:
           - 0019 · Fail-closed authorization: adr/0019-fail-closed-authorization.md
           - 0020 · Command bus and pipeline behaviors: adr/0020-command-bus-and-pipeline-behaviors.md
           - 0021 · In-process event bus and choreography: adr/0021-in-process-event-bus-and-choreography.md
+          - 0022 · Seed and demo data as CSV: adr/0022-seed-and-demo-data-as-csv.md
+          - 0024 · Project kinds (--kind): adr/0024-project-kinds.md
   - API reference: https://ngolacloud.github.io/seiva/api/

@@ -130,8 +130,15 @@ enum UserAction {
 
 #[derive(Subcommand)]
 enum ProjectAction {
-    /// Scaffold a new project: `seiva project new <name>`.
-    New { name: String },
+    /// Scaffold a new project: `seiva project new <name> [--kind <kind>]`.
+    New {
+        name: String,
+        /// The project's nature (ADR 0024): `api` (default — HTTP+gRPC server that
+        /// hosts modules), `worker` (background jobs), `gateway` (HTTP edge/BFF) or
+        /// `event` (event-processor). It shapes the generated composition root.
+        #[arg(long)]
+        kind: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -224,6 +231,17 @@ enum DbAction {
         #[arg(long)]
         dsn: Option<String>,
     },
+    /// Apply the project's per-module seed data (ADR 0022). Builds and runs the
+    /// composition root with `SEIVA_SEED=1`: each module loads its `seed/` CSV
+    /// through an idempotent upsert, then the binary exits before serving. The data
+    /// persists only as far as the module's adapter does (the default in-memory
+    /// adapter makes this a smoke test; a DORM-backed adapter persists it).
+    Seed {
+        /// Also load each module's `demo/` data (through the facade), as a dev boot
+        /// would. Off by default so `db seed` applies reference data only.
+        #[arg(long)]
+        demo: bool,
+    },
 }
 
 fn not_yet(what: &str, phase: &str) -> ExitCode {
@@ -269,8 +287,17 @@ fn framework_root() -> String {
         .into_owned()
 }
 
-fn project_new(name: &str) -> ExitCode {
-    let files = match scaffold::project_files(name) {
+fn project_new(name: &str, kind: Option<&str>) -> ExitCode {
+    // Parse the kind up front (ADR 0024). Without `--kind` we default to `api`
+    // AND advise, so a developer learns the options without a failed command.
+    let kind = match scaffold::ProjectKind::parse(kind.unwrap_or("api")) {
+        Ok(kind) => kind,
+        Err(message) => {
+            eprintln!("seiva: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let files = match scaffold::project_files(name, kind) {
         Ok(files) => files,
         Err(err) => {
             eprintln!("seiva: {err}");
@@ -294,8 +321,39 @@ fn project_new(name: &str) -> ExitCode {
         eprintln!("seiva: writing {}: {err}", manifest.display());
         return ExitCode::FAILURE;
     }
-    println!("Created project `{name}`. Next: cd {name} && seiva module new <name>");
+    print_project_created(name, kind);
     ExitCode::SUCCESS
+}
+
+/// Prints the created-project summary and the kind-appropriate next step. When the
+/// kind was defaulted (`api`), it also advises the other kinds so the developer is
+/// guided toward the shape that fits the project's nature, without a prompt.
+fn print_project_created(name: &str, kind: scaffold::ProjectKind) {
+    use scaffold::ProjectKind;
+    let next = match kind {
+        ProjectKind::Api => {
+            format!("cd {name} && seiva module new <name>   # add a module, then `seiva start`")
+        }
+        ProjectKind::Worker => format!(
+            "cd {name} && seiva start   # edit the worker pass in apps/{name}-api/src/main.rs"
+        ),
+        ProjectKind::Gateway => format!(
+            "cd {name} && seiva start   # add upstream routes in apps/{name}-api/src/main.rs"
+        ),
+        ProjectKind::Event => format!(
+            "cd {name} && seiva start   # register subscribers in apps/{name}-api/src/main.rs"
+        ),
+    };
+    println!("Created `{name}` (kind: {}). Next: {next}", kind.as_str());
+    if matches!(kind, ProjectKind::Api) {
+        println!(
+            "\nTip: choose the shape that fits your service with `--kind` (ADR 0024):\n\
+             \x20 api      an HTTP+gRPC server that hosts your modules (the default)\n\
+             \x20 worker   a background service for jobs/schedules (no HTTP surface)\n\
+             \x20 gateway  an HTTP edge/BFF that aggregates upstream services\n\
+             \x20 event    an event-processor that drains the event bus and reacts"
+        );
+    }
 }
 
 /// Appends the framework `[patch.crates-io]` section to the generated workspace
@@ -464,6 +522,7 @@ fn module_split(name: &str) -> ExitCode {
     }
 
     println!("Split module `{name}` into a service. Created apps/{name}-service (mounts only `{name}`), registered it in the workspace and set mode = \"service\".");
+    println!("It OWNS its data: `apps/{name}-service/compose.yaml` brings it up with its own `{name}-db` and a per-service DELONIX_ORM_DSN (microservices decentralized data) — see its README.");
     println!("Run the microservice: `cargo run -p {name}-service` (or `dx run -p {name}-service`). The monolith still serves `{name}` too; `seiva module merge {name}` undoes this.");
     ExitCode::SUCCESS
 }
@@ -808,6 +867,51 @@ fn openapi(compact: bool) -> ExitCode {
             );
             println!("{}", builtin_openapi_json(compact));
             ExitCode::SUCCESS
+        }
+    }
+}
+
+/// Applies the project's seed data (ADR 0022) by building and running the
+/// composition root with `SEIVA_SEED=1`, so every module loads its `seed/` CSV
+/// through an idempotent upsert; with `--demo`, also each module's `demo/` data
+/// through the facade. The binary exits before serving. Mirrors `emit_project_openapi`
+/// (which runs the same binary with `SEIVA_EMIT`), reusing the one boot wiring.
+fn db_seed(demo: bool) -> ExitCode {
+    let manifest = match std::fs::read_to_string("seiva.toml") {
+        Ok(contents) => contents,
+        Err(_) => {
+            eprintln!(
+                "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let name = match scaffold::project_name(&manifest) {
+        Some(name) => name,
+        None => {
+            eprintln!("seiva: seiva.toml has no `[project] name`.");
+            return ExitCode::FAILURE;
+        }
+    };
+    let app = format!("{name}-api");
+    eprintln!(
+        "seiva: building `{app}` to apply seed{} ...",
+        if demo { " + demo" } else { "" }
+    );
+    let mut command = std::process::Command::new("cargo");
+    command
+        .args(["run", "--quiet", "--bin", &app])
+        .env("SEIVA_SEED", "1");
+    if demo {
+        // Force demo even outside dev, as the flag promises.
+        command.env("SEIVA_LOAD_DEMO", "1");
+    }
+    match command.status() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+        Err(error) => {
+            eprintln!("seiva: failed to run `{app}`: {error}");
+            ExitCode::FAILURE
         }
     }
 }
@@ -1456,7 +1560,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Doctor => doctor(),
         Command::Project { action } => match action {
-            ProjectAction::New { name } => project_new(&name),
+            ProjectAction::New { name, kind } => project_new(&name, kind.as_deref()),
         },
         Command::Module { action } => match action {
             ModuleAction::New { name, data, admin } => {
@@ -1474,6 +1578,7 @@ fn main() -> ExitCode {
             DbAction::Migrate => db_migrate(),
             DbAction::Pull { out, dsn } => db_pull(out, dsn),
             DbAction::Studio { port, write, dsn } => db_studio(port, write, dsn),
+            DbAction::Seed { demo } => db_seed(demo),
         },
         Command::Lint => lint(),
         Command::Expand => not_yet("expand", "the macros phase"),

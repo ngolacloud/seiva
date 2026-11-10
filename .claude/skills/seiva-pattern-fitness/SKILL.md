@@ -9,10 +9,20 @@ Enforce the framework's architecture rules on a module change. The compiler and
 `seiva lint` are the first line; this skill is the catalogue of patterns that are
 *technically legal* but *wrongly applied*.
 
+For a deeper architecture judgement (DDD + Clean, module-vs-microservice, the
+bootstrap, the open findings F1–F6), convene the panel in the
+`seiva-architecture-reviewers` skill (Fowler + Uncle Bob + Evans) and reconcile
+against the backlog `docs/audits/2026-11-architecture-review.md`.
+
 ## 1. Run the fitness function
 
 - `cargo test -p delonix-seiva lint::` and `cargo run -p seiva-cli -- lint`
   (inside a project) — the layer-dependency and contract checks must pass.
+- `cargo test -p delonix-seiva scaffold::` — the scaffold fitness suite, including
+  `generated_project_compiles_standalone` (compiles the generated project with the
+  module wired into `main`), `project_is_cloud_native_ready`, and the seed/demo
+  checks `generated_module_has_seed_and_demo` / `composition_root_wires_seed_on_boot`
+  (ADR 0022). Closing a finding means turning its fitness green, not just editing.
 - The five layers and the dependency rule (`crates/delonix-seiva/src/lint.rs`):
   - `domain` → only `shared/kernel`.
   - `facade` → never DORM; never domain/application/infrastructure/interface.
