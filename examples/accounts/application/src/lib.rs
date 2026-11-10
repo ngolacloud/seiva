@@ -19,7 +19,7 @@ use accounts_domain::User;
 pub use accounts_domain::{CredentialRepository, RepositoryError};
 use accounts_facade::{Accounts, CreateUser, GetUser, UserDto, UserError};
 use seiva_auth::hash_password;
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};
 
 /// An application-level failure that is not a domain-rule violation.
 ///
@@ -91,7 +91,7 @@ where
         // at all. On a duplicate the body returns `Err`, so nothing is saved and
         // the transaction rolls back.
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 if self
                     .repository
                     .find_by_username(&user.username)

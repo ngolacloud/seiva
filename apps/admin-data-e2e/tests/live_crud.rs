@@ -14,7 +14,7 @@ use seiva_data_dorm::{
     connect, idempotency_migrations, DormConfig, DormIdempotencyStore, DormUnitOfWork,
 };
 use seiva_http::{Ctx, IdempotencyKey, Principal};
-use seiva_ports::{BoxError, UnitOfWork};
+use seiva_ports::{BoxError, Scope, UnitOfWork};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_catalog_crud_tenant_scoped_and_masked() {
@@ -34,7 +34,7 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
         .expect("connect to the test database"),
     ));
 
-    uow.transaction(|| async {
+    uow.transaction(Scope::Global, || async {
         dorm_core::db::execute("DROP TABLE IF EXISTS catalog_items", &[])
             .await
             .map_err(|e| Box::new(e) as BoxError)?;
@@ -202,7 +202,7 @@ async fn live_catalog_crud_tenant_scoped_and_masked() {
     assert!(catalog.get(&acme, id).await.is_err(), "deleted");
 
     // Cleanup.
-    uow.transaction(|| async {
+    uow.transaction(Scope::Global, || async {
         dorm_core::db::execute("DROP TABLE catalog_items", &[])
             .await
             .map(|_| ())
@@ -236,7 +236,7 @@ async fn live_catalog_create_is_idempotent() {
     ));
 
     // Fresh tables: the catalogue and the idempotency store.
-    uow.transaction(|| async {
+    uow.transaction(Scope::Global, || async {
         dorm_core::db::execute("DROP TABLE IF EXISTS catalog_items", &[])
             .await
             .map_err(|e| Box::new(e) as BoxError)?;
@@ -320,7 +320,7 @@ async fn live_catalog_create_is_idempotent() {
     );
 
     // Cleanup.
-    uow.transaction(|| async {
+    uow.transaction(Scope::Global, || async {
         dorm_core::db::execute("DROP TABLE catalog_items", &[])
             .await
             .map_err(|e| Box::new(e) as BoxError)?;
@@ -353,7 +353,7 @@ async fn live_catalog_list_search_order_paginate() {
         })
         .expect("connect to the test database"),
     ));
-    uow.transaction(|| async {
+    uow.transaction(Scope::Global, || async {
         dorm_core::db::execute("DROP TABLE IF EXISTS catalog_items", &[])
             .await
             .map_err(|e| Box::new(e) as BoxError)?;
@@ -462,7 +462,7 @@ async fn live_catalog_list_search_order_paginate() {
         .expect("page 1");
     assert_eq!(names(&page1), ["banana", "cherry"]);
 
-    uow.transaction(|| async {
+    uow.transaction(Scope::Global, || async {
         dorm_core::db::execute("DROP TABLE catalog_items", &[])
             .await
             .map(|_| ())

@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
 use seiva_ports::{
     AuditEntry, AuditSink, BoxError, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
-    IdempotencyStore, PortResult, UnitOfWork,
+    IdempotencyStore, PortResult, Scope, UnitOfWork,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -92,18 +92,61 @@ pub fn connect(config: &DormConfig) -> Result<dorm_core::db::Database, dorm_core
     )
 }
 
+/// Runs `fut` with a [`Scope`] bound onto DORM's task-local tenant scope (SG1).
+///
+/// This is the **single place** the Seiva tenant vocabulary (`Scope`/`TenantId`)
+/// is mapped onto DORM's enforcement: a [`Scope::Tenant`] enters
+/// `dorm_core::db::with_tenant` (so every `tenant_scoped` model is constrained to
+/// that tenant automatically), and a [`Scope::Global`] enters the **audited**
+/// `dorm_core::db::with_system_scope` (which logs the bypass). Binding once, here,
+/// is what lets both the write path ([`DormUnitOfWork::transaction`]) and the read
+/// path ([`scoped_session`]) inherit the same guarantee instead of each
+/// re-implementing it.
+async fn bind_scope<F, T>(scope: Scope, fut: F) -> T
+where
+    F: Future<Output = T>,
+{
+    match scope {
+        Scope::Tenant(tenant) => dorm_core::db::with_tenant(tenant.into_string(), fut).await,
+        Scope::Global => dorm_core::db::with_system_scope(fut).await,
+    }
+}
+
+/// Opens a DORM session for a module's `db` handle under an explicit [`Scope`] and
+/// runs `fut` inside it — the **read-path** counterpart of
+/// [`DormUnitOfWork::transaction`].
+///
+/// A caller cannot open a scoped session without naming a scope: pass
+/// `Scope::Tenant(tenant)` for the common per-request case (every `tenant_scoped`
+/// read is filtered to that tenant) or the audited `Scope::Global` for deliberate
+/// cross-tenant work. Statements the body runs through DORM join this session.
+pub async fn scoped_session<F, T>(scope: Scope, db: Arc<dorm_core::db::Database>, fut: F) -> T
+where
+    F: Future<Output = T>,
+{
+    bind_scope(scope, dorm_core::db::with_session(db, fut)).await
+}
+
 /// The DORM-backed [`UnitOfWork`] (ADR 0004): the scope-based port mapped onto
 /// DORM's closure-scoped executor. `transaction` runs the body inside the
-/// module's session (`with_session` — strict mode requires one) and a DORM
-/// transaction (`db::atomic`), which commits when the body returns `Ok` and
-/// rolls back when it returns `Err`. The internal error is wrapped as the
-/// boundary's [`BoxError`]; this is the bridge the ADR-0004 finding resolves.
+/// module's session (`with_session` — strict mode requires one), **bound to the
+/// per-call tenant [`Scope`]** (SG1), and a DORM transaction (`db::atomic`), which
+/// commits when the body returns `Ok` and rolls back when it returns `Err`. The
+/// internal error is wrapped as the boundary's [`BoxError`]; this is the bridge
+/// the ADR-0004 finding resolves.
+///
+/// The tenant is chosen **per transaction**, not per handle: the caller passes a
+/// [`Scope`] to [`transaction`](UnitOfWork::transaction) (a tenant, or the audited
+/// [`Scope::Global`]), which the compiler requires — so a transaction cannot
+/// forget to name the tenant it runs for (SG1). The handle itself is tenant-free.
 pub struct DormUnitOfWork {
     db: Arc<dorm_core::db::Database>,
 }
 
 impl DormUnitOfWork {
-    /// Wraps a module's [`connect`]-built handle as a unit of work.
+    /// Wraps a module's [`connect`]-built handle as a unit of work. The tenant is
+    /// supplied per transaction via the [`Scope`] argument to
+    /// [`transaction`](UnitOfWork::transaction), not here.
     pub fn new(db: dorm_core::db::Database) -> Self {
         Self { db: Arc::new(db) }
     }
@@ -112,6 +155,7 @@ impl DormUnitOfWork {
 impl UnitOfWork for DormUnitOfWork {
     fn transaction<'a, T, F, Fut>(
         &'a self,
+        scope: Scope,
         work: F,
     ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
     where
@@ -136,7 +180,11 @@ impl UnitOfWork for DormUnitOfWork {
             let captured: std::sync::Arc<std::sync::Mutex<Option<BoxError>>> =
                 std::sync::Arc::new(std::sync::Mutex::new(None));
             let slot = std::sync::Arc::clone(&captured);
-            let outcome: Result<T, dorm_core::Error> =
+            // Bind the unit of work's tenant scope (SG1) around the whole session +
+            // transaction, so every `tenant_scoped` statement the body runs is
+            // constrained to this tenant (or runs under the audited global escape).
+            let outcome: Result<T, dorm_core::Error> = bind_scope(
+                scope,
                 dorm_core::db::with_session(db, async move {
                     dorm_core::db::atomic(move |_tx| async move {
                         match work().await {
@@ -154,8 +202,9 @@ impl UnitOfWork for DormUnitOfWork {
                         }
                     })
                     .await
-                })
-                .await;
+                }),
+            )
+            .await;
             outcome.map_err(|dorm_err| {
                 // Restore the caller's original error if we captured one; otherwise
                 // the failure came from DORM itself (connect/commit/rollback) and we
@@ -379,6 +428,42 @@ mod tests {
         assert!(SystemClock.now() >= std::time::UNIX_EPOCH);
     }
 
+    /// SG1, no database: the `Scope` a unit of work / session is built with is
+    /// actually bound onto DORM's task-local tenant scope. `bind_scope` is the one
+    /// place the mapping happens, so proving it here proves it for both the write
+    /// path (`DormUnitOfWork::transaction`) and the read path (`scoped_session`).
+    /// A `Scope::Tenant` must set `current_tenant`; a `Scope::Global` must run under
+    /// the audited `is_system_scope` with no tenant — the "impossible to silently
+    /// cross tenants" guarantee, verified without a connection.
+    #[tokio::test]
+    async fn scope_is_bound_onto_dorm_task_local() {
+        let tenant = Scope::tenant("acme").expect("non-empty");
+        bind_scope(tenant, async {
+            assert_eq!(
+                dorm_core::db::current_tenant(),
+                Some(dorm_core::value::Value::Text("acme".to_owned())),
+                "Scope::Tenant must bind the DORM tenant task-local"
+            );
+            assert!(
+                !dorm_core::db::is_system_scope(),
+                "a tenant scope is not the global escape"
+            );
+        })
+        .await;
+
+        bind_scope(Scope::Global, async {
+            assert!(
+                dorm_core::db::is_system_scope(),
+                "Scope::Global must enter the audited system scope"
+            );
+            assert!(
+                dorm_core::db::current_tenant().is_none(),
+                "the global escape binds no tenant"
+            );
+        })
+        .await;
+    }
+
     /// Live round-trip against a real PostgreSQL, proving the gateway's
     /// [`UnitOfWork`] actually commits on `Ok` and rolls back on `Err` through
     /// DORM (`with_session` + `db::atomic`). Gated on `SEIVA_DORM_TEST_DSN`
@@ -408,7 +493,7 @@ mod tests {
         };
 
         // A clean slate, then a committing transaction creates and inserts.
-        uow.transaction(|| async {
+        uow.transaction(Scope::Global, || async {
             exec("DROP TABLE IF EXISTS seiva_rt").await?;
             exec("CREATE TABLE seiva_rt (id int primary key, title text)").await?;
             exec("INSERT INTO seiva_rt (id, title) VALUES (1, 'hello')").await?;
@@ -419,7 +504,7 @@ mod tests {
 
         // Commit is durable: a later transaction sees row 1 (UPDATE affects 1).
         let updated = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 exec("UPDATE seiva_rt SET title = 'again' WHERE id = 1").await
             })
             .await
@@ -428,7 +513,7 @@ mod tests {
 
         // Rollback: insert row 2 then fail — the insert must NOT persist.
         let rolled_back = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 exec("INSERT INTO seiva_rt (id, title) VALUES (2, 'doomed')").await?;
                 Err::<(), BoxError>("deliberate failure to force rollback".into())
             })
@@ -437,12 +522,12 @@ mod tests {
 
         // Row 2 is gone (DELETE affects 0 rows); row 1 (committed) is untouched.
         let deleted = uow
-            .transaction(|| async { exec("DELETE FROM seiva_rt WHERE id = 2").await })
+            .transaction(Scope::Global, || async { exec("DELETE FROM seiva_rt WHERE id = 2").await })
             .await
             .expect("verification transaction succeeds");
         assert_eq!(deleted, 0, "the rolled-back row must not have persisted");
 
-        uow.transaction(|| async { exec("DROP TABLE seiva_rt").await })
+        uow.transaction(Scope::Global, || async { exec("DROP TABLE seiva_rt").await })
             .await
             .expect("cleanup succeeds");
     }
@@ -490,7 +575,7 @@ mod tests {
         };
 
         // A clean, committed, empty table.
-        uow.transaction(|| async {
+        uow.transaction(Scope::Global, || async {
             exec("DROP TABLE IF EXISTS seiva_err_rt").await?;
             exec("CREATE TABLE seiva_err_rt (id int primary key)").await?;
             Ok(())
@@ -500,7 +585,7 @@ mod tests {
 
         // A transaction that does a real write, then fails with the TYPED error.
         let err: BoxError = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 exec("INSERT INTO seiva_err_rt (id) VALUES (1)").await?;
                 Err::<(), BoxError>(Box::new(Sentinel(404)) as BoxError)
             })
@@ -517,12 +602,12 @@ mod tests {
 
         // And the write rolled back with it: the row is not there (DELETE affects 0).
         let remaining = uow
-            .transaction(|| async { exec("DELETE FROM seiva_err_rt WHERE id = 1").await })
+            .transaction(Scope::Global, || async { exec("DELETE FROM seiva_err_rt WHERE id = 1").await })
             .await
             .expect("verification transaction succeeds");
         assert_eq!(remaining, 0, "the insert rolled back with the typed error");
 
-        uow.transaction(|| async { exec("DROP TABLE seiva_err_rt").await })
+        uow.transaction(Scope::Global, || async { exec("DROP TABLE seiva_err_rt").await })
             .await
             .expect("cleanup succeeds");
     }
@@ -590,7 +675,7 @@ mod tests {
         // Schema: the idempotency table (via the shipped DDL) + a side-effect
         // table whose row count is the number of times the effect ran.
         let ddl = idempotency_migrations();
-        uow.transaction(|| async {
+        uow.transaction(Scope::Global, || async {
             for stmt in &ddl {
                 dorm_core::db::execute(stmt, &[])
                     .await
@@ -623,7 +708,7 @@ mod tests {
         async fn once(uow: &DormUnitOfWork, key: &str, fingerprint: &str) -> PortResult<bool> {
             let key = key.to_owned();
             let fingerprint = fingerprint.to_owned();
-            uow.transaction(move || async move {
+            uow.transaction(Scope::Global, move || async move {
                 let store = DormIdempotencyStore;
                 match store
                     .begin(&key, &fingerprint, std::time::Duration::from_secs(300))
@@ -666,7 +751,7 @@ mod tests {
 
         // The side effect ran exactly once despite N concurrent requests.
         let count = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 dorm_core::db::sql("SELECT count(*)::int FROM seiva_idem_effect", &[])
                     .await
                     .map_err(|e| Box::new(e) as BoxError)
@@ -678,7 +763,7 @@ mod tests {
 
         // A reused key with a DIFFERENT fingerprint is a Mismatch (no effect).
         let mismatch = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 DormIdempotencyStore
                     .begin(
                         "acme:k",
@@ -693,7 +778,7 @@ mod tests {
 
         // The completed key replays the exact stored bytes, no re-execution.
         let replay = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 DormIdempotencyStore
                     .begin("acme:k", "fp-A", std::time::Duration::from_secs(300))
                     .await
@@ -707,7 +792,7 @@ mod tests {
 
         // A different key (another tenant/operation) is wholly independent.
         let other = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 DormIdempotencyStore
                     .begin("bob:k", "fp-A", std::time::Duration::from_secs(300))
                     .await
@@ -717,7 +802,7 @@ mod tests {
         assert_eq!(other, IdempotencyOutcome::Fresh);
 
         // Cleanup.
-        uow.transaction(|| async {
+        uow.transaction(Scope::Global, || async {
             dorm_core::db::execute("DROP TABLE seiva_idem_effect", &[])
                 .await
                 .map_err(|e| Box::new(e) as BoxError)
@@ -749,7 +834,7 @@ mod tests {
         );
 
         // Setup: the idempotency table + a consumed-effects counter table.
-        uow.transaction(|| async {
+        uow.transaction(Scope::Global, || async {
             for stmt in &idempotency_migrations() {
                 dorm_core::db::execute(stmt, &[])
                     .await
@@ -780,7 +865,7 @@ mod tests {
         let key = inbox_key("billing", "evt-1");
         for _ in 0..2 {
             let key = key.clone();
-            uow.transaction(move || async move {
+            uow.transaction(Scope::Global, move || async move {
                 let store = DormIdempotencyStore;
                 if store
                     .begin(&key, "evt-1", std::time::Duration::from_secs(300))
@@ -798,7 +883,7 @@ mod tests {
             .expect("consume succeeds");
         }
         let count = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 dorm_core::db::sql("SELECT count(*)::int FROM seiva_inbox_effect", &[])
                     .await
                     .map_err(|e| Box::new(e) as BoxError)
@@ -809,7 +894,7 @@ mod tests {
         assert_eq!(effects, 1, "a redelivered event must be consumed once");
 
         // TTL purge: a key claimed with ttl 0 is already expired; purge removes it.
-        uow.transaction(|| async {
+        uow.transaction(Scope::Global, || async {
             DormIdempotencyStore
                 .begin("ttl-key", "fp", std::time::Duration::from_secs(0))
                 .await
@@ -818,7 +903,7 @@ mod tests {
         .await
         .expect("claim succeeds");
         let purged = uow
-            .transaction(|| async { DormIdempotencyStore.purge_expired().await })
+            .transaction(Scope::Global, || async { DormIdempotencyStore.purge_expired().await })
             .await
             .expect("purge succeeds");
         assert!(
@@ -827,7 +912,7 @@ mod tests {
         );
         // The purged key is free to claim again (Fresh).
         let reclaim = uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 DormIdempotencyStore
                     .begin("ttl-key", "fp", std::time::Duration::from_secs(300))
                     .await
@@ -837,7 +922,7 @@ mod tests {
         assert_eq!(reclaim, IdempotencyOutcome::Fresh);
 
         // Cleanup.
-        uow.transaction(|| async {
+        uow.transaction(Scope::Global, || async {
             dorm_core::db::execute("DROP TABLE seiva_inbox_effect", &[])
                 .await
                 .map_err(|e| Box::new(e) as BoxError)

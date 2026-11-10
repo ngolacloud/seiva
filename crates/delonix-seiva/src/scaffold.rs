@@ -1592,14 +1592,14 @@ fn application_lib(snake: &str, pascal: &str) -> String {
          // `RepositoryError` to the framework's `PortResult` at the use-case boundary.\n\
          pub use {snake}_domain::{{RecordRepository, RepositoryError}};\n\
          use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}}};\n\
-         use seiva_ports::{{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork}};\n\n\
+         use seiva_ports::{{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork}};\n\n\
          /// The application service: it implements the [`{pascal}`] facade by running\n\
          /// the use case and mapping the domain entity to the DTO. Generic over the\n\
          /// repository port and the cross-cutting ports (`IdGenerator`, `UnitOfWork`,\n\
          /// `EventPublisher`), so it unit-tests with the `seiva-testing` doubles.\n\
          pub struct RecordService<R, G, U, E> {{\n    /// The outbound persistence port.\n    pub repository: R,\n    /// The framework id generator.\n    pub ids: G,\n    /// The unit of work: one transaction per use case.\n    pub uow: U,\n    /// The domain-event publisher (the transactional outbox, with DORM).\n    pub events: E,\n}}\n\n\
          impl<R, G, U, E> RecordService<R, G, U, E>\n\
-         where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n    U: UnitOfWork,\n    E: EventPublisher,\n{{\n    async fn create_record(&self, cmd: CreateRecord) -> PortResult<RecordDto> {{\n        // Validate in the domain first — no point opening a transaction for a\n        // command the rule will reject.\n        let id = u128::from_be_bytes(self.ids.new_id().0);\n        let record = Record::new(id, cmd.title).map_err(BoxError::from)?;\n\n        // The event payload is a JSON envelope — the DORM gateway's outbox\n        // publisher parses the bytes as JSON before persisting them, so a\n        // non-JSON payload would fail against the real data layer.\n        let event = serde_json::to_vec(&serde_json::json!({{\n            \"id\": record.id.to_string(),\n            \"title\": record.title.clone(),\n        }}))\n        .map_err(BoxError::from)?;\n\n        // One transaction per use case (ADR 0021): the save AND the event publish\n        // run inside it, so data and event commit atomically with the DORM gateway.\n        // A module reacts to another's event in the composition root, never by a\n        // direct call — which is what keeps `seiva module split` a composition change.\n        self.uow\n            .transaction(|| async {{\n                self.repository.save(&record).await?;\n                self.events.publish(\"{snake}.record.created\", &event).await\n            }})\n            .await?;\n\n        Ok(RecordDto {{\n            id: record.id,\n            title: record.title,\n        }})\n    }}\n}}\n\n\
+         where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n    U: UnitOfWork,\n    E: EventPublisher,\n{{\n    async fn create_record(&self, cmd: CreateRecord) -> PortResult<RecordDto> {{\n        // Validate in the domain first — no point opening a transaction for a\n        // command the rule will reject.\n        let id = u128::from_be_bytes(self.ids.new_id().0);\n        let record = Record::new(id, cmd.title).map_err(BoxError::from)?;\n\n        // The event payload is a JSON envelope — the DORM gateway's outbox\n        // publisher parses the bytes as JSON before persisting them, so a\n        // non-JSON payload would fail against the real data layer.\n        let event = serde_json::to_vec(&serde_json::json!({{\n            \"id\": record.id.to_string(),\n            \"title\": record.title.clone(),\n        }}))\n        .map_err(BoxError::from)?;\n\n        // One transaction per use case (ADR 0021): the save AND the event publish\n        // run inside it, so data and event commit atomically with the DORM gateway.\n        // A module reacts to another's event in the composition root, never by a\n        // direct call — which is what keeps `seiva module split` a composition change.\n        self.uow\n            .transaction(Scope::Global, || async {{\n                self.repository.save(&record).await?;\n                self.events.publish(\"{snake}.record.created\", &event).await\n            }})\n            .await?;\n\n        Ok(RecordDto {{\n            id: record.id,\n            title: record.title,\n        }})\n    }}\n}}\n\n\
          impl<R, G, U, E> {pascal} for RecordService<R, G, U, E>\n\
          where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n    U: UnitOfWork,\n    E: EventPublisher,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        // Map the internal error to the contract's error type: no internal\n        // detail leaks across the module boundary beyond a message.\n        self.create_record(cmd)\n            .await\n            .map_err(|err| RecordError(err.to_string()))\n    }}\n}}\n\n\
          #[cfg(test)]\n\
@@ -1632,7 +1632,7 @@ fn infrastructure_lib(snake: &str) -> String {
          // The repository PORT is the domain's (classic DDD, ADR 0003); this adapter\n\
          // implements it and speaks its `RepositoryError`.\n\
          use {snake}_domain::{{Record, RecordRepository, RepositoryError}};\n\
-         use seiva_ports::{{EventPublisher, Id, IdGenerator, PortResult, UnitOfWork}};\n\n\
+         use seiva_ports::{{EventPublisher, Id, IdGenerator, PortResult, Scope, UnitOfWork}};\n\n\
          /// An in-memory [`RecordRepository`], keyed by id so a repeated `save` of\n\
          /// the same id overwrites (upsert). Replace with the DORM-backed adapter\n\
          /// (feature `dorm`) or an external one for production.\n\
@@ -1663,7 +1663,7 @@ fn infrastructure_lib(snake: &str) -> String {
          /// with no database while the use case already codes against the port.\n\
          #[derive(Clone, Default)]\n\
          pub struct DirectUnitOfWork;\n\n\
-         impl UnitOfWork for DirectUnitOfWork {{\n    fn transaction<'a, T, F, Fut>(\n        &'a self,\n        work: F,\n    ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>\n    where\n        F: FnOnce() -> Fut + Send + 'a,\n        Fut: Future<Output = PortResult<T>> + Send + 'a,\n        T: Send + 'a,\n    {{\n        Box::pin(async move {{ work().await }})\n    }}\n}}\n\n\
+         impl UnitOfWork for DirectUnitOfWork {{\n    fn transaction<'a, T, F, Fut>(\n        &'a self,\n        _scope: Scope,\n        work: F,\n    ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>\n    where\n        F: FnOnce() -> Fut + Send + 'a,\n        Fut: Future<Output = PortResult<T>> + Send + 'a,\n        T: Send + 'a,\n    {{\n        Box::pin(async move {{ work().await }})\n    }}\n}}\n\n\
          /// An [`EventPublisher`] that logs the emitted event so a dev run shows the\n\
          /// use case fired it. The DORM gateway (feature `dorm`) writes it to the\n\
          /// transactional outbox instead, and the relay worker forwards it to the\n\
@@ -2308,7 +2308,7 @@ mod tests {
         let files = module_files("notes", false).unwrap();
         let app = contents(&files, "modules/notes/application/src/lib.rs");
         assert!(app.contains(
-            "use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};"
+            "use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};"
         ));
         // F4 (ADR 0003, Evans): the repository PORT is DEFINED in the domain, and the
         // application RE-EXPORTS it (so `interface` imports it from `application`,

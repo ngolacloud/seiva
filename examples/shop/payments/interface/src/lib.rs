@@ -49,7 +49,7 @@ use runtime::{DirectUnitOfWork, NoopEventPublisher, SystemIds};
 /// without the DORM data layer.
 mod runtime {
     use async_trait::async_trait;
-    use seiva_ports::{EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
+    use seiva_ports::{EventPublisher, Id, IdGenerator, PortResult, Scope, UnitOfWork};
     use std::future::Future;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -70,6 +70,7 @@ mod runtime {
     impl UnitOfWork for DirectUnitOfWork {
         fn transaction<'a, T, F, Fut>(
             &'a self,
+            _scope: Scope,
             work: F,
         ) -> std::pin::Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
         where

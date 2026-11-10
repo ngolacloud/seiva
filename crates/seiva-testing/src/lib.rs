@@ -11,7 +11,7 @@
 use async_trait::async_trait;
 use seiva_ports::{
     AuditEntry, AuditSink, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
-    IdempotencyStore, PortResult, RateLimitDecision, RateLimitStore, UnitOfWork,
+    IdempotencyStore, PortResult, RateLimitDecision, RateLimitStore, Scope, UnitOfWork,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -142,11 +142,14 @@ pub enum TxOutcome {
 
 /// A scope-based [`UnitOfWork`] that records each transaction's outcome: the
 /// work body committing (`Ok`) or rolling back (`Err`), mirroring the guarantee
-/// the DORM-backed one keeps. Hold a clone, pass one into the handler, then read
-/// [`outcomes`](Self::outcomes) back after the use case runs.
+/// the DORM-backed one keeps. It also records the [`Scope`] each transaction was
+/// run under (SG1), so a test can assert a handler scoped its work to the right
+/// tenant. Hold a clone, pass one into the handler, then read
+/// [`outcomes`](Self::outcomes) / [`scopes`](Self::scopes) back after the use case runs.
 #[derive(Clone, Default)]
 pub struct InMemoryUnitOfWork {
     log: Arc<Mutex<Vec<TxOutcome>>>,
+    scopes: Arc<Mutex<Vec<Scope>>>,
 }
 
 impl InMemoryUnitOfWork {
@@ -158,11 +161,18 @@ impl InMemoryUnitOfWork {
     pub fn outcomes(&self) -> Vec<TxOutcome> {
         self.log.lock().expect("uow poisoned").clone()
     }
+
+    /// The [`Scope`] every transaction was run under so far, in order — lets a test
+    /// assert a handler bound its work to the expected tenant (SG1).
+    pub fn scopes(&self) -> Vec<Scope> {
+        self.scopes.lock().expect("uow poisoned").clone()
+    }
 }
 
 impl UnitOfWork for InMemoryUnitOfWork {
     fn transaction<'a, T, F, Fut>(
         &'a self,
+        scope: Scope,
         work: F,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PortResult<T>> + Send + 'a>>
     where
@@ -171,6 +181,7 @@ impl UnitOfWork for InMemoryUnitOfWork {
         T: Send + 'a,
     {
         Box::pin(async move {
+            self.scopes.lock().expect("uow poisoned").push(scope);
             match work().await {
                 Ok(value) => {
                     self.log
@@ -362,14 +373,28 @@ mod tests {
     #[tokio::test]
     async fn an_ok_body_commits_and_an_err_body_rolls_back() {
         let uow = InMemoryUnitOfWork::new();
-        let ok: PortResult<i32> = uow.transaction(|| async { Ok(7) }).await;
+        let ok: PortResult<i32> = uow.transaction(Scope::Global, || async { Ok(7) }).await;
         assert_eq!(ok.unwrap(), 7);
-        let err: PortResult<i32> = uow.transaction(|| async { Err("boom".into()) }).await;
+        let err: PortResult<i32> = uow
+            .transaction(Scope::Global, || async { Err("boom".into()) })
+            .await;
         assert!(err.is_err());
         assert_eq!(
             uow.outcomes(),
             [TxOutcome::Committed, TxOutcome::RolledBack]
         );
+    }
+
+    #[tokio::test]
+    async fn the_scope_each_transaction_runs_under_is_recorded() {
+        // SG1 P0-2: `transaction` takes the tenant scope as a required argument, and
+        // the double records it so a handler test can assert its work was bound to
+        // the right tenant (and that an audited-global path is a deliberate choice).
+        let uow = InMemoryUnitOfWork::new();
+        let acme = Scope::tenant("acme").expect("non-empty");
+        let _: PortResult<()> = uow.transaction(acme.clone(), || async { Ok(()) }).await;
+        let _: PortResult<()> = uow.transaction(Scope::Global, || async { Ok(()) }).await;
+        assert_eq!(uow.scopes(), [acme, Scope::Global]);
     }
 
     // The payoff of ADR 0002: a use case tested with the four doubles alone —
@@ -390,7 +415,7 @@ mod tests {
             // The transaction commits iff the body returns Ok (scope-based UoW).
             let id = self
                 .uow
-                .transaction(|| async { Ok(self.ids.new_id()) })
+                .transaction(Scope::Global, || async { Ok(self.ids.new_id()) })
                 .await?;
             // Publish after a successful commit (the relay draining the outbox);
             // the id bytes stand in for a real serialized event.

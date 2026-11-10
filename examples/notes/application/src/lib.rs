@@ -14,7 +14,7 @@ use notes_domain::Note;
 // the layer rule intact; the application maps its domain error to `PortResult`.
 pub use notes_domain::{NoteRepository, RepositoryError};
 use notes_facade::{CreateNote, NoteDto, Notes};
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};
 
 /// The application service. It implements the [`Notes`] facade by running the
 /// use case and mapping the domain entity to the DTO.
@@ -53,7 +53,7 @@ where
         // business change — they commit together or not at all. The relay worker
         // forwards the event to the broker afterwards.
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 self.repository.save(&note).await?;
                 self.events.publish("notes.created", &event).await
             })

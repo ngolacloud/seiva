@@ -593,8 +593,10 @@ where
         let uow = std::sync::Arc::clone(&uow);
         let store = std::sync::Arc::clone(&store);
         async move {
-            uow.transaction(move || async move { store.purge_expired().await })
-                .await
+            uow.transaction(delonix_seiva::ports::Scope::Global, move || async move {
+                store.purge_expired().await
+            })
+            .await
         }
     })
     .await

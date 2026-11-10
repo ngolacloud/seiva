@@ -8,7 +8,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};
 use shop_catalog_domain::Product;
 use shop_catalog_facade::{Catalog, CatalogError, CreateProduct, ProductDto, ProductId};
 
@@ -55,7 +55,7 @@ where
         // run inside it, so with the DORM gateway the event lands in the
         // transactional outbox in the SAME transaction as the business change.
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 self.repository.save_product(&product).await?;
                 self.events.publish("catalog.product_added", &event).await
             })

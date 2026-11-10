@@ -12,7 +12,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};
 use shop_payments_domain::Payment;
 // Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
 // here so `infrastructure` imports it from `application` (never naming `domain`
@@ -74,7 +74,7 @@ where
         // run together, so with the DORM gateway the event lands in the outbox in
         // the SAME transaction as the business change.
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 self.repository.save_payment(&payment).await?;
                 self.events.publish(topic, &event).await
             })

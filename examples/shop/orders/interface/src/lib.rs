@@ -63,7 +63,7 @@ use runtime::{DirectUnitOfWork, NoIdempotency, NoopEventPublisher, SystemIds};
 mod runtime {
     use async_trait::async_trait;
     use seiva_ports::{
-        EventPublisher, Id, IdGenerator, IdempotencyOutcome, IdempotencyStore, PortResult,
+        EventPublisher, Id, IdGenerator, IdempotencyOutcome, IdempotencyStore, PortResult, Scope,
         UnitOfWork,
     };
     use std::future::Future;
@@ -86,6 +86,7 @@ mod runtime {
     impl UnitOfWork for DirectUnitOfWork {
         fn transaction<'a, T, F, Fut>(
             &'a self,
+            _scope: Scope,
             work: F,
         ) -> std::pin::Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
         where
