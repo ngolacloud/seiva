@@ -4,9 +4,7 @@
 //! Depends on `application` + `domain` + `seiva-ports`. In-memory here so the
 //! wiring is provable without a database; the real module is DORM-backed.
 
-use seiva_ports::PortResult;
-use shop_orders_application::OrderRepository;
-use shop_orders_domain::Order;
+use shop_orders_domain::{Order, OrderRepository, RepositoryError};
 use std::sync::Mutex;
 
 /// An in-memory [`OrderRepository`]. Replace with the DORM-backed adapter.
@@ -27,29 +25,29 @@ impl InMemoryOrderRepository {
 }
 
 impl OrderRepository for InMemoryOrderRepository {
-    async fn save_order(&self, order: &Order) -> PortResult<()> {
+    async fn save_order(&self, order: &Order) -> Result<(), RepositoryError> {
         self.orders
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .push(order.clone());
         Ok(())
     }
 
-    async fn get_order(&self, id: u128) -> PortResult<Option<Order>> {
+    async fn get_order(&self, id: u128) -> Result<Option<Order>, RepositoryError> {
         Ok(self
             .orders
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .iter()
             .find(|o| o.id == id)
             .cloned())
     }
 
-    async fn list_orders(&self) -> PortResult<Vec<Order>> {
+    async fn list_orders(&self) -> Result<Vec<Order>, RepositoryError> {
         Ok(self
             .orders
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .clone())
     }
 }

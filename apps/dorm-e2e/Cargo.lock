@@ -22,7 +22,7 @@ name = "accounts-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
- "seiva-http",
+ "seiva-contract",
  "serde",
 ]
 
@@ -1390,6 +1390,23 @@ name = "seiva-config"
 version = "0.1.0"
 
 [[package]]
+name = "seiva-contract"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "seiva-ports",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "seiva-cqrs"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+]
+
+[[package]]
 name = "seiva-data-dorm"
 version = "0.1.0"
 dependencies = [
@@ -1403,15 +1420,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-events"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "seiva-messaging",
+ "seiva-ports",
+]
+
+[[package]]
 name = "seiva-http"
 version = "0.1.0"
 dependencies = [
  "axum",
  "delonix-seiva",
+ "seiva-contract",
+ "seiva-cqrs",
  "seiva-identity",
  "seiva-openapi",
  "seiva-ports",
  "serde",
+ "serde_ignored",
  "serde_json",
  "sha2 0.10.9",
  "tower-http",
@@ -1425,6 +1454,7 @@ dependencies = [
  "jsonwebtoken",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1457,9 +1487,11 @@ dependencies = [
 name = "seiva-outbox-relay"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "delonix-seiva",
  "dorm-core",
  "dorm-outbox",
+ "seiva-events",
  "seiva-messaging",
  "seiva-ports",
  "serde_json",
@@ -1513,6 +1545,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1964,7 +2006,9 @@ dependencies = [
  "bitflags",
  "bytes",
  "http",
+ "http-body",
  "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
 ]

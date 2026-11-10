@@ -4,9 +4,7 @@
 //! Depends on `application` + `domain` + `seiva-ports`. In-memory here so the
 //! wiring is provable without a database; the real module is DORM-backed.
 
-use seiva_ports::PortResult;
-use shop_inventory_application::StockRepository;
-use shop_inventory_domain::StockItem;
+use shop_inventory_domain::{RepositoryError, StockItem, StockRepository};
 use std::sync::Mutex;
 
 /// An in-memory [`StockRepository`]. Replace with the DORM-backed adapter.
@@ -27,18 +25,21 @@ impl InMemoryStockRepository {
 }
 
 impl StockRepository for InMemoryStockRepository {
-    async fn get_stock(&self, product_id: u128) -> PortResult<Option<StockItem>> {
+    async fn get_stock(&self, product_id: u128) -> Result<Option<StockItem>, RepositoryError> {
         Ok(self
             .stock
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .iter()
             .find(|s| s.product_id == product_id)
             .cloned())
     }
 
-    async fn save_stock(&self, stock: &StockItem) -> PortResult<()> {
-        let mut all = self.stock.lock().map_err(|_| "repository lock poisoned")?;
+    async fn save_stock(&self, stock: &StockItem) -> Result<(), RepositoryError> {
+        let mut all = self
+            .stock
+            .lock()
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?;
         match all.iter_mut().find(|s| s.product_id == stock.product_id) {
             Some(existing) => *existing = stock.clone(),
             None => all.push(stock.clone()),

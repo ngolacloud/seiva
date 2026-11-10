@@ -1,8 +1,14 @@
-//! Domain layer of the `inventory` module: the `StockItem` entity and its rules.
+//! Domain layer of the `inventory` module: the `StockItem` entity, its rules AND
+//! the repository port.
 //!
 //! Depends on nothing but `shared/kernel`. The rules — a received or reserved
 //! quantity must be positive, and a reservation can never exceed what is on
-//! hand — live here, not in the application or the database.
+//! hand — live here, not in the application or the database. So does the
+//! REPOSITORY PORT: classic DDD puts the repository interface in the domain (its
+//! ubiquitous language), framed in a domain error, not the framework's (ADR
+//! 0003). The application adapts it.
+
+use std::future::Future;
 
 /// The stock on hand for a single product. Construct it through
 /// [`StockItem::new`]; mutate it only through [`StockItem::receive`] and
@@ -71,6 +77,60 @@ impl std::fmt::Display for DomainError {
 }
 
 impl std::error::Error for DomainError {}
+
+/// A repository operation failed. A DOMAIN-level error: the repository is part of
+/// the domain's language, so it speaks in domain terms, not the framework's. The
+/// application maps it to `seiva_ports::PortResult` at the use-case boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryError(pub String);
+
+impl std::fmt::Display for RepositoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RepositoryError {}
+
+/// Outbound port: persistence of per-product stock, in the domain's language
+/// (classic DDD — the repository interface lives in the domain, ADR 0003).
+/// Implemented in `infrastructure`; the application adapts its [`RepositoryError`]
+/// to the framework's `PortResult`. Each future is `Send` so a use case can
+/// `.await` it inside a `UnitOfWork::transaction` on a multi-threaded runtime.
+pub trait StockRepository {
+    fn get_stock(
+        &self,
+        product_id: u128,
+    ) -> impl Future<Output = Result<Option<StockItem>, RepositoryError>> + Send;
+
+    /// Inserts or replaces the stock record for its product.
+    fn save_stock(
+        &self,
+        stock: &StockItem,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+}
+
+/// A shared [`StockRepository`] is itself a `StockRepository`: delegating through
+/// the `Arc` lets the composition root hold ONE stock state behind an
+/// `Arc<impl StockRepository>` and inject a clone into both the HTTP controller and
+/// an event subscriber, so an `orders.placed` reservation and an
+/// `available` query read and write the very same stock (ADR 0021, Fase 3). It
+/// stays here, next to the port, because the port trait is local to this crate.
+impl<R: StockRepository + Send + Sync> StockRepository for std::sync::Arc<R> {
+    fn get_stock(
+        &self,
+        product_id: u128,
+    ) -> impl Future<Output = Result<Option<StockItem>, RepositoryError>> + Send {
+        (**self).get_stock(product_id)
+    }
+
+    fn save_stock(
+        &self,
+        stock: &StockItem,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send {
+        (**self).save_stock(stock)
+    }
+}
 
 #[cfg(test)]
 mod tests {

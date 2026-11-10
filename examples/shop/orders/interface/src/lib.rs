@@ -346,7 +346,7 @@ mod tests {
     use seiva_http::{IdempotencyKey, Principal, PROBLEM_JSON};
     use seiva_testing::InMemoryIdempotencyStore;
     use serde_json::Value;
-    use shop_orders_domain::Order;
+    use shop_orders_domain::{Order, RepositoryError};
     use shop_orders_facade::LineDto;
     use shop_orders_infrastructure::InMemoryOrderRepository;
     use std::sync::Mutex;
@@ -370,12 +370,12 @@ mod tests {
     }
 
     impl OrderRepository for CountingRepo {
-        async fn save_order(&self, order: &Order) -> PortResult<()> {
+        async fn save_order(&self, order: &Order) -> Result<(), RepositoryError> {
             self.orders.lock().unwrap().push(order.clone());
             Ok(())
         }
 
-        async fn get_order(&self, id: u128) -> PortResult<Option<Order>> {
+        async fn get_order(&self, id: u128) -> Result<Option<Order>, RepositoryError> {
             Ok(self
                 .orders
                 .lock()
@@ -385,7 +385,7 @@ mod tests {
                 .cloned())
         }
 
-        async fn list_orders(&self) -> PortResult<Vec<Order>> {
+        async fn list_orders(&self) -> Result<Vec<Order>, RepositoryError> {
             Ok(self.orders.lock().unwrap().clone())
         }
     }

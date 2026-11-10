@@ -13,46 +13,11 @@
 #![allow(async_fn_in_trait)]
 
 use polls_domain::{Choice, Question};
+pub use polls_domain::{PollRepository, RepositoryError};
 use polls_facade::{
     AddChoice, ChoiceDto, CreateQuestion, GetQuestion, Polls, QuestionDetail, QuestionDto, Vote,
 };
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
-
-/// Outbound port: persistence of questions and choices, in the domain's
-/// language. Implemented in `infrastructure` (over DORM or an external library).
-/// Each future is `Send` so a use case can `.await` it inside a
-/// `UnitOfWork::transaction` on a multi-threaded runtime.
-pub trait PollRepository {
-    fn save_question(
-        &self,
-        question: &Question,
-    ) -> impl std::future::Future<Output = PortResult<()>> + Send;
-
-    fn save_choice(
-        &self,
-        choice: &Choice,
-    ) -> impl std::future::Future<Output = PortResult<()>> + Send;
-
-    fn list_questions(&self)
-        -> impl std::future::Future<Output = PortResult<Vec<Question>>> + Send;
-
-    fn get_question(
-        &self,
-        id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Option<Question>>> + Send;
-
-    fn choices_for(
-        &self,
-        question_id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Vec<Choice>>> + Send;
-
-    /// Records one vote for a choice and returns the updated choice, or `None`
-    /// if no such choice exists.
-    fn record_vote(
-        &self,
-        choice_id: u128,
-    ) -> impl std::future::Future<Output = PortResult<Option<Choice>>> + Send;
-}
 
 /// The application service. It implements the [`Polls`] facade by running each
 /// use case over the ports and mapping the domain entities to DTOs.
@@ -242,21 +207,21 @@ mod tests {
     }
 
     impl PollRepository for FakeRepo {
-        async fn save_question(&self, question: &Question) -> PortResult<()> {
+        async fn save_question(&self, question: &Question) -> Result<(), RepositoryError> {
             self.questions.lock().unwrap().push(question.clone());
             Ok(())
         }
 
-        async fn save_choice(&self, choice: &Choice) -> PortResult<()> {
+        async fn save_choice(&self, choice: &Choice) -> Result<(), RepositoryError> {
             self.choices.lock().unwrap().push(choice.clone());
             Ok(())
         }
 
-        async fn list_questions(&self) -> PortResult<Vec<Question>> {
+        async fn list_questions(&self) -> Result<Vec<Question>, RepositoryError> {
             Ok(self.questions.lock().unwrap().clone())
         }
 
-        async fn get_question(&self, id: u128) -> PortResult<Option<Question>> {
+        async fn get_question(&self, id: u128) -> Result<Option<Question>, RepositoryError> {
             Ok(self
                 .questions
                 .lock()
@@ -266,7 +231,7 @@ mod tests {
                 .cloned())
         }
 
-        async fn choices_for(&self, question_id: u128) -> PortResult<Vec<Choice>> {
+        async fn choices_for(&self, question_id: u128) -> Result<Vec<Choice>, RepositoryError> {
             Ok(self
                 .choices
                 .lock()
@@ -277,7 +242,7 @@ mod tests {
                 .collect())
         }
 
-        async fn record_vote(&self, choice_id: u128) -> PortResult<Option<Choice>> {
+        async fn record_vote(&self, choice_id: u128) -> Result<Option<Choice>, RepositoryError> {
             let mut choices = self.choices.lock().unwrap();
             match choices.iter_mut().find(|c| c.id == choice_id) {
                 Some(choice) => {

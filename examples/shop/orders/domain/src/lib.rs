@@ -3,7 +3,11 @@
 //!
 //! Depends on nothing but `shared/kernel`. The rule — an order must have at
 //! least one line and every line a positive quantity — lives here, not in the
-//! application or the database.
+//! application or the database. The REPOSITORY PORT lives here too: classic DDD
+//! puts the repository interface in the domain (its ubiquitous language), framed
+//! in a domain error, not the framework's (ADR 0003). The application adapts it.
+
+use std::future::Future;
 
 /// One line of an order: a quantity of a single product.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +68,37 @@ impl std::fmt::Display for DomainError {
 }
 
 impl std::error::Error for DomainError {}
+
+/// A repository operation failed. A DOMAIN-level error: the repository is part of
+/// the domain's language, so it speaks in domain terms, not the framework's. The
+/// application maps it to `seiva_ports::PortResult` at the use-case boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryError(pub String);
+
+impl std::fmt::Display for RepositoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RepositoryError {}
+
+/// Outbound port: persistence of orders, in the domain's language (classic DDD —
+/// the repository interface lives in the domain, ADR 0003). Implemented in
+/// `infrastructure`; the application adapts its [`RepositoryError`] to the
+/// framework's `PortResult`. Each future is `Send` so a use case can `.await` it
+/// inside a `UnitOfWork::transaction` on a multi-threaded runtime.
+pub trait OrderRepository {
+    fn save_order(&self, order: &Order)
+        -> impl Future<Output = Result<(), RepositoryError>> + Send;
+
+    fn get_order(
+        &self,
+        id: u128,
+    ) -> impl Future<Output = Result<Option<Order>, RepositoryError>> + Send;
+
+    fn list_orders(&self) -> impl Future<Output = Result<Vec<Order>, RepositoryError>> + Send;
+}
 
 #[cfg(test)]
 mod tests {

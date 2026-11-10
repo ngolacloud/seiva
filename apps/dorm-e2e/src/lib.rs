@@ -45,14 +45,13 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use accounts_application::{AccountsService, CredentialRepository};
+use accounts_application::{AccountsService, CredentialRepository, RepositoryError};
 use accounts_domain::User;
 use delonix_seiva::worker::{WorkerConfig, WorkerReport};
 use dorm_core::value::Value;
 use dorm_outbox::RelayConfig;
 use seiva_data_dorm::{connect, DormConfig, DormOutboxPublisher, DormUnitOfWork, UuidIdGenerator};
 use seiva_messaging::{CloudEvent, Publisher};
-use seiva_ports::{BoxError, PortResult};
 use seiva_server::{serve, ServeError, ServerConfig};
 use std::sync::Mutex;
 
@@ -159,12 +158,14 @@ pub fn users_table_ddl() -> String {
 /// The SQL is written and type-checked here, but running it needs the
 /// [`users_table_ddl`] table and a reachable Postgres under a session; that is the
 /// dedicated live integration test, not this offline proof. With no reachable
-/// database the call returns an error, which the caller (a use case inside a
-/// transaction, or the relay worker) surfaces as a boundary [`BoxError`].
+/// database the call returns a domain `RepositoryError`, which the application maps
+/// to the framework boundary error (`PortResult`) inside the use case's transaction.
 pub struct DormCredentialRepository;
 
 impl CredentialRepository for DormCredentialRepository {
-    async fn save(&self, user: &User) -> PortResult<()> {
+    // The repository port is the domain's (classic DDD, ADR 0003), so it speaks the
+    // domain's `RepositoryError`; the application maps it to `PortResult`.
+    async fn save(&self, user: &User) -> Result<(), RepositoryError> {
         dorm_core::db::run(
             &format!("INSERT INTO {USERS_TABLE} (id, username, password_hash) VALUES ($1, $2, $3)"),
             &[
@@ -175,28 +176,32 @@ impl CredentialRepository for DormCredentialRepository {
         )
         .await
         .map(|_| ())
-        .map_err(|e| Box::new(e) as BoxError)
+        .map_err(|e| RepositoryError(e.to_string()))
     }
 
-    async fn find_by_username(&self, username: &str) -> PortResult<Option<User>> {
+    async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepositoryError> {
         let rows = dorm_core::db::fetch(
             &format!("SELECT id, username, password_hash FROM {USERS_TABLE} WHERE username = $1"),
             &[Value::Text(username.to_string())],
         )
         .await
-        .map_err(|e| Box::new(e) as BoxError)?;
+        .map_err(|e| RepositoryError(e.to_string()))?;
 
         match rows.first() {
             None => Ok(None),
             Some(row) => {
-                let id_text: String = row.try_get(0).map_err(|e| Box::new(e) as BoxError)?;
-                let username: String = row.try_get(1).map_err(|e| Box::new(e) as BoxError)?;
-                let password_hash: String = row.try_get(2).map_err(|e| Box::new(e) as BoxError)?;
-                let id: u128 = id_text.parse().map_err(|e| Box::new(e) as BoxError)?;
+                let id_text: String = row.try_get(0).map_err(|e| RepositoryError(e.to_string()))?;
+                let username: String =
+                    row.try_get(1).map_err(|e| RepositoryError(e.to_string()))?;
+                let password_hash: String =
+                    row.try_get(2).map_err(|e| RepositoryError(e.to_string()))?;
+                let id: u128 = id_text
+                    .parse::<u128>()
+                    .map_err(|e| RepositoryError(e.to_string()))?;
                 // Reconstruct through the domain constructor so the invariants are
                 // re-checked on the way out of the database.
-                let user =
-                    User::new(id, username, password_hash).map_err(|e| Box::new(e) as BoxError)?;
+                let user = User::new(id, username, password_hash)
+                    .map_err(|e| RepositoryError(e.to_string()))?;
                 Ok(Some(user))
             }
         }

@@ -4,9 +4,7 @@
 //! Depends on `application` + `domain` + `seiva-ports`. In-memory here so the
 //! wiring is provable without a database; the real module is DORM-backed.
 
-use seiva_ports::PortResult;
-use shop_payments_application::PaymentRepository;
-use shop_payments_domain::Payment;
+use shop_payments_domain::{Payment, PaymentRepository, RepositoryError};
 use std::sync::Mutex;
 
 /// An in-memory [`PaymentRepository`]. Replace with the DORM-backed adapter.
@@ -27,19 +25,19 @@ impl InMemoryPaymentRepository {
 }
 
 impl PaymentRepository for InMemoryPaymentRepository {
-    async fn save_payment(&self, payment: &Payment) -> PortResult<()> {
+    async fn save_payment(&self, payment: &Payment) -> Result<(), RepositoryError> {
         self.payments
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .push(payment.clone());
         Ok(())
     }
 
-    async fn get_payment(&self, id: u128) -> PortResult<Option<Payment>> {
+    async fn get_payment(&self, id: u128) -> Result<Option<Payment>, RepositoryError> {
         Ok(self
             .payments
             .lock()
-            .map_err(|_| "repository lock poisoned")?
+            .map_err(|_| RepositoryError("repository lock poisoned".to_owned()))?
             .iter()
             .find(|p| p.id == id)
             .cloned())

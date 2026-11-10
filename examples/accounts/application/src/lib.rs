@@ -13,6 +13,10 @@
 #![allow(async_fn_in_trait)]
 
 use accounts_domain::User;
+// Re-export the repository port from the domain (classic DDD — the interface
+// lives in the domain, ADR 0003), so `infrastructure` and `interface` can keep
+// importing it from the application.
+pub use accounts_domain::{CredentialRepository, RepositoryError};
 use accounts_facade::{Accounts, CreateUser, GetUser, UserDto, UserError};
 use seiva_auth::hash_password;
 use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
@@ -39,23 +43,6 @@ impl std::fmt::Display for AccountsError {
 }
 
 impl std::error::Error for AccountsError {}
-
-/// Outbound port: persistence of user credentials, in the domain's language.
-/// Implemented in `infrastructure` (over DORM or an external library; the
-/// example ships an in-memory adapter). The futures are `Send` so a use case
-/// can `.await` them inside a [`UnitOfWork::transaction`], which runs on a
-/// multi-threaded runtime.
-pub trait CredentialRepository {
-    /// Persists a user. The stored `password_hash` is a PHC string; the
-    /// plaintext password never reaches this port.
-    fn save(&self, user: &User) -> impl std::future::Future<Output = PortResult<()>> + Send;
-
-    /// Finds a user by exact username, or `None` when none exists.
-    fn find_by_username(
-        &self,
-        username: &str,
-    ) -> impl std::future::Future<Output = PortResult<Option<User>>> + Send;
-}
 
 /// The application service. It implements the [`Accounts`] facade by running the
 /// use cases and mapping the domain entity to the secret-free DTO.
@@ -187,7 +174,7 @@ mod tests {
     }
 
     impl CredentialRepository for FakeRepo {
-        async fn save(&self, user: &User) -> PortResult<()> {
+        async fn save(&self, user: &User) -> Result<(), RepositoryError> {
             self.users
                 .lock()
                 .unwrap()
@@ -195,7 +182,7 @@ mod tests {
             Ok(())
         }
 
-        async fn find_by_username(&self, username: &str) -> PortResult<Option<User>> {
+        async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepositoryError> {
             Ok(self.users.lock().unwrap().get(username).cloned())
         }
     }
