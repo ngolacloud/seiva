@@ -396,9 +396,23 @@ pub mod status {
     }
 
     /// Builds the [`Status`] a generated gRPC service returns for a facade error:
-    /// the [`Code`] from [`facade_error_code`] and the original message.
+    /// the [`Code`] from [`facade_error_code`] and the message.
+    ///
+    /// **Fail-closed on an internal error (V2 / ADR 0019).** A
+    /// [`Code::Internal`] is the opaque default for an error the mapping does not
+    /// recognise — its message may carry internal detail (a database string, a
+    /// path). So, exactly like HTTP's `From<BoxError> for Problem`, the real text
+    /// is logged server-side and the client receives an opaque message, unless
+    /// `SEIVA_EXPOSE_ERROR_DETAILS` is set (development only; the production config
+    /// guard rejects it). A classified (non-`Internal`) code keeps its message: it
+    /// is the facade's own contract error, the gRPC twin of a `4xx` problem detail.
     pub fn status_from_facade_error(message: &str) -> Status {
-        Status::new(facade_error_code(message), message.to_string())
+        let code = facade_error_code(message);
+        if code == Code::Internal && !seiva_contract::expose_error_details() {
+            tracing::error!(error = %message, "internal error mapped to gRPC Internal");
+            return Status::new(code, "an internal error occurred");
+        }
+        Status::new(code, message.to_string())
     }
 
     /// Recovers the facade error message carried by a [`Status`] — the inverse of
@@ -535,5 +549,24 @@ mod tests {
         let status = status_from_facade_error("note not found");
         assert_eq!(status.code(), Code::NotFound);
         assert_eq!(status.message(), "note not found");
+    }
+
+    #[cfg(feature = "tonic")]
+    #[test]
+    fn an_internal_error_is_opaque_to_the_client() {
+        use super::status::status_from_facade_error;
+        use tonic::Code;
+
+        // An unrecognised (Internal) error must NOT send its message to the client
+        // — parity with HTTP's opaque 500 (V2 / ADR 0019), fail-closed by default
+        // (`SEIVA_EXPOSE_ERROR_DETAILS` is off unless a dev sets it). A classified
+        // code keeps its message (covered above); only Internal is opaqued.
+        let status = status_from_facade_error("db error: relation \"secret\" does not exist");
+        assert_eq!(status.code(), Code::Internal);
+        assert_eq!(status.message(), "an internal error occurred");
+        assert!(
+            !status.message().contains("secret"),
+            "no internal detail may leak across the gRPC boundary"
+        );
     }
 }
