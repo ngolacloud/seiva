@@ -48,12 +48,19 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use delonix_seiva::worker::run_worker;
 use seiva_messaging::CloudEvent;
 use seiva_ports::{inbox_key, IdempotencyOutcome, IdempotencyStore, PortResult};
+
+// The worker runtime (interval loop + graceful shutdown + metrics) is the
+// framework's; this crate only supplies the per-pass job. Re-exported so a caller
+// configures the in-process dispatch worker without reaching for `delonix_seiva`.
+pub use delonix_seiva::worker::{WorkerConfig, WorkerReport};
 
 // The in-memory outbox double needs interior mutability behind the shared `Arc`;
 // gated so a `--no-default-features` build (no `testing`) imports nothing unused.
@@ -326,6 +333,48 @@ where
         dispatched += 1;
     }
     Ok(dispatched)
+}
+
+/// Run [`drain_in_process`] in a loop until `shutdown` resolves — the in-process
+/// twin of `seiva_outbox_relay::run_relay_worker`, sharing the framework's worker
+/// runtime ([`run_worker`]): an interval between passes, a `drain_threshold` to run
+/// straight on while clearing a backlog, graceful drain-and-exit on shutdown, and a
+/// [`WorkerReport`] of passes/processed/errors. A failing pass is logged and counted
+/// but **never fatal** — the worker outlives a transient outbox or store error.
+///
+/// This is how a monolith makes the choreography progress on its own: a use case
+/// that publishes `orders.placed` into the outbox need not call [`drain_in_process`]
+/// by hand — this worker drains the outbox continuously, so a registered subscriber
+/// reacts with no further wiring. Swapping it for `run_relay_worker` (same shape,
+/// same subscriber) is exactly the `module split` from monolith to microservice:
+/// only the dispatcher changes, not the subscriber and not the guarantees.
+pub async fn run_in_process_dispatch_worker<R, S, Sig>(
+    config: WorkerConfig,
+    shutdown: Sig,
+    reader: R,
+    registry: SubscriberRegistry,
+    inbox: S,
+) -> WorkerReport
+where
+    R: OutboxReader + Sync,
+    S: IdempotencyStore,
+    Sig: Future<Output = ()>,
+{
+    let reader = Arc::new(reader);
+    let inbox = Arc::new(inbox);
+    let registry = Arc::new(registry);
+    run_worker(config, shutdown, move || {
+        // Each pass owns its clones, so the future borrows only its own locals and
+        // stays `Send` across `.await` — the same shape as the relay worker.
+        let reader = Arc::clone(&reader);
+        let inbox = Arc::clone(&inbox);
+        let registry = Arc::clone(&registry);
+        async move {
+            let dispatched = drain_in_process(&*reader, &registry, &*inbox).await?;
+            Ok(dispatched as u64)
+        }
+    })
+    .await
 }
 
 /// An in-memory [`OutboxReader`] double (behind the `testing` feature): an
@@ -658,5 +707,51 @@ mod tests {
         );
         assert_eq!(batch[0].event.source, "/shop/orders");
         assert_eq!(batch[0].event.data["id"], "7");
+    }
+
+    #[tokio::test]
+    async fn the_worker_drains_the_outbox_and_stops_on_shutdown() {
+        // Three events sit in the outbox; the worker must drain and dispatch them
+        // all, then exit when shutdown fires — proving a monolith progresses the
+        // choreography on its own, with no manual `drain_in_process` call.
+        let outbox = InMemoryOutbox::new();
+        for i in 1..=3 {
+            outbox.publish(event("orders.placed", &format!("evt-{i}")));
+        }
+
+        let inventory = CountingSubscriber::new("inventory");
+        let probe = inventory.clone(); // shares the same run counter (an `Arc`)
+        let result = inventory.clone();
+        let mut registry = SubscriberRegistry::new();
+        registry.register("orders.placed", Arc::new(inventory));
+
+        // Stop once every event has been reserved. The worker drains all three in
+        // its first pass, so by the time this future is polled (after that pass)
+        // the count is already three and the loop exits on the next shutdown check.
+        let shutdown = async move {
+            while probe.runs() < 3 {
+                tokio::task::yield_now().await;
+            }
+        };
+
+        let report = run_in_process_dispatch_worker(
+            WorkerConfig::new("test-in-process-dispatch", Duration::ZERO),
+            shutdown,
+            outbox,
+            registry,
+            InMemoryIdempotencyStore::new(),
+        )
+        .await;
+
+        assert_eq!(
+            result.runs(),
+            3,
+            "the worker drained and dispatched all three events"
+        );
+        assert_eq!(
+            report.processed, 3,
+            "the report accounts for three processed items"
+        );
+        assert!(report.passes >= 1, "at least one pass ran");
     }
 }

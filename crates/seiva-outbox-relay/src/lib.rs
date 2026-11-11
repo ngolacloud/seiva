@@ -253,7 +253,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use seiva_events::{drain_in_process, EventSubscriber, SubscriberRegistry};
+    use seiva_events::{
+        drain_in_process, run_in_process_dispatch_worker, EventSubscriber, SubscriberRegistry,
+        WorkerConfig,
+    };
     use seiva_testing::InMemoryIdempotencyStore;
 
     /// A test subscriber that "reserves stock" by counting its runs.
@@ -334,6 +337,87 @@ mod tests {
                 runs.load(Ordering::SeqCst),
                 1,
                 "still exactly one reservation"
+            );
+        })
+        .await;
+    }
+
+    /// The in-process **worker** (`run_in_process_dispatch_worker`) drains the real
+    /// DORM outbox in a loop and stops on shutdown — proving a monolith progresses
+    /// the choreography on its own, not just a single hand-driven `drain_in_process`
+    /// pass. Uses a dedicated topic so the `(consumer, topic)` cursor is isolated
+    /// from the other live test on a shared database. Gated on `SEIVA_DORM_TEST_DSN`.
+    #[tokio::test]
+    async fn live_in_process_worker_drains_the_dorm_outbox() {
+        let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+            eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the live worker proof");
+            return;
+        };
+        let db = Arc::new(
+            dorm_core::db::Database::connect(&dsn, None, false)
+                .expect("connect to the test database"),
+        );
+        dorm_core::db::with_session(db, async move {
+            for ddl in dorm_outbox::migrations() {
+                dorm_core::db::run_ddl(&ddl)
+                    .await
+                    .expect("outbox migrations apply");
+            }
+
+            // A topic dedicated to this test isolates its cursor and its rows from
+            // the single-pass live test above (same table, same database).
+            let topic = "orders.worker.placed";
+            let consumer = "inventory-worker";
+
+            // Two orders published transactionally into the real outbox.
+            for id in ["w-order-1", "w-order-2"] {
+                let event = CloudEvent::new(
+                    id,
+                    "/shop/orders",
+                    topic,
+                    serde_json::json!({ "order_id": id }),
+                );
+                db::atomic(move |_tx| async move {
+                    dorm_outbox::publish(topic, &event.to_json()).await?;
+                    Ok(())
+                })
+                .await
+                .expect("publish into the outbox");
+            }
+
+            let reader = DormOutboxReader::new(consumer, topic);
+            let runs = Arc::new(AtomicUsize::new(0));
+            let mut registry = SubscriberRegistry::new();
+            registry.register(topic, Arc::new(Counting(runs.clone())));
+            let inbox = InMemoryIdempotencyStore::new();
+
+            // Stop once both freshly-published orders have been reserved: the worker
+            // drains them in its first pass, so this is already satisfied when the
+            // shutdown is first polled, and the loop exits cleanly.
+            let probe = runs.clone();
+            let shutdown = async move {
+                while probe.load(Ordering::SeqCst) < 2 {
+                    tokio::task::yield_now().await;
+                }
+            };
+
+            let report = run_in_process_dispatch_worker(
+                WorkerConfig::new("live-in-process-dispatch", std::time::Duration::ZERO),
+                shutdown,
+                reader,
+                registry,
+                inbox,
+            )
+            .await;
+
+            assert!(
+                report.processed >= 2,
+                "the worker drained at least the two published orders"
+            );
+            assert_eq!(
+                runs.load(Ordering::SeqCst),
+                2,
+                "both orders were reserved exactly once"
             );
         })
         .await;

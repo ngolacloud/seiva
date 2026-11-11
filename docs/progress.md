@@ -57,8 +57,14 @@ Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`
     (`build_app() -> BuiltApp`) + binário. Prova e2e `tests/choreography_e2e.rs`:
     POST order → `drain_in_process` → stock 10→7; `redeliver`+drain mantém 7 (dedup
     de inbox). 137 grupos de teste `ok`.
-  - **F2b (por fazer):** prova **live** sobre PostgreSQL/DORM (`DormOutboxReader`,
-    gated em `SEIVA_DORM_TEST_DSN`); worker/loop de fundo sobre `drain_in_process`.
+  - **F2b (FEITA)** — prova **live** sobre PostgreSQL 17.11 real
+    (`live_drain_in_process_over_the_dorm_outbox` passa) + **worker de fundo**
+    `run_in_process_dispatch_worker` em `seiva-events` (reusa o `run_worker` do
+    framework: intervalo+shutdown gracioso+`WorkerReport`; gémeo do
+    `run_relay_worker`, só muda o despachante). Provado offline
+    (`the_worker_drains_the_outbox_and_stops_on_shutdown`) e **live**
+    (`live_in_process_worker_drains_the_dorm_outbox`, topic dedicado p/ isolar o
+    cursor). Fecha o 0021 por completo.
 
 ## Estado (2026-11-07) — ids no fio como strings (ADR 0018)
 
