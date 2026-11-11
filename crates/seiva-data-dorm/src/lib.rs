@@ -522,14 +522,18 @@ mod tests {
 
         // Row 2 is gone (DELETE affects 0 rows); row 1 (committed) is untouched.
         let deleted = uow
-            .transaction(Scope::Global, || async { exec("DELETE FROM seiva_rt WHERE id = 2").await })
+            .transaction(Scope::Global, || async {
+                exec("DELETE FROM seiva_rt WHERE id = 2").await
+            })
             .await
             .expect("verification transaction succeeds");
         assert_eq!(deleted, 0, "the rolled-back row must not have persisted");
 
-        uow.transaction(Scope::Global, || async { exec("DROP TABLE seiva_rt").await })
-            .await
-            .expect("cleanup succeeds");
+        uow.transaction(Scope::Global, || async {
+            exec("DROP TABLE seiva_rt").await
+        })
+        .await
+        .expect("cleanup succeeds");
     }
 
     /// Live proof that a *typed* boundary error returned from inside a transaction
@@ -602,14 +606,18 @@ mod tests {
 
         // And the write rolled back with it: the row is not there (DELETE affects 0).
         let remaining = uow
-            .transaction(Scope::Global, || async { exec("DELETE FROM seiva_err_rt WHERE id = 1").await })
+            .transaction(Scope::Global, || async {
+                exec("DELETE FROM seiva_err_rt WHERE id = 1").await
+            })
             .await
             .expect("verification transaction succeeds");
         assert_eq!(remaining, 0, "the insert rolled back with the typed error");
 
-        uow.transaction(Scope::Global, || async { exec("DROP TABLE seiva_err_rt").await })
-            .await
-            .expect("cleanup succeeds");
+        uow.transaction(Scope::Global, || async {
+            exec("DROP TABLE seiva_err_rt").await
+        })
+        .await
+        .expect("cleanup succeeds");
     }
 
     #[test]
@@ -903,7 +911,9 @@ mod tests {
         .await
         .expect("claim succeeds");
         let purged = uow
-            .transaction(Scope::Global, || async { DormIdempotencyStore.purge_expired().await })
+            .transaction(Scope::Global, || async {
+                DormIdempotencyStore.purge_expired().await
+            })
             .await
             .expect("purge succeeds");
         assert!(
