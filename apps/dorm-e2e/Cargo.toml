@@ -63,3 +63,7 @@ seiva-auth = { path = "../../crates/seiva-auth" }
 # The accounts module's public DTO, used to prove the value crossing the boundary
 # carries no plaintext credential (it structurally has only id + username).
 accounts-facade = { path = "../../examples/accounts/facade" }
+# The request context (`Ctx`) + `Principal` the live test builds to drive the use
+# case under a tenant, exactly as the HTTP transport would (SG1 P0-2c). `Ctx`/
+# `Principal` are re-exported here from `seiva-identity`.
+seiva-http = { path = "../../crates/seiva-http" }

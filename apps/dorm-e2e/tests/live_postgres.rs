@@ -47,7 +47,7 @@ use std::time::{Duration, SystemTime};
 
 use accounts_application::CredentialRepository;
 use accounts_domain::User;
-use accounts_facade::{Accounts, CreateUser, UserDto};
+use accounts_facade::{CreateUser, UserDto};
 use dorm_core::db::{self, with_session};
 use dorm_core::value::Value;
 use dorm_e2e::{
@@ -55,9 +55,10 @@ use dorm_e2e::{
     RelaySettings, USERS_TABLE,
 };
 use seiva_auth::{hash_password, verify_password};
-use seiva_data_dorm::{connect, DormConfig, UuidIdGenerator};
+use seiva_data_dorm::{connect, scoped_session, DormConfig, UuidIdGenerator};
+use seiva_http::{Ctx, Principal};
 use seiva_messaging::{CloudEvent, Publisher};
-use seiva_ports::IdGenerator;
+use seiva_ports::{IdGenerator, Scope};
 
 /// The environment variable that gates the live tests. When unset or empty the
 /// tests skip; when set to a reachable DSN they run against it.
@@ -350,10 +351,14 @@ async fn outbox_relay_forwards_a_published_event_against_real_postgres() {
 }
 
 /// The headline end-to-end proof: drive the REAL `Accounts::create_user` against
-/// live Postgres. The use case hashes the password, persists the user AND writes
-/// the `accounts.user_created` event to the transactional outbox in ONE
-/// transaction (its `DormUnitOfWork` opens its own session); a single relay pass
-/// then forwards that event. This exercises the whole module use case — not the
+/// live Postgres UNDER A TENANT (SG1 P0-2c). A `Ctx` in tenant "acme" supplies the
+/// scope (server-side, as the HTTP transport would); the use case hashes the
+/// password, persists the user under tenant "acme" AND writes the
+/// `accounts.user_created` event to the transactional outbox in ONE transaction
+/// (its `DormUnitOfWork` opens its own session); a single relay pass then forwards
+/// that event. The read-back is tenant-scoped (no `with_system_scope`), and a
+/// second create under tenant "globex" with the SAME username proves the two
+/// coexist, isolated. This exercises the whole module use case — not the
 /// repository by hand — and only works now that the use case publishes a JSON
 /// event payload (the DORM outbox publisher parses the bytes as JSON).
 ///
@@ -397,30 +402,41 @@ async fn create_user_use_case_persists_and_outboxes_against_real_postgres() {
     let username = format!("uc-user-{suffix}");
     let password = "correct horse battery staple";
 
-    // 2. Drive the REAL use case. Its `DormUnitOfWork` opens its own session and
+    // 2. Drive the REAL use case under a TENANT (SG1 P0-2c). The request context
+    //    is a `Ctx` carrying a `Principal` in tenant "acme" — exactly what the HTTP
+    //    transport injects; the tenant `Scope` is derived from it server-side (never
+    //    from the body), precisely as the interface's `scope_of` does. The use case
+    //    now takes that `Scope` and binds every statement to it, so its write lands
+    //    under tenant "acme". Its `DormUnitOfWork` opens its own session and
     //    transaction, so this runs outside any session we hold.
+    let acme_ctx = Ctx::new(Principal::in_tenant("clerk", "acme", ["accounts.create"]));
+    let acme_scope = Scope::tenant(acme_ctx.tenant().expect("the ctx carries a tenant"))
+        .expect("a non-empty tenant");
     let service = accounts_service(connect(&cfg).expect("the service handle builds"));
     let dto = service
-        .create_user(CreateUser {
-            username: username.clone(),
-            password: password.to_string(),
-        })
+        .create_user(
+            acme_scope.clone(),
+            CreateUser {
+                username: username.clone(),
+                password: password.to_string(),
+            },
+        )
         .await
         .expect("create_user succeeds end to end against live DORM");
     assert_eq!(dto.username, username);
 
-    // 3. The user was persisted by the use case and its credential verifies.
-    //    The accounts use case runs under `Scope::Global` (SG1 P0-2b: its facade
-    //    does not yet carry a tenant — that is P0-2c), so its write went in under
-    //    the audited system scope; the read-back must use the same system scope to
-    //    see it (a tenant-scoped read requires *a* scope — none in scope is refused).
-    let found = with_session(
-        db.clone(),
-        db::with_system_scope(async { DormCredentialRepository.find_by_username(&username).await }),
-    )
+    // 3. The user was persisted UNDER TENANT "acme" and its credential verifies.
+    //    The read-back runs under the SAME tenant scope (no `with_system_scope`):
+    //    because the write landed with tenant="acme" (not empty), a tenant-scoped
+    //    read under "acme" resolves it — if the row had gone in unscoped/global it
+    //    would NOT match the `tenant = 'acme'` predicate the scope injects. So this
+    //    read succeeding is itself the proof the row's tenant is "acme".
+    let found = scoped_session(acme_scope.clone(), db.clone(), async {
+        DormCredentialRepository.find_by_username(&username).await
+    })
     .await
     .expect("the read-back query runs")
-    .expect("the use case persisted the user");
+    .expect("the use case persisted the user under tenant \"acme\"");
     assert!(
         verify_password(password, &found.password_hash).expect("the PHC string parses"),
         "the hash the use case stored verifies the password"
@@ -451,6 +467,51 @@ async fn create_user_use_case_persists_and_outboxes_against_real_postgres() {
     assert!(
         sent[0].to_json().to_string().contains(&username),
         "the forwarded event carries the created user's public identity"
+    );
+
+    // 4b. COEXISTENCE (SG1 P0-2c): the SAME use case, driven under a DIFFERENT
+    //     tenant ("globex") with the SAME username, creates a SEPARATE row — it
+    //     does not collide with acme's. Run AFTER the relay pass above so this
+    //     second event does not perturb the "exactly one forwarded" assertion; its
+    //     outbox row is removed by the topic-scoped cleanup below.
+    let globex_ctx = Ctx::new(Principal::in_tenant("other", "globex", ["accounts.create"]));
+    let globex_scope = Scope::tenant(globex_ctx.tenant().expect("the ctx carries a tenant"))
+        .expect("a non-empty tenant");
+    let globex_dto = service
+        .create_user(
+            globex_scope.clone(),
+            CreateUser {
+                username: username.clone(),
+                password: password.to_string(),
+            },
+        )
+        .await
+        .expect("the same username creates cleanly under a second tenant");
+    assert_eq!(globex_dto.username, username);
+
+    // Each tenant's scoped read resolves to ITS OWN row: the same username is a
+    // different account per tenant (unique on (tenant, username), never username
+    // alone). Both reads are tenant-scoped — no `with_system_scope` anywhere.
+    let from_acme = scoped_session(acme_scope.clone(), db.clone(), async {
+        DormCredentialRepository.find_by_username(&username).await
+    })
+    .await
+    .expect("the acme read runs")
+    .expect("acme still has its user");
+    let from_globex = scoped_session(globex_scope.clone(), db.clone(), async {
+        DormCredentialRepository.find_by_username(&username).await
+    })
+    .await
+    .expect("the globex read runs")
+    .expect("globex has its own user");
+    assert_ne!(
+        from_acme.id, from_globex.id,
+        "the same username is a DIFFERENT row per tenant — the two coexist, isolated"
+    );
+    assert_eq!(from_acme.id, dto.id, "acme's scoped read sees acme's user");
+    assert_eq!(
+        from_globex.id, globex_dto.id,
+        "globex's scoped read sees globex's user"
     );
 
     // 5. Clean up: the user row and the outbox/cursor rows for the fixed topic.

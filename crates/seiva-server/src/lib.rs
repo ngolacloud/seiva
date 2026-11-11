@@ -818,10 +818,11 @@ mod tests {
     // --- accounts module: the merged app serves the real use case ----------
 
     /// The merged application serves the `accounts` create route: an anonymous
-    /// caller is denied with an RFC 9457 `403`, and a caller holding
+    /// caller is denied with an RFC 9457 `403`, and a tenanted caller holding
     /// `accounts.create` with a valid body succeeds (`200`, the generic write
-    /// branch) with a secret-free user. This proves `serve` mounts the real
-    /// module, not just the demo.
+    /// branch) with a secret-free user. The caller carries a tenant so the
+    /// use case can derive its `Scope` (SG1 fail-closed). This proves `serve`
+    /// mounts the real module, not just the demo.
     #[tokio::test]
     async fn merged_app_serves_the_accounts_create_route() {
         let app = application(Health::starting());
@@ -848,7 +849,11 @@ mod tests {
                     .method("POST")
                     .uri("/v1/accounts/create_user")
                     .header("content-type", "application/json")
-                    .extension(seiva_http::Principal::new("user", ["accounts.create"]))
+                    .extension(seiva_http::Principal::in_tenant(
+                        "user",
+                        "acme",
+                        ["accounts.create"],
+                    ))
                     .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
                     .unwrap(),
             )

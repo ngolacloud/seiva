@@ -51,6 +51,8 @@ use delonix_seiva::{controller, register_admin};
 
 use accounts_application::{AccountsService, CredentialRepository};
 use accounts_facade::{Accounts, AccountsFacade, CreateUser, GetUser, UserDto, UserError};
+use seiva_http::Ctx;
+use seiva_ports::{EventPublisher, IdGenerator, Scope, UnitOfWork};
 
 // Make `accounts` visible to the optional admin console (ADR 0009). This couples
 // the module only to the framework contract (`delonix-seiva`), NOT to the admin
@@ -175,6 +177,17 @@ impl<R: CredentialRepository> AccountsController<R> {
     }
 }
 
+/// Derives the caller's tenant [`Scope`] from the request context, **fail-closed**
+/// (SG1): an untenanted or anonymous caller gets an error, never a global/unscoped
+/// write. The tenant comes from the authenticated `Principal` (server-side), never
+/// from the request body (OWASP API1). Passed to the application so every statement
+/// the use case runs is bound to this tenant by the DORM gateway.
+fn scope_of(ctx: &Ctx) -> Result<Scope, UserError> {
+    ctx.tenant()
+        .and_then(Scope::tenant)
+        .ok_or_else(|| UserError("caller has no tenant".to_owned()))
+}
+
 #[controller]
 impl<R> Accounts for AccountsController<R>
 where
@@ -185,46 +198,65 @@ where
     // handler and is awaited directly — no boxing or `spawn_blocking`. (Argon2id
     // hashing runs inline here; offloading that CPU-bound step is a separate
     // performance concern, not a `Send` requirement.)
-    async fn create_user(&self, cmd: CreateUser) -> Result<UserDto, UserError> {
-        self.0.create_user(cmd).await
+    //
+    // The `&Ctx` is injected by `#[seiva::controller]` (skipped from the wire, ADR
+    // 0006); we derive the tenant `Scope` from it here and hand the application a
+    // `Scope`, keeping it HTTP-free.
+    async fn create_user(&self, ctx: &Ctx, cmd: CreateUser) -> Result<UserDto, UserError> {
+        self.0.create_user(scope_of(ctx)?, cmd).await
     }
 
-    async fn get_user(&self, query: GetUser) -> Result<UserDto, UserError> {
-        self.0.get_user(query).await
+    async fn get_user(&self, ctx: &Ctx, query: GetUser) -> Result<UserDto, UserError> {
+        self.0.get_user(scope_of(ctx)?, query).await
     }
 }
 
-/// Wraps an `Accounts` implementation and exposes a plain-Rust handler surface.
+/// Wraps an [`AccountsService`] and exposes a plain-Rust handler surface.
 ///
 /// Retained for the CLI (`seiva user create`) and the composition test, which
-/// drive the use case without the HTTP transport. It maps the facade's
-/// [`UserError`] to a plain `String` so its callers keep the simple error shape
-/// they had before the facade gained a typed wire error.
-pub struct AccountsApi<S: Accounts> {
-    /// The wrapped service implementing the [`Accounts`] facade.
-    pub service: S,
+/// drive the use case without the HTTP transport. It wraps the service's INHERENT
+/// `create_user`/`get_user` (not the [`Accounts`] facade, which carries the HTTP
+/// `&Ctx`): a caller without a transport passes the tenant [`Scope`] explicitly —
+/// a tenant for a per-tenant call, or [`Scope::Global`] for genuine cross-tenant
+/// admin work. It maps the facade's [`UserError`] to a plain `String` so its
+/// callers keep the simple error shape they had before the facade gained a typed
+/// wire error.
+pub struct AccountsApi<R, G, U, E> {
+    /// The wrapped application service.
+    pub service: AccountsService<R, G, U, E>,
 }
 
-impl<S: Accounts> AccountsApi<S> {
+impl<R, G, U, E> AccountsApi<R, G, U, E>
+where
+    R: CredentialRepository + Sync,
+    G: IdGenerator,
+    U: UnitOfWork,
+    E: EventPublisher,
+{
     /// Wraps the given service.
-    pub fn new(service: S) -> Self {
+    pub fn new(service: AccountsService<R, G, U, E>) -> Self {
         Self { service }
     }
 
-    /// Creates a user, returning the public [`UserDto`] or the module's error
-    /// message.
-    pub async fn create_user(&self, username: String, password: String) -> Result<UserDto, String> {
+    /// Creates a user under `scope` (the caller's tenant), returning the public
+    /// [`UserDto`] or the module's error message.
+    pub async fn create_user(
+        &self,
+        scope: Scope,
+        username: String,
+        password: String,
+    ) -> Result<UserDto, String> {
         self.service
-            .create_user(CreateUser { username, password })
+            .create_user(scope, CreateUser { username, password })
             .await
             .map_err(|err| err.0)
     }
 
-    /// Looks a user up by username, returning the public [`UserDto`] or the
-    /// module's error message.
-    pub async fn get_user(&self, username: String) -> Result<UserDto, String> {
+    /// Looks a user up by username under `scope`, returning the public [`UserDto`]
+    /// or the module's error message.
+    pub async fn get_user(&self, scope: Scope, username: String) -> Result<UserDto, String> {
         self.service
-            .get_user(GetUser { username })
+            .get_user(scope, GetUser { username })
             .await
             .map_err(|err| err.0)
     }
@@ -263,12 +295,10 @@ mod tests {
     /// the `seiva-testing` port doubles — the composition the real `apps/`
     /// composition root performs, proven end to end here.
     fn composed_api() -> AccountsApi<
-        AccountsService<
-            InMemoryCredentialRepository,
-            SequenceIdGenerator,
-            InMemoryUnitOfWork,
-            RecordingEventPublisher,
-        >,
+        InMemoryCredentialRepository,
+        SequenceIdGenerator,
+        InMemoryUnitOfWork,
+        RecordingEventPublisher,
     > {
         AccountsApi::new(AccountsService {
             repository: InMemoryCredentialRepository::new(),
@@ -281,9 +311,10 @@ mod tests {
     #[tokio::test]
     async fn composed_service_creates_and_reads_a_user() {
         let api = composed_api();
+        let scope = Scope::tenant("acme").expect("a non-empty tenant");
 
         let created = api
-            .create_user("alice".into(), "hunter2".into())
+            .create_user(scope.clone(), "alice".into(), "hunter2".into())
             .await
             .unwrap();
         assert_eq!(
@@ -294,7 +325,7 @@ mod tests {
             }
         );
 
-        let fetched = api.get_user("alice".into()).await.unwrap();
+        let fetched = api.get_user(scope, "alice".into()).await.unwrap();
         assert_eq!(fetched, created);
 
         // The persisted credential is a verifiable PHC hash, never the plaintext.
@@ -333,7 +364,7 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/create_user")
             .header("content-type", "application/json")
-            .extension(Principal::new("user", ["accounts.create"]))
+            .extension(Principal::in_tenant("user", "acme", ["accounts.create"]))
             .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
             .unwrap();
 
@@ -356,12 +387,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_route_invalid_body_is_422_problem() {
+    async fn create_route_without_a_tenant_is_rejected_fail_closed() {
+        // The caller is authenticated and holds `accounts.create`, but is
+        // untenanted: `scope_of` refuses to derive a `Scope`, so the write never
+        // runs under a global/unscoped transaction (SG1 fail-closed).
         let request = Request::builder()
             .method("POST")
             .uri("/v1/accounts/create_user")
             .header("content-type", "application/json")
             .extension(Principal::new("user", ["accounts.create"]))
+            .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
+            .unwrap();
+
+        let response = demo_router().oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.headers()["content-type"], PROBLEM_JSON);
+        let body = json_body(response.into_body()).await;
+        assert_eq!(body["status"], 422);
+        assert!(body["detail"].as_str().unwrap().contains("tenant"));
+    }
+
+    #[tokio::test]
+    async fn create_route_invalid_body_is_422_problem() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/accounts/create_user")
+            .header("content-type", "application/json")
+            .extension(Principal::in_tenant("user", "acme", ["accounts.create"]))
             .body(Body::from(r#"{"username":"   ","password":"hunter2"}"#))
             .unwrap();
 
@@ -383,7 +436,7 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/create_user")
             .header("content-type", "application/json")
-            .extension(Principal::new("user", ["accounts.create"]))
+            .extension(Principal::in_tenant("user", "acme", ["accounts.create"]))
             .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
             .unwrap();
         let response = app.clone().oneshot(create).await.unwrap();
@@ -393,7 +446,7 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/get_user")
             .header("content-type", "application/json")
-            .extension(Principal::new("user", ["accounts.read"]))
+            .extension(Principal::in_tenant("user", "acme", ["accounts.read"]))
             .body(Body::from(r#"{"username":"alice"}"#))
             .unwrap();
         let response = app.oneshot(get).await.unwrap();
