@@ -273,26 +273,79 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
         .into();
     }
 
+    // The container's serde attributes that move the wire (`rename_all`,
+    // `default`), parsed once and applied below so the published schema matches
+    // the JSON serde actually emits (ADR 0007 fidelity, SC-1).
+    let container = match parse_container_serde(&input.attrs) {
+        Ok(c) => c,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
     // The body of the generated `schema()`: an `object` for a struct with named
     // fields, or a string-`enum` for a C-like (unit-variant) enum.
     let schema_body = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(named) => {
-                let field_descs = named.named.iter().map(|field| {
-                    let field_name = field.ident.as_ref().expect("named field").to_string();
-                    // An `Option<T>` field is not required and documents `T`'s schema.
-                    let (schema_ty, required) = match option_inner(&field.ty) {
-                        Some(inner) => (inner, false),
-                        None => (field.ty.clone(), true),
+                let mut field_descs = Vec::new();
+                for field in &named.named {
+                    let serde = match parse_field_serde(&field.attrs) {
+                        Ok(s) => s,
+                        Err(e) => return e.to_compile_error().into(),
                     };
-                    quote! {
+                    // `#[serde(skip)]`/`skip_serializing`: the field never appears
+                    // on the wire, so it must not appear in the schema.
+                    if serde.skip {
+                        continue;
+                    }
+                    // `#[serde(flatten)]`: merged into the parent at run time (see
+                    // `object_schema`); its name and `required` are unused.
+                    if serde.flatten {
+                        let schema_ty = field.ty.clone();
+                        field_descs.push(quote! {
+                            ::delonix_seiva::schema::Field {
+                                name: "",
+                                schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
+                                required: false,
+                                flatten: true,
+                            }
+                        });
+                        continue;
+                    }
+                    let rust_name = field.ident.as_ref().expect("named field").to_string();
+                    // Wire name: an explicit field `rename` wins; otherwise the
+                    // container's `rename_all` rule, if any; otherwise the Rust name.
+                    let wire_name = match serde.rename {
+                        Some(name) => name,
+                        None => match &container.rename_all {
+                            Some(rule) => match apply_rename_all_field(rule, &rust_name) {
+                                Ok(name) => name,
+                                Err(msg) => {
+                                    return syn::Error::new_spanned(field, msg)
+                                        .to_compile_error()
+                                        .into()
+                                }
+                            },
+                            None => rust_name,
+                        },
+                    };
+                    // An `Option<T>` field documents `T`'s schema and is optional.
+                    let (schema_ty, is_option) = match option_inner(&field.ty) {
+                        Some(inner) => (inner, true),
+                        None => (field.ty.clone(), false),
+                    };
+                    // Required unless it may legitimately be absent from the wire:
+                    // an `Option`, a `default`/`skip_serializing_if`/`skip_deserializing`
+                    // field, or any field under a container-level `#[serde(default)]`.
+                    let required = !is_option && !serde.not_required && !container.default;
+                    field_descs.push(quote! {
                         ::delonix_seiva::schema::Field {
-                            name: #field_name,
+                            name: #wire_name,
                             schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
                             required: #required,
+                            flatten: false,
                         }
-                    }
-                });
+                    });
+                }
                 quote! { ::delonix_seiva::schema::object_schema(&[ #(#field_descs),* ]) }
             }
             _ => {
@@ -320,7 +373,31 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
                 .to_compile_error()
                 .into();
             }
-            let variant_names = data.variants.iter().map(|v| v.ident.to_string());
+            // Variant wire names mirror serde: an explicit variant `rename` wins,
+            // otherwise the container `rename_all` rule, otherwise the Rust name.
+            let mut variant_names = Vec::new();
+            for variant in &data.variants {
+                let serde = match parse_field_serde(&variant.attrs) {
+                    Ok(s) => s,
+                    Err(e) => return e.to_compile_error().into(),
+                };
+                let rust_name = variant.ident.to_string();
+                let wire_name = match serde.rename {
+                    Some(name) => name,
+                    None => match &container.rename_all {
+                        Some(rule) => match apply_rename_all_variant(rule, &rust_name) {
+                            Ok(name) => name,
+                            Err(msg) => {
+                                return syn::Error::new_spanned(variant, msg)
+                                    .to_compile_error()
+                                    .into()
+                            }
+                        },
+                        None => rust_name,
+                    },
+                };
+                variant_names.push(wire_name);
+            }
             quote! { ::delonix_seiva::schema::enum_schema(&[ #(#variant_names),* ]) }
         }
         Data::Union(_) => {
@@ -348,6 +425,230 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// A struct/enum container's serde attributes that move the JSON wire.
+#[derive(Default)]
+struct SerdeContainer {
+    /// `#[serde(rename_all = "...")]` — the case rule applied to every field name.
+    rename_all: Option<String>,
+    /// `#[serde(default)]` (bare or `= "path"`) — makes every field optional.
+    default: bool,
+}
+
+/// A field's/variant's serde attributes that move the JSON wire.
+#[derive(Default)]
+struct SerdeField {
+    /// `#[serde(rename = "...")]` — the explicit wire name (field or variant).
+    rename: Option<String>,
+    /// `#[serde(skip)]`/`skip_serializing` — the field never reaches the wire.
+    skip: bool,
+    /// `default`/`skip_serializing_if`/`skip_deserializing` — may be absent, so not
+    /// required even though the type is not an `Option`.
+    not_required: bool,
+    /// `#[serde(flatten)]` — merged into the parent object.
+    flatten: bool,
+}
+
+/// Parses the serde attributes on a container (struct/enum). Fails closed on
+/// `#[serde(transparent)]`, which changes the wire shape to something an object
+/// schema cannot express — turning a would-be silent lie into a compile error
+/// (SC-1 / ADR 0007).
+fn parse_container_serde(attrs: &[syn::Attribute]) -> Result<SerdeContainer, syn::Error> {
+    let mut container = SerdeContainer::default();
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename_all") {
+                if meta.input.peek(syn::Token![=]) {
+                    container.rename_all = Some(meta.value()?.parse::<LitStr>()?.value());
+                } else {
+                    // `rename_all(serialize = "...", deserialize = "...")`: the wire
+                    // this schema documents is the serialised one, so take serialize.
+                    meta.parse_nested_meta(|inner| {
+                        if inner.path.is_ident("serialize") {
+                            container.rename_all = Some(inner.value()?.parse::<LitStr>()?.value());
+                        } else if inner.input.peek(syn::Token![=]) {
+                            inner.value()?.parse::<syn::Expr>()?;
+                        }
+                        Ok(())
+                    })?;
+                }
+            } else if meta.path.is_ident("default") {
+                container.default = true;
+                if meta.input.peek(syn::Token![=]) {
+                    meta.value()?.parse::<syn::Expr>()?;
+                }
+            } else if meta.path.is_ident("transparent") {
+                return Err(meta.error(
+                    "WireSchema cannot reflect `#[serde(transparent)]`: the struct serialises as \
+                     its single field, a shape an object schema cannot express. Remove it from \
+                     this DTO so the published schema cannot lie.",
+                ));
+            } else {
+                consume_unknown_serde(&meta)?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(container)
+}
+
+/// Parses the serde attributes on one field or enum variant. Fails closed on
+/// `with`/`serialize_with`/`deserialize_with`, which replace the value's wire
+/// shape with something the schema cannot see (SC-1 / ADR 0007).
+fn parse_field_serde(attrs: &[syn::Attribute]) -> Result<SerdeField, syn::Error> {
+    let mut field = SerdeField::default();
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                if meta.input.peek(syn::Token![=]) {
+                    field.rename = Some(meta.value()?.parse::<LitStr>()?.value());
+                } else {
+                    // `rename(serialize = "...", deserialize = "...")`: take serialize.
+                    meta.parse_nested_meta(|inner| {
+                        if inner.path.is_ident("serialize") {
+                            field.rename = Some(inner.value()?.parse::<LitStr>()?.value());
+                        } else if inner.input.peek(syn::Token![=]) {
+                            inner.value()?.parse::<syn::Expr>()?;
+                        }
+                        Ok(())
+                    })?;
+                }
+            } else if meta.path.is_ident("skip") || meta.path.is_ident("skip_serializing") {
+                field.skip = true;
+            } else if meta.path.is_ident("skip_deserializing")
+                || meta.path.is_ident("skip_serializing_if")
+                || meta.path.is_ident("default")
+            {
+                field.not_required = true;
+                if meta.input.peek(syn::Token![=]) {
+                    meta.value()?.parse::<syn::Expr>()?;
+                }
+            } else if meta.path.is_ident("flatten") {
+                field.flatten = true;
+            } else if meta.path.is_ident("with")
+                || meta.path.is_ident("serialize_with")
+                || meta.path.is_ident("deserialize_with")
+            {
+                return Err(meta.error(
+                    "WireSchema cannot reflect `#[serde(with/serialize_with/deserialize_with)]`: it \
+                     replaces the field's wire shape with something the schema cannot see. Remove \
+                     the attribute, or model the field as its wire type, so the schema cannot lie.",
+                ));
+            } else {
+                consume_unknown_serde(&meta)?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(field)
+}
+
+/// Consumes an unmodelled serde key's `= value` or `(...)` group so attribute
+/// parsing continues without error. An unmodelled key that does not move the wire
+/// (`deny_unknown_fields`, `bound`, `crate`, enum tagging, …) is simply ignored —
+/// only the wire-shape-changing ones above are rejected.
+fn consume_unknown_serde(meta: &syn::meta::ParseNestedMeta) -> Result<(), syn::Error> {
+    if meta.input.peek(syn::Token![=]) {
+        meta.value()?.parse::<syn::Expr>()?;
+    } else if meta.input.peek(syn::token::Paren) {
+        meta.parse_nested_meta(|inner| {
+            if inner.input.peek(syn::Token![=]) {
+                inner.value()?.parse::<syn::Expr>()?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// Applies a serde `rename_all` rule to a **field** name (a `snake_case` source),
+/// matching `serde_derive`'s `RenameRule::apply_to_field` exactly.
+fn apply_rename_all_field(rule: &str, name: &str) -> Result<String, String> {
+    let out = match rule {
+        "lowercase" | "snake_case" => name.to_owned(),
+        "UPPERCASE" | "SCREAMING_SNAKE_CASE" => name.to_ascii_uppercase(),
+        "PascalCase" => pascal_from_snake(name),
+        "camelCase" => lower_first(&pascal_from_snake(name)),
+        "kebab-case" => name.replace('_', "-"),
+        "SCREAMING-KEBAB-CASE" => name.to_ascii_uppercase().replace('_', "-"),
+        other => return Err(unknown_rename_all(other)),
+    };
+    Ok(out)
+}
+
+/// Applies a serde `rename_all` rule to an enum **variant** name (a `PascalCase`
+/// source), matching `serde_derive`'s `RenameRule::apply_to_variant` exactly.
+fn apply_rename_all_variant(rule: &str, name: &str) -> Result<String, String> {
+    let out = match rule {
+        "lowercase" => name.to_ascii_lowercase(),
+        "UPPERCASE" => name.to_ascii_uppercase(),
+        "PascalCase" => name.to_owned(),
+        "camelCase" => lower_first(name),
+        "snake_case" => snake_from_pascal(name),
+        "SCREAMING_SNAKE_CASE" => snake_from_pascal(name).to_ascii_uppercase(),
+        "kebab-case" => snake_from_pascal(name).replace('_', "-"),
+        "SCREAMING-KEBAB-CASE" => snake_from_pascal(name)
+            .to_ascii_uppercase()
+            .replace('_', "-"),
+        other => return Err(unknown_rename_all(other)),
+    };
+    Ok(out)
+}
+
+/// The compile-error message for a `rename_all` rule string WireSchema does not
+/// recognise — fail closed rather than emit a name serde would not produce.
+fn unknown_rename_all(rule: &str) -> String {
+    format!(
+        "WireSchema does not recognise `#[serde(rename_all = \"{rule}\")]`; supported rules: \
+         lowercase, UPPERCASE, PascalCase, camelCase, snake_case, SCREAMING_SNAKE_CASE, \
+         kebab-case, SCREAMING-KEBAB-CASE"
+    )
+}
+
+/// `foo_bar` → `FooBar` (capitalise each underscore-separated segment, join).
+fn pascal_from_snake(name: &str) -> String {
+    name.split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// `FooBar` → `foo_bar` (insert `_` before each interior uppercase, lowercase all).
+fn snake_from_pascal(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Lowercases only the first character (`FooBar` → `fooBar`).
+fn lower_first(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// The inner type `T` of an `Option<T>`, or `None` if the type is not a plain

@@ -40,6 +40,7 @@
 //!             name: "title",
 //!             schema: <String as WireSchema>::schema,
 //!             required: true,
+//!             flatten: false,
 //!         }])
 //!     }
 //! }
@@ -58,17 +59,24 @@ pub trait WireSchema {
     fn schema() -> Value;
 }
 
-/// One field of a struct schema, as the derive macro emits it: the wire name, a
-/// function yielding the field type's schema, and whether the field is required
-/// (every field except an `Option<_>` is).
+/// One field of a struct schema, as the derive macro emits it: the **wire** name
+/// (after serde `rename`/`rename_all`), a function yielding the field type's
+/// schema, whether the field is required, and whether it is `#[serde(flatten)]`.
 #[derive(Debug, Clone, Copy)]
 pub struct Field {
-    /// The field's wire name.
+    /// The field's wire name — the name serde serialises it under, so the
+    /// published schema matches the JSON on the wire (ADR 0007 fidelity).
     pub name: &'static str,
     /// The field type's schema contribution.
     pub schema: fn() -> Value,
-    /// Whether the field is required (false for `Option<_>`).
+    /// Whether the field is required: `false` for an `Option<_>`, for a
+    /// `#[serde(default)]`/`skip_serializing_if`/`skip_deserializing` field, and
+    /// irrelevant for a flattened field (its own `required` entries carry over).
     pub required: bool,
+    /// Whether this is a `#[serde(flatten)]` field: its (object) schema's
+    /// `properties` and `required` are merged into the parent instead of nesting
+    /// under `name`, matching how serde flattens the field onto the wire.
+    pub flatten: bool,
 }
 
 /// Builds an `object` JSON Schema from a struct's fields: a `properties` map
@@ -81,6 +89,21 @@ pub fn object_schema(fields: &[Field]) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for field in fields {
+        if field.flatten {
+            // `#[serde(flatten)]`: serde writes the nested object's fields directly
+            // onto the parent, with no wrapping key — so merge its `properties` and
+            // `required` up, rather than nesting a property under `field.name`.
+            let nested = (field.schema)();
+            if let Some(props) = nested.get("properties").and_then(Value::as_object) {
+                for (key, value) in props {
+                    properties.insert(key.clone(), value.clone());
+                }
+            }
+            if let Some(reqs) = nested.get("required").and_then(Value::as_array) {
+                required.extend(reqs.iter().cloned());
+            }
+            continue;
+        }
         properties.insert(field.name.to_string(), (field.schema)());
         if field.required {
             required.push(Value::from(field.name));
@@ -96,11 +119,11 @@ pub fn object_schema(fields: &[Field]) -> Value {
 }
 
 /// The JSON Schema for a C-like, **unit-variant** enum: a `string` constrained to
-/// the variant names, matching serde's default serialization of a unit variant as
-/// its name. `#[derive(WireSchema)]` emits this for such an enum. Data-carrying
-/// enums are rejected by the derive (a faithful `oneOf` is future work), and
-/// serde `rename`/`rename_all` attributes are not reflected here — name a wire
-/// enum's variants as they serialize.
+/// the variant names, matching serde's serialization of a unit variant as its
+/// name. `#[derive(WireSchema)]` emits this for such an enum, passing the variant
+/// names **after** applying serde `rename`/`rename_all` (so the schema lists the
+/// names on the wire, not the Rust ones). Data-carrying enums are rejected by the
+/// derive (a faithful `oneOf` is future work).
 #[must_use]
 pub fn enum_schema(variants: &[&str]) -> Value {
     json!({ "type": "string", "enum": variants })
@@ -251,11 +274,13 @@ mod tests {
                 name: "title",
                 schema: <String as WireSchema>::schema,
                 required: true,
+                flatten: false,
             },
             Field {
                 name: "note",
                 schema: <String as WireSchema>::schema,
                 required: false,
+                flatten: false,
             },
         ]);
         assert_eq!(schema["type"], "object");
@@ -271,6 +296,7 @@ mod tests {
             name: "note",
             schema: <String as WireSchema>::schema,
             required: false,
+            flatten: false,
         }]);
         assert!(schema.get("required").is_none());
     }
@@ -356,5 +382,154 @@ mod tests {
             !required.iter().any(|v| v == "nickname"),
             "an Option field must not be required"
         );
+    }
+
+    // --- serde-attribute fidelity (SC-1 / ADR 0007) --------------------------
+    //
+    // The published schema must match the JSON serde actually emits. Each test
+    // below derives BOTH `serde::Serialize` and `WireSchema` on the same type and
+    // asserts the schema's property names equal the real serialised keys — so the
+    // two can never drift (the Critical SC-1 was that they silently did).
+
+    /// The property names declared by an `object` schema, sorted.
+    fn schema_props(schema: &Value) -> Vec<String> {
+        let mut keys: Vec<String> = schema["properties"]
+            .as_object()
+            .expect("an object schema")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    /// The JSON keys a real instance serialises to, sorted.
+    fn json_keys<T: serde::Serialize>(value: &T) -> Vec<String> {
+        let json = serde_json::to_value(value).expect("serialises");
+        let mut keys: Vec<String> = json
+            .as_object()
+            .expect("a JSON object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    #[derive(serde::Serialize, crate::WireSchema)]
+    #[serde(rename_all = "camelCase")]
+    struct Renamed {
+        first_name: String,
+        #[serde(rename = "years")]
+        age: u32,
+    }
+
+    #[test]
+    fn rename_all_and_rename_match_the_wire() {
+        let schema = Renamed::schema();
+        // `rename_all = camelCase` → `firstName`; explicit `rename` → `years`.
+        assert_eq!(schema_props(&schema), ["firstName", "years"]);
+        assert_eq!(
+            schema_props(&schema),
+            json_keys(&Renamed {
+                first_name: "a".into(),
+                age: 1
+            }),
+            "the schema's property names must equal serde's serialised keys"
+        );
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "firstName"));
+        assert!(required.iter().any(|v| v == "years"));
+    }
+
+    #[derive(serde::Serialize, crate::WireSchema)]
+    #[serde(rename_all = "camelCase")]
+    struct WithDefaultAndSkip {
+        user_name: String,
+        #[serde(default)]
+        page_size: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        #[serde(skip)]
+        #[allow(dead_code)]
+        internal: u64,
+    }
+
+    #[test]
+    fn default_skip_and_skip_serializing_if_are_reflected() {
+        let schema = WithDefaultAndSkip::schema();
+        // `skip` field is absent entirely; the rest are camelCased.
+        assert_eq!(schema_props(&schema), ["note", "pageSize", "userName"]);
+        // `default` and `skip_serializing_if` fields are NOT required; the plain
+        // field IS. (`internal` is skipped, so it is neither a property nor required.)
+        assert_eq!(schema["required"], json!(["userName"]));
+        // A `skip` field must never appear on the wire the schema documents.
+        assert!(
+            !schema["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key("internal"),
+            "a #[serde(skip)] field must not be in the schema"
+        );
+    }
+
+    #[derive(serde::Serialize, crate::WireSchema)]
+    struct Inner {
+        a: String,
+        b: u32,
+    }
+
+    #[derive(serde::Serialize, crate::WireSchema)]
+    struct Outer {
+        id: u64,
+        #[serde(flatten)]
+        inner: Inner,
+    }
+
+    #[test]
+    fn flatten_merges_into_the_parent_matching_the_wire() {
+        let schema = Outer::schema();
+        // The flattened fields appear at the TOP level, not nested under `inner`.
+        assert_eq!(schema_props(&schema), ["a", "b", "id"]);
+        assert_eq!(
+            schema_props(&schema),
+            json_keys(&Outer {
+                id: 1,
+                inner: Inner {
+                    a: "x".into(),
+                    b: 2
+                }
+            }),
+            "a flattened struct's fields must appear at the parent level, as serde emits them"
+        );
+        // The flattened fields carry their own `required`.
+        let required = schema["required"].as_array().unwrap();
+        for req in ["id", "a", "b"] {
+            assert!(required.iter().any(|v| v == req), "{req} must be required");
+        }
+    }
+
+    #[derive(serde::Serialize, crate::WireSchema)]
+    #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+    #[allow(dead_code)]
+    enum Mode {
+        ReadOnly,
+        #[serde(rename = "rw")]
+        ReadWrite,
+    }
+
+    #[test]
+    fn enum_variant_renames_match_the_wire() {
+        // `rename_all = SCREAMING_SNAKE_CASE` → `READ_ONLY`; explicit `rename` → `rw`.
+        assert_eq!(
+            Mode::schema(),
+            json!({ "type": "string", "enum": ["READ_ONLY", "rw"] })
+        );
+        // And that is exactly what serde serialises each variant to.
+        assert_eq!(
+            serde_json::to_value(Mode::ReadOnly).unwrap(),
+            json!("READ_ONLY")
+        );
+        assert_eq!(serde_json::to_value(Mode::ReadWrite).unwrap(), json!("rw"));
     }
 }
