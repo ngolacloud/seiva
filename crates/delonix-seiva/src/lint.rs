@@ -9,7 +9,7 @@
 
 use crate::manifest::{ManifestError, ModuleManifest};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A single contract violation found by the check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +317,54 @@ pub fn lint_project(root: &Path) -> Result<Report, LintError> {
     report.violations.extend(check_layers(&module_layers));
 
     Ok(report)
+}
+
+/// Scans a directory whose immediate children are modules — each laid out as
+/// `<module>/<layer>/Cargo.toml` — and returns the [`ModuleLayers`] for the layer
+/// dependency rule, WITHOUT requiring a `module.toml` contract manifest.
+///
+/// This is what lets a CI gate run the layer rule over `examples/**` (SG2): the
+/// canonical reference modules live there, not in a project's `modules/`, so
+/// [`lint_project`] — which keys off `module.toml` — never saw them, and a layer
+/// regression in an example passed green. A child directory with no layer crate
+/// is skipped (e.g. a `shop/` grouping dir, scanned one level down by the caller).
+///
+/// # Errors
+/// Returns [`LintError::Io`] if `modules_root` or a layer `Cargo.toml` cannot be read.
+pub fn scan_module_layers(modules_root: &Path) -> Result<Vec<ModuleLayers>, LintError> {
+    let read_err = |path: &Path| {
+        let path = path.display().to_string();
+        move |source| LintError::Io { path, source }
+    };
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(modules_root).map_err(read_err(modules_root))? {
+        let entry = entry.map_err(read_err(modules_root))?;
+        if entry.path().is_dir() {
+            dirs.push(entry.path());
+        }
+    }
+    dirs.sort(); // deterministic regardless of filesystem order
+
+    let mut out = Vec::new();
+    for dir in &dirs {
+        let module = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let mut layers = BTreeMap::new();
+        for layer in LAYERS {
+            let cargo = dir.join(layer).join("Cargo.toml");
+            if cargo.is_file() {
+                let text = std::fs::read_to_string(&cargo).map_err(read_err(&cargo))?;
+                layers.insert(layer.to_owned(), cargo_dependency_names(&text));
+            }
+        }
+        if !layers.is_empty() {
+            out.push(ModuleLayers { module, layers });
+        }
+    }
+    Ok(out)
 }
 
 /// The dependency crate names declared in a `Cargo.toml`'s `[dependencies]`
