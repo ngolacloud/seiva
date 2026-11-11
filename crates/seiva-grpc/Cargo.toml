@@ -23,6 +23,12 @@ delonix-seiva = { path = "../delonix-seiva", default-features = false }
 # only its `Status`/`Code` core — no hyper/h2/tower/prost. Used solely to map a
 # facade error into a gRPC `Status` under the `tonic` feature.
 tonic = { version = "0.12", default-features = false, optional = true }
+# The shared fail-closed error gate (`expose_error_details`) + a log, so the
+# gRPC `Status` mapping opaques an internal error exactly like HTTP's
+# `From<BoxError> for Problem` (ADR 0019, V2). Both are optional and only pulled
+# with the `tonic` feature, keeping the default proto generation std-only.
+seiva-contract = { path = "../seiva-contract", optional = true }
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # The real facade descriptor the tests render a `.proto` from.
@@ -31,4 +37,4 @@ notes-facade = { path = "../../examples/notes/facade" }
 [features]
 # Compile the `status` module (facade-error -> tonic `Status` mapping). Off by
 # default so the core proto generation stays std-only.
-tonic = ["dep:tonic"]
+tonic = ["dep:tonic", "dep:seiva-contract", "dep:tracing"]
