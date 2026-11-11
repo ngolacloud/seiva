@@ -9,7 +9,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};
 // Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
 // here so `interface` imports it from `application` (never naming `domain`), keeping
 // the layer rule intact; the application maps its domain error to `PortResult`.
@@ -60,7 +60,7 @@ where
         // run together, so with the DORM gateway the event lands in the outbox in
         // the SAME transaction as the business change.
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 self.repository.save_notification(&notification).await?;
                 self.events.publish("notifications.sent", &event).await
             })

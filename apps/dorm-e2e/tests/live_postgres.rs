@@ -112,6 +112,23 @@ fn unique_suffix() -> u128 {
         .unwrap_or(0)
 }
 
+/// Runs a `CREATE TABLE IF NOT EXISTS` DDL idempotently **and race-tolerantly**.
+///
+/// These tests share the `accounts_users` and `dorm-outbox` tables and run in
+/// parallel, so several sessions can issue the same `CREATE TABLE IF NOT EXISTS`
+/// at once. Postgres has a known race there: `IF NOT EXISTS` avoids the relation
+/// error, but two concurrent creates can still collide on the `pg_type`/`pg_class`
+/// catalog unique index (SQLSTATE 23505, "… already exists"). That collision means
+/// the table now exists, which is exactly the desired post-condition — so treat it
+/// as success. Any other error propagates.
+async fn ensure_ddl(ddl: &str) -> Result<(), dorm_core::Error> {
+    match db::run(ddl, &[]).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_string().contains("already exists") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// A [`Publisher`] that forwards to a shared [`LoggingPublisher`] behind an
 /// `Arc`, so the relay worker (which consumes its publisher by value) can record
 /// into an instance the test still holds and can assert on afterwards.
@@ -150,7 +167,7 @@ async fn accounts_round_trips_against_real_postgres() {
     let db = Arc::new(connect(&cfg).expect("the DORM handle builds from the test DSN"));
 
     // 1. Ensure the table exists (idempotent DDL, autocommitted in the session).
-    with_session(db.clone(), async { db::run(&users_table_ddl(), &[]).await })
+    with_session(db.clone(), async { ensure_ddl(&users_table_ddl()).await })
         .await
         .expect("the accounts_users table is created");
 
@@ -165,23 +182,32 @@ async fn accounts_round_trips_against_real_postgres() {
         User::new(id, username.clone(), password_hash).expect("the user satisfies the rules");
 
     // 3. Persist through the real repository, inside a transaction (as the
-    //    unit-of-work would), so the row is committed before the read-back.
+    //    unit-of-work would) and **under a tenant scope** (the repository model is
+    //    tenant-scoped now, SG1 P0-2b — a save with no tenant in scope is refused).
     let repo = DormCredentialRepository;
-    with_session(db.clone(), async {
-        db::atomic(|_tx| async {
-            repo.save(&user)
-                .await
-                .map_err(|e| dorm_core::Error::Config(e.to_string()))
-        })
-        .await
-    })
+    with_session(
+        db.clone(),
+        db::with_tenant("roundtrip-tenant", async {
+            db::atomic(|_tx| async {
+                repo.save(&user)
+                    .await
+                    .map_err(|e| dorm_core::Error::Config(e.to_string()))
+            })
+            .await
+        }),
+    )
     .await
     .expect("the user is saved and the transaction commits");
 
-    // 4. Read it back through the real repository and assert the invariants.
-    let found = with_session(db.clone(), async {
-        DormCredentialRepository.find_by_username(&username).await
-    })
+    // 4. Read it back through the real repository (same tenant scope) and assert
+    //    the invariants. The `tenant = 'roundtrip-tenant'` predicate is injected by
+    //    `scope.rs`, not named here.
+    let found = with_session(
+        db.clone(),
+        db::with_tenant("roundtrip-tenant", async {
+            DormCredentialRepository.find_by_username(&username).await
+        }),
+    )
     .await
     .expect("the read-back query runs")
     .expect("the saved user is found by username");
@@ -252,7 +278,7 @@ async fn outbox_relay_forwards_a_published_event_against_real_postgres() {
     // 1. Create the outbox/inbox/cursor/dead tables (idempotent).
     with_session(db.clone(), async {
         for ddl in dorm_outbox::migrations() {
-            db::run(&ddl, &[]).await?;
+            ensure_ddl(&ddl).await?;
         }
         Ok::<(), dorm_core::Error>(())
     })
@@ -348,9 +374,9 @@ async fn create_user_use_case_persists_and_outboxes_against_real_postgres() {
     //    clear this fixed topic so the relay later forwards exactly this run's
     //    event regardless of leftovers from a previous run.
     with_session(db.clone(), async {
-        db::run(&users_table_ddl(), &[]).await?;
+        ensure_ddl(&users_table_ddl()).await?;
         for ddl in dorm_outbox::migrations() {
-            db::run(&ddl, &[]).await?;
+            ensure_ddl(&ddl).await?;
         }
         db::run(
             &format!("DELETE FROM {} WHERE topic = $1", dorm_outbox::OUTBOX),
@@ -384,9 +410,14 @@ async fn create_user_use_case_persists_and_outboxes_against_real_postgres() {
     assert_eq!(dto.username, username);
 
     // 3. The user was persisted by the use case and its credential verifies.
-    let found = with_session(db.clone(), async {
-        DormCredentialRepository.find_by_username(&username).await
-    })
+    //    The accounts use case runs under `Scope::Global` (SG1 P0-2b: its facade
+    //    does not yet carry a tenant — that is P0-2c), so its write went in under
+    //    the audited system scope; the read-back must use the same system scope to
+    //    see it (a tenant-scoped read requires *a* scope — none in scope is refused).
+    let found = with_session(
+        db.clone(),
+        db::with_system_scope(async { DormCredentialRepository.find_by_username(&username).await }),
+    )
     .await
     .expect("the read-back query runs")
     .expect("the use case persisted the user");
@@ -440,6 +471,97 @@ async fn create_user_use_case_persists_and_outboxes_against_real_postgres() {
         )
         .await?;
         Ok::<(), dorm_core::Error>(())
+    })
+    .await;
+}
+
+/// SG1 P0-2b — the headline proof: two tenants holding the **same username** are
+/// isolated **by construction**. The repository never names the tenant;
+/// `dorm_core::scope` injects the `tenant = <current>` predicate from the ambient
+/// `with_tenant` scope on reads and forces the column on inserts. So a read under
+/// tenant A can never return tenant B's row, and `unique_together(tenant,
+/// username)` lets the same username exist under both tenants — a global-unique
+/// username would reject the second save.
+#[tokio::test]
+async fn two_tenants_with_the_same_username_are_isolated_against_real_postgres() {
+    let Some(dsn) = test_dsn() else {
+        return;
+    };
+    let cfg = test_config(&dsn);
+    let db = Arc::new(connect(&cfg).expect("the DORM handle builds from the test DSN"));
+
+    with_session(db.clone(), async { ensure_ddl(&users_table_ddl()).await })
+        .await
+        .expect("the accounts_users table is created");
+
+    let repo = DormCredentialRepository;
+    let hash = hash_password("correct horse battery staple").expect("argon2id hashing succeeds");
+    // Per-run-unique tenants + one shared username, so concurrent runs never
+    // collide and the SAME username lands under two different tenants.
+    let suffix = unique_suffix();
+    let acme = format!("acme-{suffix}");
+    let globex = format!("globex-{suffix}");
+    let username = format!("alice-{suffix}");
+    let acme_user = User::new(1, username.clone(), hash.clone()).expect("valid user");
+    let globex_user = User::new(2, username.clone(), hash.clone()).expect("valid user");
+
+    // Save the same username under two tenants — both succeed only because the
+    // table is unique on (tenant, username), not on username alone.
+    for (tenant, user) in [(&acme, &acme_user), (&globex, &globex_user)] {
+        with_session(
+            db.clone(),
+            db::with_tenant(tenant.clone(), async {
+                db::atomic(|_tx| async {
+                    repo.save(user)
+                        .await
+                        .map_err(|e| dorm_core::Error::Config(e.to_string()))
+                })
+                .await
+            }),
+        )
+        .await
+        .expect("the save under the tenant commits");
+    }
+
+    // Read "alice" under acme: must resolve to acme's row (id 1), never globex's.
+    let from_acme = with_session(
+        db.clone(),
+        db::with_tenant(acme.clone(), async {
+            repo.find_by_username(&username).await
+        }),
+    )
+    .await
+    .expect("the acme read runs")
+    .expect("acme has an alice");
+    assert_eq!(from_acme.id, 1, "acme must see ITS alice, not globex's");
+
+    // Read "alice" under globex: must resolve to globex's row (id 2).
+    let from_globex = with_session(
+        db.clone(),
+        db::with_tenant(globex.clone(), async {
+            repo.find_by_username(&username).await
+        }),
+    )
+    .await
+    .expect("the globex read runs")
+    .expect("globex has an alice");
+    assert_eq!(from_globex.id, 2, "globex must see ITS alice, not acme's");
+
+    // The decisive cross-tenant assertion: the SAME username resolved to DIFFERENT
+    // rows per tenant — no leakage, isolation injected by `scope.rs`, not by the
+    // repository (which filtered only by username).
+    assert_ne!(
+        from_acme.id, from_globex.id,
+        "the same username is a different row per tenant — auto-scoped isolation"
+    );
+
+    // Best-effort cleanup: both rows share the username.
+    let _ = with_session(db.clone(), async {
+        db::run(
+            &format!("DELETE FROM {USERS_TABLE} WHERE username = $1"),
+            &[Value::Text(username.clone())],
+        )
+        .await
     })
     .await;
 }

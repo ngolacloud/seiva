@@ -19,7 +19,7 @@ use delonix_seiva::{controller, facade, register_admin};
 use dorm_core::value::Value;
 use seiva_data_dorm::DormUnitOfWork;
 use seiva_http::{fingerprint, scoped_key, Ctx, Problem, Validate, ValidationError};
-use seiva_ports::{BoxError, IdempotencyOutcome, IdempotencyStore, PortResult, UnitOfWork};
+use seiva_ports::{BoxError, IdempotencyOutcome, IdempotencyStore, PortResult, Scope, UnitOfWork};
 use serde::{Deserialize, Serialize};
 
 /// The durable idempotency window: a key is honoured for replay for this long
@@ -314,6 +314,16 @@ fn tenant_of(ctx: &Ctx) -> Result<String, CatalogError> {
         .ok_or_else(|| CatalogError::unprocessable("caller has no tenant"))
 }
 
+/// The caller's tenant as a DORM [`Scope`] (SG1), fail-closed: an untenanted or
+/// anonymous caller gets an error, never a global/unscoped transaction. Passed to
+/// [`UnitOfWork::transaction`] so every statement the body runs is bound to this
+/// tenant by the gateway.
+fn scope_of(ctx: &Ctx) -> Result<Scope, CatalogError> {
+    ctx.tenant()
+        .and_then(Scope::tenant)
+        .ok_or_else(|| CatalogError::unprocessable("caller has no tenant"))
+}
+
 const COST_PERMISSION: &str = "catalog.cost.view";
 
 #[controller]
@@ -335,7 +345,7 @@ impl Catalog for CatalogController {
         let store = Arc::clone(&self.idem);
         let outcome = self
             .uow
-            .transaction(move || async move {
+            .transaction(scope_of(ctx)?, move || async move {
                 if let Some((scoped, print)) = &idem {
                     match store.begin(scoped, print, IDEMPOTENCY_TTL).await? {
                         IdempotencyOutcome::Fresh => {} // fall through to the insert
@@ -393,7 +403,7 @@ impl Catalog for CatalogController {
         let tenant = tenant_of(ctx)?;
         let show_cost = ctx.has(COST_PERMISSION);
         self.uow
-            .transaction(move || async move {
+            .transaction(scope_of(ctx)?, move || async move {
                 let rows = dorm_core::db::sql(
                     "SELECT id, name, price, cost, version FROM catalog_items \
                      WHERE id = $1 AND tenant = $2",
@@ -430,7 +440,7 @@ impl Catalog for CatalogController {
         let offset = i64::from(query.page.unwrap_or(0)).saturating_mul(page_size);
         let search = query.search.filter(|s| !s.trim().is_empty());
         self.uow
-            .transaction(move || async move {
+            .transaction(scope_of(ctx)?, move || async move {
                 let mut sql = String::from(
                     "SELECT id, name, price, cost, version FROM catalog_items WHERE tenant = $1",
                 );
@@ -460,7 +470,7 @@ impl Catalog for CatalogController {
         let show_cost = ctx.has(COST_PERMISSION);
         let outcome = self
             .uow
-            .transaction(move || async move {
+            .transaction(scope_of(ctx)?, move || async move {
                 // Apply only if the version still matches, and bump it. A stale
                 // edit updates no row.
                 let rows = dorm_core::db::sql(
@@ -512,7 +522,7 @@ impl Catalog for CatalogController {
         let id = i64::try_from(cmd.id).map_err(err)?;
         let tenant = tenant_of(ctx)?;
         self.uow
-            .transaction(move || async move {
+            .transaction(scope_of(ctx)?, move || async move {
                 dorm_core::db::run(
                     "DELETE FROM catalog_items WHERE id = $1 AND tenant = $2",
                     &[Value::I64(id), Value::Text(tenant)],

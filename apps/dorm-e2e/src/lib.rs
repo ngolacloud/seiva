@@ -17,8 +17,9 @@
 //!    four real DORM ports — [`UuidIdGenerator`], [`DormUnitOfWork`],
 //!    [`DormOutboxPublisher`] and the real [`DormCredentialRepository`] in this
 //!    crate — so the gateway is proven to satisfy the use case's trait bounds and,
-//!    for the repository, to persist and read back a [`User`]
-//!    through DORM's raw-SQL API.
+//!    for the repository, to persist and read back a [`User`] through the **typed,
+//!    tenant-scoped DORM QuerySet** (SG1 P0-2b): the repository never names the
+//!    tenant, and `dorm_core::scope` injects the `tenant = <current>` predicate.
 //! 3. **The runnable `main`.** [`run`] reads a [`ServerConfig`] and a
 //!    [`DormConfig`] from the environment, installs one shutdown, and runs the HTTP
 //!    server ([`seiva_server::serve`]) and the relay worker concurrently under it.
@@ -33,11 +34,13 @@
 //! which the worker counts **non-fatally** (`errors`) and keeps going — exactly the
 //! resilience the worker runtime promises.
 //!
-//! The **next increment** (a dedicated live-Postgres integration test) is called
-//! out honestly on [`DormCredentialRepository`]: the real repository's SQL is
-//! written and type-checked here, but exercising it end to end needs the `users`
-//! table created ([`users_table_ddl`]) and the relay bound to a session over a live
-//! database. That increment is the live job, not this offline proof.
+//! Exercising the stack **end to end** against a running Postgres is the dedicated
+//! live-integration suite (`tests/live_postgres.rs`, gated on `DORM_TEST_DSN`): it
+//! creates [`users_table_ddl`], drives [`DormCredentialRepository`] and the relay
+//! over a live session, and proves **tenant isolation by construction** — two
+//! tenants holding the same username resolve to different rows, and a read under
+//! one tenant never returns the other's (SG1 P0-2b). The offline gates here skip
+//! it cleanly when the DSN is unset.
 
 #![forbid(unsafe_code)]
 
@@ -48,7 +51,12 @@ use std::time::Duration;
 use accounts_application::{AccountsService, CredentialRepository, RepositoryError};
 use accounts_domain::User;
 use delonix_seiva::worker::{WorkerConfig, WorkerReport};
-use dorm_core::value::Value;
+// The typed ORM surface for the tenant-scoped `AccountRow` model (SG1 P0-2b):
+// `Model` brings `objects()`; `.filter()`/`.first()`/`.create()`/`.eq()` are
+// inherent methods on the generated `Manager`/`QuerySet`/`Field`, so the prelude
+// glob is deliberately avoided — it re-exports DORM's one-argument `Result<T>`,
+// which would shadow `std::Result` across this file.
+use dorm_core::model::Model;
 use dorm_outbox::RelayConfig;
 use seiva_data_dorm::{connect, DormConfig, DormOutboxPublisher, DormUnitOfWork, UuidIdGenerator};
 use seiva_messaging::{CloudEvent, Publisher};
@@ -124,83 +132,112 @@ impl Publisher for LoggingPublisher {
 /// The table the [`DormCredentialRepository`] reads and writes.
 pub const USERS_TABLE: &str = "accounts_users";
 
-/// The DDL that creates the `accounts` module's user table, idempotently.
+/// The DORM model for the `accounts` user table — **tenant-scoped** (SG1 P0-2b).
 ///
-/// The `id` is stored as `TEXT` (the decimal form of the use case's 128-bit id),
-/// `username` is unique, and `password_hash` holds the Argon2id PHC string the
-/// application layer produced — never the plaintext.
+/// `#[model(tenant_scoped, unique_together = "tenant, username")]` is what turns
+/// tenant isolation into a property of the ORM, not of handler discipline: for any
+/// query DORM compiles against this model, `dorm_core`'s `scope.rs` **injects a
+/// `tenant = <current>` predicate** on reads and **forces the `tenant` column**
+/// onto inserts, taking the value from the task's ambient `with_tenant` scope. So
+/// the repository below never names the tenant — it cannot read or write another
+/// tenant's row even if it tried. `unique_together` makes `username` unique
+/// *within* a tenant, so two tenants can hold the same username.
 ///
-/// This is the migration the live-Postgres integration test (the next increment)
-/// applies before driving [`DormCredentialRepository`]; the offline gates do not
-/// run it.
+/// The `tenant` column is populated by the scope, never by a caller, which is why
+/// it is absent from the insert shape the repository builds (`scoped_rows` appends
+/// it). The `id` is the decimal form of the use case's 128-bit id, stored as text.
+#[derive(dorm_derive::Model, Debug, Clone)]
+#[model(
+    table = "accounts_users",
+    tenant_scoped,
+    unique_together = "tenant, username"
+)]
+struct AccountRow {
+    #[field(primary_key, max_length = 48)]
+    id: String,
+    /// The tenant column DORM scopes by. Set by the ambient scope on insert and
+    /// used as the auto-injected predicate on reads — never touched by the repo.
+    #[field(max_length = 63)]
+    tenant: String,
+    #[field(max_length = 64)]
+    username: String,
+    password_hash: String,
+}
+
+/// The DDL that creates the tenant-scoped `accounts` user table, idempotently.
+///
+/// `id` is `TEXT` (decimal 128-bit id), `(tenant, username)` is unique together
+/// (a username is unique **within** a tenant), and `password_hash` holds the
+/// Argon2id PHC string — never the plaintext. The live-Postgres test applies this
+/// before driving [`DormCredentialRepository`]; the offline gates do not run it.
 #[must_use]
 pub fn users_table_ddl() -> String {
     format!(
         "CREATE TABLE IF NOT EXISTS {USERS_TABLE} (\
            id TEXT PRIMARY KEY, \
-           username TEXT NOT NULL UNIQUE, \
-           password_hash TEXT NOT NULL)"
+           tenant TEXT NOT NULL, \
+           username TEXT NOT NULL, \
+           password_hash TEXT NOT NULL, \
+           UNIQUE (tenant, username))"
     )
 }
 
-/// A real [`CredentialRepository`] persisting a [`User`] to the [`USERS_TABLE`]
-/// through DORM's raw-SQL API ([`dorm_core::db::run`]/[`dorm_core::db::fetch`]).
+/// A real [`CredentialRepository`] persisting a [`User`] through the **typed DORM
+/// QuerySet** over the tenant-scoped `AccountRow` model.
 ///
-/// It holds no handle: both methods issue SQL against the **current session** that
-/// [`DormUnitOfWork`]'s [`transaction`](seiva_ports::UnitOfWork::transaction)
-/// establishes (`with_session` + `db::atomic`), so
-/// `save` runs inside the use case's transaction and commits with the outbox event
-/// — the transactional-outbox guarantee. `find_by_username` likewise reads through
-/// the current session.
-///
-/// # Live-database increment
-///
-/// The SQL is written and type-checked here, but running it needs the
-/// [`users_table_ddl`] table and a reachable Postgres under a session; that is the
-/// dedicated live integration test, not this offline proof. With no reachable
-/// database the call returns a domain `RepositoryError`, which the application maps
-/// to the framework boundary error (`PortResult`) inside the use case's transaction.
+/// It holds no handle: both methods run against the **current session + tenant
+/// scope** that [`DormUnitOfWork`]'s
+/// [`transaction`](seiva_ports::UnitOfWork::transaction) establishes (the
+/// `with_tenant`/`with_session`/`db::atomic` stack). Because `AccountRow` is
+/// `tenant_scoped`, the repository **never names the tenant**: `save` inserts
+/// without a tenant column (the scope forces it on) and `find_by_username` filters
+/// only by username (the scope appends `tenant = <current>`). An untenanted scope
+/// is refused by DORM (`TenantScopeMissing`), so a forgotten scope fails closed
+/// rather than leaking.
 pub struct DormCredentialRepository;
 
 impl CredentialRepository for DormCredentialRepository {
     // The repository port is the domain's (classic DDD, ADR 0003), so it speaks the
     // domain's `RepositoryError`; the application maps it to `PortResult`.
     async fn save(&self, user: &User) -> Result<(), RepositoryError> {
-        dorm_core::db::run(
-            &format!("INSERT INTO {USERS_TABLE} (id, username, password_hash) VALUES ($1, $2, $3)"),
-            &[
-                Value::Text(user.id.to_string()),
-                Value::Text(user.username.clone()),
-                Value::Text(user.password_hash.clone()),
-            ],
-        )
-        .await
-        .map(|_| ())
-        .map_err(|e| RepositoryError(e.to_string()))
+        // The `tenant` value here is a placeholder: `scope.rs::scoped_rows` runs
+        // inside `compile_insert` and **overwrites** it with the task's ambient
+        // tenant before the INSERT is built (and refuses the insert outright if no
+        // tenant is in scope). So the repository cannot land a row under the wrong
+        // tenant — or under none — regardless of what it passes here.
+        AccountRow::objects()
+            .create(NewAccountRow {
+                id: user.id.to_string(),
+                tenant: String::new(),
+                username: user.username.clone(),
+                password_hash: user.password_hash.clone(),
+            })
+            .await
+            .map(|_| ())
+            .map_err(|e| RepositoryError(e.to_string()))
     }
 
     async fn find_by_username(&self, username: &str) -> Result<Option<User>, RepositoryError> {
-        let rows = dorm_core::db::fetch(
-            &format!("SELECT id, username, password_hash FROM {USERS_TABLE} WHERE username = $1"),
-            &[Value::Text(username.to_string())],
-        )
-        .await
-        .map_err(|e| RepositoryError(e.to_string()))?;
+        // Only `username` is named; the `tenant = <current>` predicate is appended
+        // by `scope.rs` from the ambient scope, so this can never return another
+        // tenant's row.
+        let found = AccountRow::objects()
+            .filter(account_row::username.eq(username))
+            .first()
+            .await
+            .map_err(|e| RepositoryError(e.to_string()))?;
 
-        match rows.first() {
+        match found {
             None => Ok(None),
             Some(row) => {
-                let id_text: String = row.try_get(0).map_err(|e| RepositoryError(e.to_string()))?;
-                let username: String =
-                    row.try_get(1).map_err(|e| RepositoryError(e.to_string()))?;
-                let password_hash: String =
-                    row.try_get(2).map_err(|e| RepositoryError(e.to_string()))?;
-                let id: u128 = id_text
+                let id: u128 = row
+                    .id
                     .parse::<u128>()
                     .map_err(|e| RepositoryError(e.to_string()))?;
                 // Reconstruct through the domain constructor so the invariants are
-                // re-checked on the way out of the database.
-                let user = User::new(id, username, password_hash)
+                // re-checked on the way out of the database. The domain stays
+                // tenant-free; the tenant lived only in the data layer.
+                let user = User::new(id, row.username, row.password_hash)
                     .map_err(|e| RepositoryError(e.to_string()))?;
                 Ok(Some(user))
             }

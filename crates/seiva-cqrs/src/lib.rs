@@ -66,7 +66,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use seiva_ports::{PortResult, UnitOfWork};
+use seiva_ports::{PortResult, Scope, UnitOfWork};
 
 /// A message that *changes* state. Its [`Output`](Command::Output) is what the
 /// handler returns on success (an id, a DTO, or `()`), carried back through the
@@ -472,7 +472,9 @@ where
         // rolls back — the scope-based guarantee of `UnitOfWork::transaction`. The
         // closure moves `cmd` and borrows `&self.inner`; both are `Send`, so the
         // boxed future the port returns stays `Send`.
-        self.uow.transaction(move || self.inner.handle(cmd)).await
+        self.uow
+            .transaction(Scope::Global, move || self.inner.handle(cmd))
+            .await
     }
 }
 

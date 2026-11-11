@@ -49,6 +49,103 @@ fn hex16(bytes: &[u8; 16]) -> String {
     s
 }
 
+/// The tenant a unit of work is bound to (SG1, ADR 0021 of the data layer).
+///
+/// An opaque, non-empty identifier for one tenant. It is deliberately a distinct
+/// type — not a bare `String`/`Option<String>` — so the data-layer gateway can
+/// make the tenant **impossible to forget**: a session is opened for a [`Scope`],
+/// and a [`Scope`] is either a `TenantId` or an explicit, audited
+/// [`Scope::Global`]. There is no "no tenant" default to fall through.
+///
+/// This crate stays free of any data-layer dependency (the one-way Seiva → DORM
+/// boundary), so `TenantId` carries no `ToValue`/ORM coupling; the gateway maps it
+/// onto DORM's tenant scope at the edge.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TenantId(String);
+
+impl TenantId {
+    /// Builds a tenant id from a non-empty string. Returns `None` for an empty or
+    /// whitespace-only value, so an absent tenant can never masquerade as one.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(Self(value))
+        }
+    }
+
+    /// The tenant id as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes the id, returning the owned string (used by adapters to bind it to
+    /// the data layer).
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Debug for TenantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TenantId({})", self.0)
+    }
+}
+
+impl std::fmt::Display for TenantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The isolation scope a unit of work / session runs under (SG1).
+///
+/// Every data-layer session is opened for an **explicit** scope. The common case
+/// is [`Tenant`](Scope::Tenant), which constrains every `tenant_scoped` model to
+/// that tenant automatically (the predicate on reads/updates/deletes, the column
+/// value on inserts) — a forgotten filter cannot cross tenants. The rare,
+/// deliberate cross-tenant case is [`Global`](Scope::Global), which the gateway
+/// maps onto DORM's **audited** system-scope escape (it emits a `tracing` event),
+/// so a global query is a visible choice on the record, never an accident.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Scope {
+    /// Constrain all `tenant_scoped` access to this tenant.
+    Tenant(TenantId),
+    /// Bypass tenant scoping deliberately (audited at the gateway). Use only for
+    /// genuine cross-tenant admin/maintenance work.
+    Global,
+}
+
+impl Scope {
+    /// Convenience constructor: a tenant scope from a non-empty string, or `None`.
+    #[must_use]
+    pub fn tenant(value: impl Into<String>) -> Option<Self> {
+        TenantId::new(value).map(Scope::Tenant)
+    }
+
+    /// The bound tenant, if this is a [`Tenant`](Scope::Tenant) scope.
+    #[must_use]
+    pub fn tenant_id(&self) -> Option<&TenantId> {
+        match self {
+            Scope::Tenant(t) => Some(t),
+            Scope::Global => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Scope::Tenant(t) => write!(f, "Scope::Tenant({t})"),
+            Scope::Global => f.write_str("Scope::Global"),
+        }
+    }
+}
+
 /// Reads the current time. Injected so use cases are deterministic under test:
 /// a fake clock returns a fixed instant with no real time involved.
 pub trait Clock: Send + Sync {
@@ -90,7 +187,18 @@ pub trait EventPublisher: Send + Sync {
 /// not drive a closure that had already returned. Used generically (a handler is
 /// generic over its ports), so this trait need not be object-safe.
 pub trait UnitOfWork: Send + Sync {
-    /// Runs `work` in a transaction, committing on `Ok` and rolling back on `Err`.
+    /// Runs `work` in a transaction **bound to `scope`** (SG1), committing on `Ok`
+    /// and rolling back on `Err`.
+    ///
+    /// `scope` is a **required** argument, not a default: every transaction names
+    /// the tenant it runs for ([`Scope::Tenant`]) or the deliberate, audited
+    /// cross-tenant case ([`Scope::Global`]). A data-layer implementation that
+    /// enforces tenant isolation (the DORM gateway) constrains every
+    /// `tenant_scoped` statement the body runs to this scope automatically, so a
+    /// forgotten filter cannot cross tenants — and the caller cannot forget to
+    /// choose, because the compiler requires the argument. A tenant-scoped handler
+    /// derives the scope from the request's authenticated tenant (`Ctx`), failing
+    /// closed when none is present.
     ///
     /// Returns a **boxed `Send` future** (`Pin<Box<dyn Future + Send>>`). The
     /// `Send` bound is part of the contract, so a use case that awaits it stays
@@ -101,6 +209,7 @@ pub trait UnitOfWork: Send + Sync {
     /// `impl Future` return hits with the generic `work` closure.
     fn transaction<'a, T, F, Fut>(
         &'a self,
+        scope: Scope,
         work: F,
     ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
     where
@@ -326,6 +435,23 @@ mod tests {
             entry.details[1],
             ("password".to_owned(), "[redacted]".to_owned())
         );
+    }
+
+    #[test]
+    fn tenant_id_rejects_empty_and_whitespace() {
+        assert!(TenantId::new("").is_none());
+        assert!(TenantId::new("   ").is_none());
+        let t = TenantId::new("acme").expect("non-empty is valid");
+        assert_eq!(t.as_str(), "acme");
+        assert_eq!(t.to_string(), "acme");
+    }
+
+    #[test]
+    fn scope_distinguishes_tenant_from_global() {
+        let tenant = Scope::tenant("acme").expect("non-empty");
+        assert_eq!(tenant.tenant_id().map(TenantId::as_str), Some("acme"));
+        assert!(Scope::Global.tenant_id().is_none());
+        assert!(Scope::tenant("  ").is_none());
     }
 
     #[test]

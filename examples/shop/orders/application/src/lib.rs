@@ -8,7 +8,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use seiva_ports::{EventPublisher, IdGenerator, UnitOfWork};
+use seiva_ports::{EventPublisher, IdGenerator, Scope, UnitOfWork};
 use shop_orders_domain::{Line, Order};
 // Classic DDD (ADR 0003): the repository PORT is defined in the DOMAIN. Re-exported
 // here so `interface`/`cqrs` import it from `application` (never naming `domain`),
@@ -125,7 +125,7 @@ where
     pub async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError> {
         let (order, event) = self.prepare(cmd)?;
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 self.repository.save_order(&order).await?;
                 self.events.publish("orders.placed", &event).await
             })

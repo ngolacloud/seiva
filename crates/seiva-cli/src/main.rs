@@ -753,7 +753,7 @@ fn builtin_proto() -> String {
 /// hashing and the `accounts.user_created` event — not an ad-hoc hash.
 mod app_ports {
     use async_trait::async_trait;
-    use seiva_ports::{EventPublisher, Id, IdGenerator, PortResult, UnitOfWork};
+    use seiva_ports::{EventPublisher, Id, IdGenerator, PortResult, Scope, UnitOfWork};
     use std::future::Future;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -780,6 +780,7 @@ mod app_ports {
     impl UnitOfWork for DirectUnitOfWork {
         fn transaction<'a, T, F, Fut>(
             &'a self,
+            _scope: Scope,
             work: F,
         ) -> std::pin::Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
         where

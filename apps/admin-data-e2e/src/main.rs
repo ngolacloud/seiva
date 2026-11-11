@@ -16,7 +16,7 @@ use seiva_http::{
     router_with_modules, router_with_modules_distributed, Authenticator, DistributedRateLimit,
     Health, HttpSecurity, Principal, RateLimit, TokenAuthenticator,
 };
-use seiva_ports::{BoxError, UnitOfWork};
+use seiva_ports::{BoxError, Scope, UnitOfWork};
 use seiva_ratelimit_redis::RedisRateLimitStore;
 use seiva_server::serve_router;
 
@@ -40,7 +40,7 @@ async fn main() -> Result<(), BoxError> {
     // by the PostgreSQL init script, so this is a no-op there.
     let mut ddl = vec![catalog_table_ddl().to_owned()];
     ddl.extend(idempotency_migrations());
-    uow.transaction(move || async move {
+    uow.transaction(Scope::Global, move || async move {
         for stmt in &ddl {
             dorm_core::db::execute(stmt, &[])
                 .await

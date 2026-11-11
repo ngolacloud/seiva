@@ -17,7 +17,7 @@ pub use polls_domain::{PollRepository, RepositoryError};
 use polls_facade::{
     AddChoice, ChoiceDto, CreateQuestion, GetQuestion, Polls, QuestionDetail, QuestionDto, Vote,
 };
-use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, UnitOfWork};
+use seiva_ports::{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork};
 
 /// The application service. It implements the [`Polls`] facade by running each
 /// use case over the ports and mapping the domain entities to DTOs.
@@ -65,7 +65,7 @@ where
         // publish run inside it, so with the DORM gateway the event lands in the
         // transactional outbox in the SAME transaction as the business change.
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 self.repository.save_question(&question).await?;
                 self.events.publish("polls.question_asked", &event).await
             })
@@ -99,7 +99,7 @@ where
         .map_err(BoxError::from)?;
 
         self.uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 self.repository.save_choice(&choice).await?;
                 self.events.publish("polls.choice_added", &event).await
             })
@@ -129,7 +129,7 @@ where
     async fn cast_a_vote(&self, cmd: Vote) -> PortResult<ChoiceDto> {
         let choice = self
             .uow
-            .transaction(|| async {
+            .transaction(Scope::Global, || async {
                 let choice = self
                     .repository
                     .record_vote(cmd.choice_id)
