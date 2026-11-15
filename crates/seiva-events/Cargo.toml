@@ -52,6 +52,14 @@ async-trait = { workspace = true }
 # keeps this DORM-free (the `dorm` feature is a marker and pulls no gateway, but we
 # stay explicit); the crate carries no data layer.
 delonix-seiva = { workspace = true, default-features = false }
+# The in-pass retry back-off (`drain_in_process`, ADR 0021 Fase 2) sleeps between
+# attempts; only the `time` driver is needed here (the worker loop itself lives in
+# `delonix-seiva`). No DORM rides in with tokio.
+tokio = { workspace = true, features = ["time"] }
+# A logging facade for `LoggingDeadLetterSink` — the production default sink records
+# a dead-lettered event without pulling a subscriber of its own. Inherits the
+# workspace pin so it cannot drift from the version the worker runtime uses.
+tracing = { workspace = true }
 # Only the `testing` double `InMemoryOutboxPublisher` parses the already-serialised
 # event payload into the CloudEvent `data`, so serde_json rides in exclusively with
 # that feature (a `--no-default-features` production build pulls none of it).

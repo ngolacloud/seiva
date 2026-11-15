@@ -55,7 +55,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use delonix_seiva::worker::run_worker;
 use seiva_messaging::CloudEvent;
-use seiva_ports::{inbox_key, IdempotencyOutcome, IdempotencyStore, PortResult};
+use seiva_ports::{inbox_key, IdempotencyOutcome, IdempotencyStore, PortResult, Scope, UnitOfWork};
 
 // The worker runtime (interval loop + graceful shutdown + metrics) is the
 // framework's; this crate only supplies the per-pass job. Re-exported so a caller
@@ -193,30 +193,88 @@ impl SubscriberRegistry {
 ///
 /// This core does not read the outbox or loop; the Fase 2 outbox driver calls
 /// this once per drained event (see the crate docs).
-pub async fn dispatch<S: IdempotencyStore>(
+pub async fn dispatch<S, U>(
     event: &CloudEvent,
     registry: &SubscriberRegistry,
     inbox: &S,
-) -> PortResult<()> {
+    uow: &U,
+) -> PortResult<()>
+where
+    S: IdempotencyStore,
+    U: UnitOfWork,
+{
     for subscriber in registry.subscribers_for(&event.ty) {
         let key = inbox_key(subscriber.subscriber_id(), &event.id);
-        // The event id is the fingerprint: the same event always claims the same
-        // key with the same fingerprint, so a redelivery can never be a Mismatch.
-        match inbox.begin(&key, &event.id, INBOX_TTL).await? {
-            IdempotencyOutcome::Fresh => {
-                // Order mirrors the broker consume path (claim → effect → mark);
-                // in Fase 2 these commit in one transaction.
-                subscriber.handle(event).await?;
-                inbox.finish(&key, &[]).await?;
+        // Did *this* transaction take the key `Fresh`? Only then may we `release` it
+        // on failure — never a `Replay`/`InProgress`/`Mismatch` key we do not own, so
+        // a concurrent in-flight claim is never disturbed (ADR 0021 Fase 2).
+        let claimed_fresh = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        // The whole consume — claim → handle → mark — runs in ONE transaction, the
+        // consume pattern of ADR 0011. With the DORM gateway the inbox claim, the
+        // handler's writes and the `finish` commit atomically, and a rollback
+        // un-claims the key for free; the in-memory double does not share this
+        // transaction, so on the `Err` path below we `release` the key explicitly.
+        //
+        // The scope is `Global` **because the CloudEvent envelope carries no tenant
+        // in Fase 2** (ADR 0021 addendum): the inbox claim is the driver's own
+        // bookkeeping, with no tenant to scope it to. This `Global` is correct ONLY
+        // while that premise holds. ADR 0027 (typed, versioned event contract) moves
+        // the envelope toward a typed shape; the day `seiva_messaging::CloudEvent`
+        // grows a tenant attribute, this claim and the handler transaction should
+        // almost certainly run under `Scope::Tenant(event's tenant)`, not `Global` —
+        // otherwise a subscriber's writes would silently bypass tenant scoping. That
+        // decision must be made deliberately, never inherited by default: the
+        // exhaustive-destructure fence in this crate's tests
+        // (`scope_global_in_dispatch_is_fenced_to_the_tenantless_envelope`) stops
+        // compiling the moment the field is added, turning the review on here.
+        let fresh = Arc::clone(&claimed_fresh);
+        let outcome = uow
+            .transaction(Scope::Global, || async move {
+                // The event id is the fingerprint: the same event always claims the
+                // same key with the same fingerprint, so a redelivery is never a
+                // Mismatch.
+                match inbox.begin(&key, &event.id, INBOX_TTL).await? {
+                    IdempotencyOutcome::Fresh => {
+                        fresh.store(true, std::sync::atomic::Ordering::SeqCst);
+                        // Order mirrors the broker consume path (claim → effect →
+                        // mark); these now commit together in this transaction.
+                        subscriber.handle(event).await?;
+                        inbox.finish(&key, &[]).await?;
+                        Ok(())
+                    }
+                    // Already consumed by this subscriber — a redelivery, no effect.
+                    IdempotencyOutcome::Replay(_) | IdempotencyOutcome::InProgress => Ok(()),
+                    IdempotencyOutcome::Mismatch => Err(Box::new(InboxMismatch {
+                        subscriber_id: subscriber.subscriber_id().to_owned(),
+                        event_id: event.id.clone(),
+                    })
+                        as seiva_ports::BoxError),
+                }
+            })
+            .await;
+
+        if let Err(err) = outcome {
+            // The transaction rolled back. If it was *our* `Fresh` claim that failed
+            // mid-effect, un-claim it so the redelivery is `Fresh` again instead of a
+            // stuck `InProgress` that would be silently skipped. On the DORM store
+            // this is a no-op (the rollback already dropped the claim row).
+            if claimed_fresh.load(std::sync::atomic::Ordering::SeqCst) {
+                let release_key = inbox_key(subscriber.subscriber_id(), &event.id);
+                // A failing `release` must not mask the handler failure that caused
+                // this un-claim: `err` is the real cause the retry/dead-letter path
+                // reports, so log the release problem and still return `err`.
+                if let Err(release_err) = inbox.release(&release_key).await {
+                    tracing::warn!(
+                        subscriber_id = subscriber.subscriber_id(),
+                        event.id = %event.id,
+                        error = %release_err,
+                        "failed to release the inbox key after a rolled-back delivery; \
+                         the original handler error is preserved",
+                    );
+                }
             }
-            // Already consumed by this subscriber — a redelivery, no effect.
-            IdempotencyOutcome::Replay(_) | IdempotencyOutcome::InProgress => {}
-            IdempotencyOutcome::Mismatch => {
-                return Err(Box::new(InboxMismatch {
-                    subscriber_id: subscriber.subscriber_id().to_owned(),
-                    event_id: event.id.clone(),
-                }));
-            }
+            return Err(err);
         }
     }
     Ok(())
@@ -297,6 +355,116 @@ pub trait OutboxReader {
 /// the DORM adapter reads its batch size from the relay's `RelayConfig` instead.
 pub const DRAIN_BATCH: usize = 128;
 
+/// How many times [`drain_in_process`] retries a single event, and how long it
+/// waits between attempts, before diverting it to the [`DeadLetterSink`] (ADR 0021
+/// Fase 2).
+///
+/// Retries are **per event, within one drain pass**: a subscriber that errors is
+/// re-dispatched up to `max_attempts` times with an exponential back-off
+/// (`base_backoff`, then `2×`, `4×`, …), because the Fase 2 transactional dispatch
+/// un-claims the inbox key on each failure so every attempt starts `Fresh`. An event
+/// that still fails after the last attempt is **dead-lettered** and the cursor
+/// advances past it, so it can never block the events behind it. This is what keeps a
+/// poison event from either being silently dropped (the Fase 1 bug) or stalling the
+/// whole queue forever.
+///
+/// The back-off sleeps the single drain loop while one event waits — acceptable for
+/// the in-process driver's scale (ADR 0021 Fase 2, "Harder / debt"). The broker path
+/// keeps its own retry semantics; this governs only the in-process driver.
+#[derive(Clone, Copy, Debug)]
+pub struct RetryPolicy {
+    /// Total delivery attempts for one event before dead-lettering. `1` means no
+    /// retry: a single failure dead-letters at once. Must be `>= 1`; `0` is treated
+    /// as `1`.
+    pub max_attempts: u32,
+    /// The wait before the **second** attempt; each subsequent wait doubles. With
+    /// [`Duration::ZERO`] the retries are immediate (what offline tests use).
+    pub base_backoff: Duration,
+}
+
+impl RetryPolicy {
+    /// A policy that retries up to `max_attempts` times with an exponential
+    /// `base_backoff`. `max_attempts` is clamped to at least `1`.
+    #[must_use]
+    pub fn new(max_attempts: u32, base_backoff: Duration) -> Self {
+        Self {
+            max_attempts: max_attempts.max(1),
+            base_backoff,
+        }
+    }
+
+    /// No retry: the first failure dead-letters the event immediately.
+    #[must_use]
+    pub const fn no_retry() -> Self {
+        Self {
+            max_attempts: 1,
+            base_backoff: Duration::ZERO,
+        }
+    }
+
+    /// The back-off before attempt number `attempt` (1-based). Attempt `1` waits
+    /// nothing; attempt `n` waits `base_backoff * 2^(n-2)`, saturating.
+    fn backoff_before(&self, attempt: u32) -> Duration {
+        if attempt <= 1 {
+            return Duration::ZERO;
+        }
+        let shift = attempt - 2;
+        self.base_backoff
+            .checked_mul(1u32.checked_shl(shift).unwrap_or(u32::MAX))
+            .unwrap_or(Duration::MAX)
+    }
+}
+
+impl Default for RetryPolicy {
+    /// Five attempts with a 100 ms base back-off (100 ms, 200 ms, 400 ms, 800 ms) —
+    /// a sane production default for a transient-failure window.
+    fn default() -> Self {
+        Self::new(5, Duration::from_millis(100))
+    }
+}
+
+/// Where [`drain_in_process`] sends an event that still failed after the
+/// [`RetryPolicy`]'s attempts were exhausted — the quarantine that stops a poison
+/// event from blocking the queue (ADR 0021 Fase 2).
+///
+/// It is the in-process twin of a broker's dead-letter queue: the driver hands over
+/// the un-dispatchable event (with the attempt count and the last error) and then
+/// advances the cursor past it, so the choreography keeps progressing. A sink can log
+/// it ([`LoggingDeadLetterSink`]), append it to a table, or publish it to a real DLQ
+/// topic; the choice is the composition root's.
+#[async_trait]
+pub trait DeadLetterSink: Send + Sync {
+    /// Record `event`, which failed `attempts` times, with the last error rendered to
+    /// `error`. Returning `Err` aborts the drain pass (the cursor does **not** advance
+    /// past the event), so a sink that cannot durably accept the event does not let it
+    /// be lost — the driver re-reads it on the next pass.
+    async fn dead_letter(&self, event: &CloudEvent, attempts: u32, error: &str) -> PortResult<()>;
+}
+
+/// The production-default [`DeadLetterSink`]: records the dead-lettered event through
+/// the `tracing` facade at `error` level (its id, type, attempt count and the last
+/// error) and returns `Ok`, so the drain advances past the poison event.
+///
+/// It keeps no state and needs no backing store, so a monolith gets a safe default
+/// (the event is quarantined and surfaced in the logs) with no extra wiring; a
+/// deployment that needs durable dead-lettering swaps in its own sink.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoggingDeadLetterSink;
+
+#[async_trait]
+impl DeadLetterSink for LoggingDeadLetterSink {
+    async fn dead_letter(&self, event: &CloudEvent, attempts: u32, error: &str) -> PortResult<()> {
+        tracing::error!(
+            event.id = %event.id,
+            event.ty = %event.ty,
+            attempts,
+            error,
+            "in-process dispatch dead-lettered a poison event after exhausting retries",
+        );
+        Ok(())
+    }
+}
+
 /// The in-process outbox **driver**: one pass that drains a batch from `reader`,
 /// [`dispatch`]es each event to `registry`'s subscribers (deduped through `inbox`),
 /// and advances the cursor past each event **only after** its dispatch succeeds.
@@ -308,31 +476,72 @@ pub const DRAIN_BATCH: usize = 128;
 /// monolith runs this driver or a split service drains the broker — which is what
 /// makes `seiva module split` a swap of dispatcher rather than a rewrite (ADR 0021).
 ///
-/// **At-least-once.** The cursor advances (`reader.advance`) only after [`dispatch`]
-/// returns `Ok`. If a subscriber errors, `dispatch` propagates the error, this
-/// returns early, and the cursor is left where it was — so the event is re-read on
-/// the next pass (and, under the integrated DORM transaction, the failed inbox claim
-/// rolls back, so the retry is `Fresh` again). A redelivery that *does* get through
-/// is absorbed by the inbox: the effect runs exactly once per `(subscriber, event)`.
-pub async fn drain_in_process<R, S>(
+/// **At-least-once, with bounded retry.** For each event the driver [`dispatch`]es
+/// it inside `uow`'s transaction (claim → handle → mark together, ADR 0021 Fase 2)
+/// and, on success, advances the cursor past it. On failure it retries up to
+/// `policy.max_attempts` with the policy's exponential back-off — each attempt starts
+/// `Fresh` because the failed transaction un-claimed the inbox key. An event that
+/// still fails after the last attempt is diverted to `dead_letter` and the cursor
+/// advances past it, so a poison event can never block the events behind it. A
+/// redelivery that *does* get through is absorbed by the inbox: the effect runs
+/// exactly once per `(subscriber, event)`.
+///
+/// The count returned is how many events left the outbox this pass — those dispatched
+/// **and** those dead-lettered (both advance the cursor) — so a worker loops while the
+/// outbox drains and sleeps when it reaches `0`. The only early return is a failure of
+/// the infrastructure itself (`reader`/`dead_letter` erroring); a subscriber failure
+/// is absorbed by retry-then-dead-letter, never propagated.
+pub async fn drain_in_process<R, S, U, D>(
     reader: &R,
     registry: &SubscriberRegistry,
     inbox: &S,
+    uow: &U,
+    policy: &RetryPolicy,
+    dead_letter: &D,
 ) -> PortResult<usize>
 where
     R: OutboxReader + Sync,
     S: IdempotencyStore,
+    U: UnitOfWork,
+    D: DeadLetterSink,
 {
     let batch = reader.read_batch(DRAIN_BATCH).await?;
-    let mut dispatched = 0usize;
+    let mut drained = 0usize;
     for record in batch {
-        // Dispatch first, advance second — the whole point of at-least-once: a
-        // failure here propagates before the cursor moves, leaving the event pending.
-        dispatch(&record.event, registry, inbox).await?;
-        reader.advance(record.position).await?;
-        dispatched += 1;
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            let backoff = policy.backoff_before(attempt);
+            if !backoff.is_zero() {
+                tokio::time::sleep(backoff).await;
+            }
+            match dispatch(&record.event, registry, inbox, uow).await {
+                Ok(()) => {
+                    // Dispatched cleanly — advance the cursor past it (at-least-once:
+                    // the advance follows a successful dispatch, never precedes it).
+                    reader.advance(record.position).await?;
+                    drained += 1;
+                    break;
+                }
+                Err(err) if attempt >= policy.max_attempts => {
+                    // Exhausted the retries: quarantine the poison event and advance
+                    // past it so the events behind it still progress. A dead-letter
+                    // sink that errors aborts the pass WITHOUT advancing, so the event
+                    // is not lost — it is re-read next pass.
+                    dead_letter
+                        .dead_letter(&record.event, attempt, &err.to_string())
+                        .await?;
+                    reader.advance(record.position).await?;
+                    drained += 1;
+                    break;
+                }
+                // A failed attempt with retries left: the transaction already
+                // un-claimed the inbox key, so looping re-dispatches it `Fresh`.
+                Err(_) => continue,
+            }
+        }
     }
-    Ok(dispatched)
+    Ok(drained)
 }
 
 /// Run [`drain_in_process`] in a loop until `shutdown` resolves — the in-process
@@ -348,30 +557,47 @@ where
 /// reacts with no further wiring. Swapping it for `run_relay_worker` (same shape,
 /// same subscriber) is exactly the `module split` from monolith to microservice:
 /// only the dispatcher changes, not the subscriber and not the guarantees.
-pub async fn run_in_process_dispatch_worker<R, S, Sig>(
+// This is a top-level composition entry point: it takes the independent collaborators
+// a composition root supplies by hand — the outbox reader, the subscriber registry,
+// the inbox, the unit of work, the retry policy and the dead-letter sink, plus the
+// worker config and shutdown signal. Grouping them into a struct would only move the
+// same wiring to the caller, so the argument list stands.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_in_process_dispatch_worker<R, S, U, D, Sig>(
     config: WorkerConfig,
     shutdown: Sig,
     reader: R,
     registry: SubscriberRegistry,
     inbox: S,
+    uow: U,
+    policy: RetryPolicy,
+    dead_letter: D,
 ) -> WorkerReport
 where
     R: OutboxReader + Sync,
     S: IdempotencyStore,
+    U: UnitOfWork,
+    D: DeadLetterSink,
     Sig: Future<Output = ()>,
 {
     let reader = Arc::new(reader);
     let inbox = Arc::new(inbox);
     let registry = Arc::new(registry);
+    let uow = Arc::new(uow);
+    let dead_letter = Arc::new(dead_letter);
     run_worker(config, shutdown, move || {
         // Each pass owns its clones, so the future borrows only its own locals and
         // stays `Send` across `.await` — the same shape as the relay worker.
         let reader = Arc::clone(&reader);
         let inbox = Arc::clone(&inbox);
         let registry = Arc::clone(&registry);
+        let uow = Arc::clone(&uow);
+        let dead_letter = Arc::clone(&dead_letter);
         async move {
-            let dispatched = drain_in_process(&*reader, &registry, &*inbox).await?;
-            Ok(dispatched as u64)
+            let drained =
+                drain_in_process(&*reader, &registry, &*inbox, &*uow, &policy, &*dead_letter)
+                    .await?;
+            Ok(drained as u64)
         }
     })
     .await
@@ -464,6 +690,81 @@ impl OutboxReader for InMemoryOutbox {
     }
 }
 
+/// One event the in-process driver gave up on, captured by [`InMemoryDeadLetterQueue`]:
+/// the event, how many attempts failed, and the last error rendered to a string.
+#[cfg(any(test, feature = "testing"))]
+#[derive(Clone, Debug)]
+pub struct DeadLettered {
+    /// The event that could not be dispatched after the retries were exhausted.
+    pub event: CloudEvent,
+    /// How many delivery attempts failed before it was dead-lettered.
+    pub attempts: u32,
+    /// The last error, rendered with `Display`.
+    pub error: String,
+}
+
+/// An in-memory [`DeadLetterSink`] double (behind the `testing` feature): records
+/// every dead-lettered event so a test can assert a poison event was quarantined and
+/// the choreography kept going.
+///
+/// It is the observable twin of a real dead-letter queue — [`drain_in_process`] hands
+/// it the un-dispatchable event and advances past it, so a test proves "the poison
+/// event goes to dead-letter, the next event processes" with no broker and no database.
+#[cfg(any(test, feature = "testing"))]
+#[derive(Clone, Default)]
+pub struct InMemoryDeadLetterQueue {
+    entries: Arc<Mutex<Vec<DeadLettered>>>,
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl InMemoryDeadLetterQueue {
+    /// An empty dead-letter queue.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every dead-lettered event recorded so far, oldest first.
+    #[must_use]
+    pub fn entries(&self) -> Vec<DeadLettered> {
+        self.entries
+            .lock()
+            .expect("InMemoryDeadLetterQueue poisoned")
+            .clone()
+    }
+
+    /// How many events have been dead-lettered.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries
+            .lock()
+            .expect("InMemoryDeadLetterQueue poisoned")
+            .len()
+    }
+
+    /// Whether no event has been dead-lettered yet.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl DeadLetterSink for InMemoryDeadLetterQueue {
+    async fn dead_letter(&self, event: &CloudEvent, attempts: u32, error: &str) -> PortResult<()> {
+        self.entries
+            .lock()
+            .expect("InMemoryDeadLetterQueue poisoned")
+            .push(DeadLettered {
+                event: event.clone(),
+                attempts,
+                error: error.to_owned(),
+            });
+        Ok(())
+    }
+}
+
 /// An [`EventPublisher`](seiva_ports::EventPublisher) that writes into an
 /// [`InMemoryOutbox`] (behind the `testing` feature): the publish side of the
 /// offline choreography, the in-memory stand-in for a use case writing the
@@ -543,7 +844,7 @@ impl seiva_ports::EventPublisher for InMemoryOutboxPublisher {
 mod tests {
     use super::*;
     use seiva_ports::{BoxError, EventPublisher};
-    use seiva_testing::InMemoryIdempotencyStore;
+    use seiva_testing::{InMemoryIdempotencyStore, InMemoryUnitOfWork};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A subscriber that counts how many times it was actually run — the "effect".
@@ -592,8 +893,120 @@ mod tests {
         }
     }
 
+    /// A subscriber that fails its first `fail_first` deliveries, then succeeds —
+    /// the flaky handler that proves the inbox key is un-claimed on a rolled-back
+    /// delivery (so the retry is `Fresh`, not a stuck `InProgress`). `runs` counts
+    /// successful handles.
+    #[derive(Clone)]
+    struct FlakySubscriber {
+        id: String,
+        attempts: Arc<AtomicUsize>,
+        runs: Arc<AtomicUsize>,
+        fail_first: usize,
+    }
+
+    impl FlakySubscriber {
+        fn new(id: &str, fail_first: usize) -> Self {
+            Self {
+                id: id.to_owned(),
+                attempts: Arc::new(AtomicUsize::new(0)),
+                runs: Arc::new(AtomicUsize::new(0)),
+                fail_first,
+            }
+        }
+
+        fn runs(&self) -> usize {
+            self.runs.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl EventSubscriber for FlakySubscriber {
+        fn subscriber_id(&self) -> &str {
+            &self.id
+        }
+
+        async fn handle(&self, _event: &CloudEvent) -> PortResult<()> {
+            let n = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_first {
+                return Err(BoxError::from("flaky subscriber transient failure"));
+            }
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// A subscriber that fails only for the event whose id is `poison`, so a single
+    /// poison event can be mixed with healthy ones in one outbox.
+    #[derive(Clone)]
+    struct PoisonForId {
+        id: String,
+        poison: String,
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl PoisonForId {
+        fn new(id: &str, poison: &str) -> Self {
+            Self {
+                id: id.to_owned(),
+                poison: poison.to_owned(),
+                runs: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn runs(&self) -> usize {
+            self.runs.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl EventSubscriber for PoisonForId {
+        fn subscriber_id(&self) -> &str {
+            &self.id
+        }
+
+        async fn handle(&self, event: &CloudEvent) -> PortResult<()> {
+            if event.id == self.poison {
+                return Err(BoxError::from("poison event always fails"));
+            }
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
     fn event(ty: &str, id: &str) -> CloudEvent {
         CloudEvent::new(id, "/shop/orders", ty, serde_json::Value::Null)
+    }
+
+    // ADR 0027 — compile-fence for the `Scope::Global` pinned in `dispatch`.
+    //
+    // `dispatch` runs the inbox claim + handler transaction under `Scope::Global`
+    // *because the CloudEvent envelope carries no tenant in Fase 2* (ADR 0021
+    // addendum). ADR 0027 moves the envelope toward a typed, versioned contract, and
+    // the day `seiva_messaging::CloudEvent` grows a tenant attribute that `Global`
+    // stops being obviously correct: the consume should almost certainly run under
+    // `Scope::Tenant(…)`, or a subscriber's writes would silently bypass tenant
+    // scoping.
+    //
+    // The destructuring below is **exhaustive on purpose and carries no `..`**: the
+    // moment a field is added to `CloudEvent`, this stops compiling (E0027), which
+    // turns `cargo test -p seiva-events` red and sends whoever added the field to the
+    // `Scope::Global` site in `dispatch` to pick the scope deliberately instead of
+    // inheriting `Global`. Each binding is `_`-prefixed so the fence asserts the
+    // *shape* of the envelope without constraining what the fields mean.
+    //
+    // Proof it bites: add `pub tenant: Option<String>` to `CloudEvent` with no other
+    // change and this test fails with "pattern does not mention field `tenant`".
+    #[test]
+    fn scope_global_in_dispatch_is_fenced_to_the_tenantless_envelope() {
+        let CloudEvent {
+            id: _id,
+            source: _source,
+            ty: _ty,
+            time: _time,
+            traceparent: _traceparent,
+            data: _data,
+        } = event("orders.placed", "evt-1");
     }
 
     #[tokio::test]
@@ -605,7 +1018,8 @@ mod tests {
         registry.register("orders.placed", Arc::new(shipping.clone()));
 
         let inbox = InMemoryIdempotencyStore::new();
-        dispatch(&event("orders.placed", "evt-1"), &registry, &inbox)
+        let uow = InMemoryUnitOfWork::new();
+        dispatch(&event("orders.placed", "evt-1"), &registry, &inbox, &uow)
             .await
             .unwrap();
 
@@ -626,6 +1040,7 @@ mod tests {
             &event("orders.placed", "evt-1"),
             &registry,
             &InMemoryIdempotencyStore::new(),
+            &InMemoryUnitOfWork::new(),
         )
         .await
         .unwrap();
@@ -646,9 +1061,10 @@ mod tests {
 
         // One shared inbox across both deliveries — the dedup authority.
         let inbox = InMemoryIdempotencyStore::new();
+        let uow = InMemoryUnitOfWork::new();
         let ev = event("orders.placed", "evt-1");
-        dispatch(&ev, &registry, &inbox).await.unwrap();
-        dispatch(&ev, &registry, &inbox).await.unwrap();
+        dispatch(&ev, &registry, &inbox, &uow).await.unwrap();
+        dispatch(&ev, &registry, &inbox, &uow).await.unwrap();
 
         assert_eq!(
             inventory.runs(),
@@ -665,6 +1081,7 @@ mod tests {
             &event("orders.placed", "evt-1"),
             &registry,
             &InMemoryIdempotencyStore::new(),
+            &InMemoryUnitOfWork::new(),
         )
         .await
         .unwrap();
@@ -679,10 +1096,54 @@ mod tests {
             &event("orders.placed", "evt-1"),
             &registry,
             &InMemoryIdempotencyStore::new(),
+            &InMemoryUnitOfWork::new(),
         )
         .await
         .expect_err("a failing subscriber must surface its error");
         assert!(err.to_string().contains("boom"));
+    }
+
+    // ADR 0021 Fase 2 — the transactional dispatch un-claims the inbox key on a
+    // rolled-back delivery, so a transient failure is retried `Fresh` instead of
+    // being stuck `InProgress` and silently dropped.
+    #[tokio::test]
+    async fn a_failed_delivery_unclaims_the_key_so_the_redelivery_is_fresh() {
+        // A subscriber that fails its first delivery and succeeds on the second.
+        let flaky = FlakySubscriber::new("inventory", 1);
+        let mut registry = SubscriberRegistry::new();
+        registry.register("orders.placed", Arc::new(flaky.clone()));
+
+        // One shared inbox + uow across both deliveries (the real at-least-once path).
+        let inbox = InMemoryIdempotencyStore::new();
+        let uow = InMemoryUnitOfWork::new();
+        let ev = event("orders.placed", "evt-1");
+
+        // First delivery fails; the transaction rolls back and un-claims the key.
+        let err = dispatch(&ev, &registry, &inbox, &uow)
+            .await
+            .expect_err("the first delivery fails");
+        assert!(err.to_string().contains("transient"));
+        assert_eq!(
+            flaky.runs(),
+            0,
+            "no effect committed on the failed delivery"
+        );
+
+        // Redelivery: because the key was un-claimed it is `Fresh` again, so the
+        // handler runs — in Fase 1 it would have seen a stuck `InProgress` and been
+        // skipped, silently losing the event.
+        dispatch(&ev, &registry, &inbox, &uow)
+            .await
+            .expect("the redelivery succeeds now the handler is healthy");
+        assert_eq!(
+            flaky.runs(),
+            1,
+            "the redelivery re-ran the handler exactly once"
+        );
+
+        // A further redelivery is now a no-op (the key is finished → Replay).
+        dispatch(&ev, &registry, &inbox, &uow).await.unwrap();
+        assert_eq!(flaky.runs(), 1, "a third delivery is deduped by the inbox");
     }
 
     #[tokio::test]
@@ -740,6 +1201,9 @@ mod tests {
             outbox,
             registry,
             InMemoryIdempotencyStore::new(),
+            InMemoryUnitOfWork::new(),
+            RetryPolicy::no_retry(),
+            LoggingDeadLetterSink,
         )
         .await;
 
@@ -753,5 +1217,97 @@ mod tests {
             "the report accounts for three processed items"
         );
         assert!(report.passes >= 1, "at least one pass ran");
+    }
+
+    // ADR 0021 Fase 2 — a poison event that fails every attempt is dead-lettered and
+    // the cursor advances past it, so the healthy event behind it still processes.
+    #[tokio::test]
+    async fn a_poison_event_is_dead_lettered_and_the_next_event_processes() {
+        // One subscriber that fails for the event id "poison" and succeeds otherwise.
+        let sub = PoisonForId::new("inventory", "poison");
+        let mut registry = SubscriberRegistry::new();
+        registry.register("orders.placed", Arc::new(sub.clone()));
+
+        // The outbox holds the poison event first, then a healthy one.
+        let outbox = InMemoryOutbox::new();
+        outbox.publish(event("orders.placed", "poison"));
+        outbox.publish(event("orders.placed", "good"));
+
+        let inbox = InMemoryIdempotencyStore::new();
+        let uow = InMemoryUnitOfWork::new();
+        let dlq = InMemoryDeadLetterQueue::new();
+        // Three attempts, no back-off (immediate) so the test is fast.
+        let policy = RetryPolicy::new(3, Duration::ZERO);
+
+        let drained = drain_in_process(&outbox, &registry, &inbox, &uow, &policy, &dlq)
+            .await
+            .unwrap();
+
+        // Both events left the outbox (one dispatched, one dead-lettered).
+        assert_eq!(drained, 2, "both events left the outbox this pass");
+        assert_eq!(outbox.pending(), 0, "the cursor advanced past both");
+        // The healthy event was NOT blocked by the poison one.
+        assert_eq!(sub.runs(), 1, "the event behind the poison one processed");
+        // The poison event is quarantined, with the exhausted attempt count recorded.
+        assert_eq!(dlq.len(), 1, "exactly the poison event was dead-lettered");
+        let entry = &dlq.entries()[0];
+        assert_eq!(entry.event.id, "poison");
+        assert_eq!(entry.attempts, 3, "it was tried the full policy budget");
+        assert!(entry.error.contains("poison"));
+    }
+
+    // A dead-letter sink that itself errors must NOT advance the cursor — the event
+    // is not lost, it is re-read on the next pass.
+    #[tokio::test]
+    async fn a_failing_dead_letter_sink_leaves_the_event_pending() {
+        struct RejectingSink;
+        #[async_trait]
+        impl DeadLetterSink for RejectingSink {
+            async fn dead_letter(
+                &self,
+                _event: &CloudEvent,
+                _attempts: u32,
+                _error: &str,
+            ) -> PortResult<()> {
+                Err(BoxError::from("dead-letter store is down"))
+            }
+        }
+
+        let mut registry = SubscriberRegistry::new();
+        registry.register("orders.placed", Arc::new(FailingSubscriber));
+        let outbox = InMemoryOutbox::new();
+        outbox.publish(event("orders.placed", "evt-1"));
+
+        let err = drain_in_process(
+            &outbox,
+            &registry,
+            &InMemoryIdempotencyStore::new(),
+            &InMemoryUnitOfWork::new(),
+            &RetryPolicy::no_retry(),
+            &RejectingSink,
+        )
+        .await
+        .expect_err("a dead-letter sink failure aborts the pass");
+        assert!(err.to_string().contains("dead-letter store is down"));
+        assert_eq!(
+            outbox.pending(),
+            1,
+            "the event stays pending — not lost — for the next pass"
+        );
+    }
+
+    #[test]
+    fn retry_policy_backoff_is_exponential_and_clamped() {
+        let p = RetryPolicy::new(5, Duration::from_millis(100));
+        assert_eq!(
+            p.backoff_before(1),
+            Duration::ZERO,
+            "first attempt waits none"
+        );
+        assert_eq!(p.backoff_before(2), Duration::from_millis(100));
+        assert_eq!(p.backoff_before(3), Duration::from_millis(200));
+        assert_eq!(p.backoff_before(4), Duration::from_millis(400));
+        // max_attempts is clamped to at least 1.
+        assert_eq!(RetryPolicy::new(0, Duration::ZERO).max_attempts, 1);
     }
 }

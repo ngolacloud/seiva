@@ -8,23 +8,28 @@
 //! crate — the composition root (here, the test) routes the event type to it — which
 //! is exactly the independence that lets `seiva module split` be a composition change.
 //!
-//! The three guarantees ADR 0021 demands of the in-process path are proved:
+//! The guarantees ADR 0021 demands of the in-process path are proved:
 //!
 //! - **(a)** one `orders.placed` reserves inventory exactly once;
 //! - **(b)** running the driver again over the drained outbox reserves nothing more
 //!   — proved both by the **cursor** (nothing left to read) and, under a forced
 //!   at-least-once **redelivery**, by the **inbox** (the effect is deduped);
-//! - **(c)** an `orders.placed` whose subscriber fails does **not** advance the
-//!   cursor — the event stays pending for a later retry.
+//! - **(c)** an `orders.placed` whose subscriber always fails is retried the policy's
+//!   budget and then **dead-lettered**, so the cursor advances past it rather than
+//!   the poison event blocking the queue (ADR 0021 Fase 2).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use seiva_events::{drain_in_process, EventSubscriber, InMemoryOutbox, SubscriberRegistry};
+use seiva_events::{
+    drain_in_process, EventSubscriber, InMemoryDeadLetterQueue, InMemoryOutbox, RetryPolicy,
+    SubscriberRegistry,
+};
 use seiva_messaging::CloudEvent;
 use seiva_ports::PortResult;
-use seiva_testing::InMemoryIdempotencyStore;
+use seiva_testing::{InMemoryIdempotencyStore, InMemoryUnitOfWork};
 
 /// A test-local stand-in for the `inventory` module: on `orders.placed` it "reserves
 /// stock" by incrementing a counter — the observable **effect** we assert happens
@@ -77,13 +82,18 @@ async fn orders_placed_reserves_inventory_exactly_once_across_redelivery() {
     registry.register("orders.placed", Arc::new(inventory.clone()));
     // One shared inbox across every pass — the dedup authority (ADR 0011).
     let inbox = InMemoryIdempotencyStore::new();
+    let uow = InMemoryUnitOfWork::new();
+    let policy = RetryPolicy::no_retry();
+    let dlq = InMemoryDeadLetterQueue::new();
 
     // The `orders` module publishes its domain event into the (in-memory) outbox.
     let outbox = InMemoryOutbox::new();
     outbox.publish(orders_placed("order-1"));
 
     // (a) One pass dispatches the event; inventory reserves exactly once.
-    let n = drain_in_process(&outbox, &registry, &inbox).await.unwrap();
+    let n = drain_in_process(&outbox, &registry, &inbox, &uow, &policy, &dlq)
+        .await
+        .unwrap();
     assert_eq!(n, 1, "one event was dispatched");
     assert_eq!(inventory.reserved(), 1, "inventory reserved once");
     assert_eq!(
@@ -93,7 +103,9 @@ async fn orders_placed_reserves_inventory_exactly_once_across_redelivery() {
     );
 
     // (b) cursor: draining the already-drained outbox reserves nothing more.
-    let n = drain_in_process(&outbox, &registry, &inbox).await.unwrap();
+    let n = drain_in_process(&outbox, &registry, &inbox, &uow, &policy, &dlq)
+        .await
+        .unwrap();
     assert_eq!(n, 0, "nothing left past the cursor");
     assert_eq!(inventory.reserved(), 1, "still exactly one reservation");
 
@@ -106,19 +118,26 @@ async fn orders_placed_reserves_inventory_exactly_once_across_redelivery() {
         1,
         "the redelivered event is readable again"
     );
-    let n = drain_in_process(&outbox, &registry, &inbox).await.unwrap();
+    let n = drain_in_process(&outbox, &registry, &inbox, &uow, &policy, &dlq)
+        .await
+        .unwrap();
     assert_eq!(n, 1, "the event was re-dispatched");
     assert_eq!(
         inventory.reserved(),
         1,
         "but the inbox kept the effect exactly-once under redelivery"
     );
+    assert!(
+        dlq.is_empty(),
+        "nothing was dead-lettered on the happy path"
+    );
 }
 
 #[tokio::test]
-async fn a_failing_subscriber_does_not_advance_the_cursor() {
-    // (c) A subscriber whose reservation fails: the driver surfaces the error and
-    // does NOT advance the cursor, so the event stays pending for the next pass.
+async fn an_always_failing_subscriber_is_retried_then_dead_lettered() {
+    // (c) A subscriber whose reservation always fails: the driver retries it the
+    // policy's budget, then dead-letters the event and advances the cursor — the
+    // poison event is quarantined instead of blocking the queue forever (Fase 2).
     struct FlakyInventory;
 
     #[async_trait]
@@ -135,15 +154,23 @@ async fn a_failing_subscriber_does_not_advance_the_cursor() {
     let mut registry = SubscriberRegistry::new();
     registry.register("orders.placed", Arc::new(FlakyInventory));
     let inbox = InMemoryIdempotencyStore::new();
+    let uow = InMemoryUnitOfWork::new();
+    let dlq = InMemoryDeadLetterQueue::new();
+    // Three attempts, immediate (no sleep) so the test is fast.
+    let policy = RetryPolicy::new(3, Duration::ZERO);
 
     let outbox = InMemoryOutbox::new();
     outbox.publish(orders_placed("order-1"));
 
-    let result = drain_in_process(&outbox, &registry, &inbox).await;
-    assert!(result.is_err(), "a failing subscriber surfaces its error");
+    let n = drain_in_process(&outbox, &registry, &inbox, &uow, &policy, &dlq)
+        .await
+        .expect("the poison event is dead-lettered, not propagated");
+    assert_eq!(n, 1, "the event left the outbox (dead-lettered)");
     assert_eq!(
         outbox.pending(),
-        1,
-        "the cursor did not advance; the event stays for retry"
+        0,
+        "the cursor advanced past the poison event so it cannot block the queue"
     );
+    assert_eq!(dlq.len(), 1, "the poison event was quarantined");
+    assert_eq!(dlq.entries()[0].attempts, 3, "it was tried the full budget");
 }
