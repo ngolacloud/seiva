@@ -272,6 +272,26 @@ pub trait IdempotencyStore: Send + Sync {
     /// [`begin`](Self::begin) returns [`Replay`](IdempotencyOutcome::Replay).
     async fn finish(&self, scoped_key: &str, response: &[u8]) -> PortResult<()>;
 
+    /// Un-claims an **unfinished** key — a [`Fresh`](IdempotencyOutcome::Fresh)
+    /// claim whose effect failed before [`finish`](Self::finish) — so a later
+    /// [`begin`](Self::begin) is [`Fresh`](IdempotencyOutcome::Fresh) again instead
+    /// of stuck at [`InProgress`](IdempotencyOutcome::InProgress) (ADR 0021 Fase 2).
+    ///
+    /// The default is a **no-op**: a store whose [`begin`](Self::begin) joins the
+    /// caller's [`UnitOfWork::transaction`] (the DORM gateway, where the claim is a
+    /// row written in the same `db::atomic`) un-claims automatically when that
+    /// transaction rolls back, so it needs no explicit release. A store that does
+    /// **not** share that transaction (an in-memory double, or one a caller wires
+    /// without a surrounding transaction) overrides this to drop the unfinished
+    /// claim. The caller must invoke it only for a key **it** observed
+    /// [`Fresh`](IdempotencyOutcome::Fresh) and then failed to finish — never a
+    /// `Replay`/`InProgress`/`Mismatch` key it does not own — so a concurrent
+    /// in-flight claim of the same key is never disturbed.
+    async fn release(&self, scoped_key: &str) -> PortResult<()> {
+        let _ = scoped_key;
+        Ok(())
+    }
+
     /// Deletes records whose TTL has elapsed; returns how many. A scheduled
     /// worker calls this so the store does not grow without bound. The default is
     /// a no-op (returns `0`) for stores that expire records some other way.
@@ -349,6 +369,71 @@ pub trait AuditSink: Send + Sync {
     /// Persists one audit entry. Called with an already-[`redacted`](AuditEntry::redacted)
     /// entry.
     async fn record(&self, entry: &AuditEntry) -> PortResult<()>;
+}
+
+/// A filter over the audit trail (ADR 0013): which entries a history view wants,
+/// newest first. Every set field is **AND-combined**; a `None` or empty field
+/// matches anything, so the default (all `None`, `limit` 0) asks for the most recent
+/// [`DEFAULT_LIMIT`](AuditQuery::DEFAULT_LIMIT) entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditQuery {
+    /// Match only entries by this actor subject (exact; empty/`None` = any).
+    pub actor: Option<String>,
+    /// Match only entries on this object id (exact; empty/`None` = any).
+    pub object: Option<String>,
+    /// Match only entries with this outcome, e.g. `"201"`/`"403"` (exact; empty/`None` = any).
+    pub outcome: Option<String>,
+    /// The maximum number of entries to return; `0` means
+    /// [`DEFAULT_LIMIT`](AuditQuery::DEFAULT_LIMIT). An [`AuditLog`] must never return
+    /// more than this, so a history view cannot ask for an unbounded page.
+    pub limit: u32,
+}
+
+impl AuditQuery {
+    /// The page cap applied when [`limit`](Self::limit) is `0`.
+    pub const DEFAULT_LIMIT: u32 = 100;
+
+    /// The effective limit: [`limit`](Self::limit), or [`DEFAULT_LIMIT`](Self::DEFAULT_LIMIT)
+    /// when it is `0`.
+    #[must_use]
+    pub fn effective_limit(&self) -> u32 {
+        if self.limit == 0 {
+            Self::DEFAULT_LIMIT
+        } else {
+            self.limit
+        }
+    }
+
+    /// Whether `entry` satisfies every set filter. An unset or empty filter field
+    /// matches anything; a set one must match exactly. This is the pure predicate an
+    /// [`AuditLog`] applies, factored out so the matching is unit-testable without a
+    /// store.
+    #[must_use]
+    pub fn matches(&self, entry: &AuditEntry) -> bool {
+        let str_match = |filter: &Option<String>, value: &str| match filter.as_deref() {
+            None | Some("") => true,
+            Some(wanted) => wanted == value,
+        };
+        let opt_match = |filter: &Option<String>, value: &Option<String>| match filter.as_deref() {
+            None | Some("") => true,
+            Some(wanted) => value.as_deref() == Some(wanted),
+        };
+        str_match(&self.actor, &entry.actor)
+            && opt_match(&self.object, &entry.object)
+            && str_match(&self.outcome, &entry.outcome)
+    }
+}
+
+/// The **read** side of the audit trail (ADR 0013): the history view the admin
+/// surface needs, the twin of [`AuditSink`]'s write side. An implementation returns
+/// the entries matching an [`AuditQuery`], **newest first** and **bounded** by the
+/// query's [`effective_limit`](AuditQuery::effective_limit). The base framework codes
+/// against this port; an adapter (the DORM gateway) reads the persisted entries.
+#[async_trait]
+pub trait AuditLog: Send + Sync {
+    /// Returns the entries matching `query`, newest first, capped at the query's
+    /// effective limit.
+    async fn query(&self, query: &AuditQuery) -> PortResult<Vec<AuditEntry>>;
 }
 
 /// The outcome of a rate-limit check for one client (ADR 0015).
@@ -461,5 +546,72 @@ mod tests {
         // Validate our dependency-free formatter against std's lowercase hex.
         let expected: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(format!("{id:?}"), format!("Id({expected})"));
+    }
+
+    fn audit_entry(actor: &str, object: Option<&str>, outcome: &str) -> AuditEntry {
+        AuditEntry {
+            actor: actor.to_owned(),
+            object: object.map(str::to_owned),
+            outcome: outcome.to_owned(),
+            operation: "POST /x".to_owned(),
+            ..AuditEntry::default()
+        }
+    }
+
+    #[test]
+    fn audit_query_default_matches_anything_and_caps_at_default_limit() {
+        let query = AuditQuery::default();
+        assert_eq!(query.effective_limit(), AuditQuery::DEFAULT_LIMIT);
+        assert!(query.matches(&audit_entry("alice", Some("7"), "201")));
+        assert!(query.matches(&audit_entry("", None, "")));
+    }
+
+    #[test]
+    fn audit_query_filters_are_and_combined_and_exact() {
+        let entry = audit_entry("alice", Some("7"), "403");
+
+        // Each set filter must match exactly.
+        assert!(AuditQuery {
+            actor: Some("alice".to_owned()),
+            outcome: Some("403".to_owned()),
+            ..AuditQuery::default()
+        }
+        .matches(&entry));
+        assert!(AuditQuery {
+            object: Some("7".to_owned()),
+            ..AuditQuery::default()
+        }
+        .matches(&entry));
+
+        // A mismatch on any set field rejects the entry (AND).
+        assert!(!AuditQuery {
+            actor: Some("bob".to_owned()),
+            ..AuditQuery::default()
+        }
+        .matches(&entry));
+        assert!(!AuditQuery {
+            object: Some("8".to_owned()),
+            ..AuditQuery::default()
+        }
+        .matches(&entry));
+
+        // An empty filter string is treated as "any", like `None`.
+        assert!(AuditQuery {
+            actor: Some(String::new()),
+            ..AuditQuery::default()
+        }
+        .matches(&entry));
+    }
+
+    #[test]
+    fn audit_query_effective_limit_honours_a_nonzero_request() {
+        assert_eq!(
+            AuditQuery {
+                limit: 10,
+                ..AuditQuery::default()
+            }
+            .effective_limit(),
+            10
+        );
     }
 }
