@@ -60,6 +60,10 @@ tracing = "0.1"
 # CORS enforcement: the battle-tested tower layer rather than a hand-rolled
 # preflight. Only the `cors` feature; the secure default mounts no layer at all.
 tower-http = { version = "0.6", features = ["cors", "timeout"] }
+# Per-route load control (`backpressure`): `time::timeout` bounds a route's
+# latency (504) and a `sync::Semaphore` enforces its concurrency cap (503). Only
+# the `time`/`sync` leaves — no runtime is pulled into the DORM-free library.
+tokio = { version = "1", default-features = false, features = ["time", "sync"] }
 
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.
