@@ -83,6 +83,11 @@ members = [
     # Standalone proof that `#[seiva::controller]` generates a facade-driven axum
     # router end to end (guards, versioned paths, RFC 9457). Data-layer-free.
     "crates/seiva-controller-test",
+    # Native observability (ADR 0027): the opt-in Prometheus `/metrics` exporter
+    # and OTLP tracing, installed at the composition root. The library crates
+    # record against the lightweight `metrics` facade; the heavy exporters live
+    # here behind features. DORM-free.
+    "crates/seiva-observability",
     # The runtime that boots a Seiva service (the `dorm-api` replacement): the
     # HTTP app (controllers + /openapi.json + /health), a worker host and
     # 12-factor config with graceful shutdown. Data-layer-free (the DORM outbox

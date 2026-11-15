@@ -25,10 +25,25 @@ homepage = "https://github.com/ngolacloud/seiva"
 rust-version = "1.75"
 description = "Delonix Seiva — the service runtime: mounts the facade-driven HTTP app, runs a worker host, reads 12-factor config, shuts down gracefully. DORM-free."
 
+[features]
+# Native observability (ADR 0027), wired ONLY here at the composition root so the
+# default build links no exporter and pays nothing. `metrics` serves a Prometheus
+# `/metrics` scrape surface on a separate bind (`Server::with_metrics`);
+# `tracing-otlp` installs the OpenTelemetry OTLP span exporter
+# (`Server::with_tracing`). Named `tracing-otlp` (not `tracing`) to avoid clashing
+# with the `tracing` crate dependency.
+default = []
+metrics = ["dep:seiva-observability", "seiva-observability/metrics"]
+tracing-otlp = ["dep:seiva-observability", "seiva-observability/tracing"]
+
 [dependencies]
 # The HTTP transport: `router(health)` already merges the controllers, the health
 # endpoints and `/openapi.json`; `Health` is the Starting/Ready/Draining handle.
 seiva-http = { version = "0.1.0", path = "../seiva-http" }
+# The opt-in observability exporters (ADR 0027), pulled in only by the `metrics` /
+# `tracing-otlp` features above. default-features OFF so each feature turns on
+# exactly the exporter it needs. DORM-free, like the rest of this crate.
+seiva-observability = { version = "0.1.0", path = "../seiva-observability", default-features = false, optional = true }
 # Typed 12-factor configuration + the AppEnv production-safety guard.
 seiva-config = { version = "0.1.0", path = "../seiva-config" }
 # The framework crate: its worker runtime (`worker::run_worker`) drives the host.
@@ -36,7 +51,7 @@ seiva-config = { version = "0.1.0", path = "../seiva-config" }
 delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
 
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros", "sync"] }
 # Structured logging to stdout (12-factor: logs are an event stream). `json` for
 # machine-parseable lines, `env-filter` to honour RUST_LOG.
 tracing = "0.1"

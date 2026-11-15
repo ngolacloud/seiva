@@ -1,0 +1,72 @@
+# seiva-observability — the framework's observability composition root (ADR 0027).
+#
+# This crate installs the *exporters* a service opts into: a Prometheus recorder
+# (so the `metrics` facade the library crates record against gains a backend and
+# a `/metrics` scrape surface) and, behind a second feature, an OpenTelemetry
+# OTLP tracing layer. The library crates (`seiva-http`, the worker) record against
+# the lightweight `metrics` facade unconditionally — a no-op without a recorder;
+# the HEAVY runtime (the Prometheus render store, the OTLP exporter + its async
+# pipeline) lives HERE, behind features, wired only at the `seiva-server` root.
+# A build that enables neither feature links no exporter and pays nothing.
+#
+# DORM-FREE: this crate links no `dorm-*` crate and no DORM-git-coupled Seiva
+# crate, so it is a plain workspace member built by the default (tokenless) CI.
+
+[package]
+name = "seiva-observability"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+description = "Delonix Seiva — native observability (ADR 0027): opt-in Prometheus /metrics exporter and OpenTelemetry OTLP tracing, wired at the composition root. DORM-free."
+
+[features]
+# The Prometheus path is the light default: it installs a recorder and serves a
+# `/metrics` scrape surface on a separate bind. On by default so a plain
+# `cargo build -p seiva-observability` builds the primary exporter.
+default = ["metrics"]
+# Prometheus metrics: a recorder for the `metrics` facade + a `/metrics` router.
+metrics = ["dep:metrics", "dep:metrics-exporter-prometheus", "dep:axum", "dep:tokio"]
+# OpenTelemetry OTLP tracing: a `tracing-opentelemetry` layer exporting spans over
+# OTLP. Opt-in (heavier: pulls the OpenTelemetry SDK + its async batch pipeline).
+tracing = [
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:tracing-opentelemetry",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tokio",
+]
+
+[dependencies]
+# --- metrics feature ---
+# The facade (same crate the library crates record against) — needed here only to
+# name the render handle's type; the recorder is the exporter below.
+metrics = { version = "0.24", optional = true }
+# The Prometheus recorder + text renderer. default-features OFF: we want only the
+# in-process recorder and `handle.render()`, NOT the crate's own hyper HTTP
+# listener / push-gateway (we serve `/metrics` on the framework's own axum stack).
+metrics-exporter-prometheus = { version = "0.17", default-features = false, optional = true }
+# Serve `/metrics` on a dedicated admin bind, reusing the same transport stack the
+# rest of the framework uses (no second HTTP implementation).
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", default-features = false, features = ["net", "rt"], optional = true }
+
+# --- tracing feature --- (versions pinned to the coherent OTLP set the repo
+# already resolves: opentelemetry 0.32 ↔ tracing-opentelemetry 0.33).
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"], optional = true }
+tracing-opentelemetry = { version = "0.33", optional = true }
+opentelemetry = { version = "0.32", optional = true }
+# No `rt-tokio`: the 0.32 batch span processor runs on a dedicated thread, so no
+# async-runtime feature is needed; the tonic exporter sends from the server's
+# tokio runtime.
+opentelemetry_sdk = { version = "0.32", optional = true }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "net"] }

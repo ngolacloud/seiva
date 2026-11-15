@@ -107,6 +107,12 @@ pub const EXPOSE_ERROR_DETAILS_VAR: &str = "SEIVA_EXPOSE_ERROR_DETAILS";
 /// is set: loopback only, so an unconfigured service is not exposed off-box.
 pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:8080";
 
+/// The environment variable holding the Prometheus `/metrics` bind address
+/// (`host:port`) — the **separate** admin scrape surface (ADR 0027), kept off the
+/// public API port. Unset (or empty) means no metrics exporter. Honoured only when
+/// the binary is built with the `metrics` feature; see `Server::with_metrics`.
+pub const METRICS_ADDR_VAR: &str = "SEIVA_METRICS_ADDR";
+
 /// Comma-separated allowlist of cross-origin (CORS) origins, e.g.
 /// `https://app.example.com,https://admin.example.com`. Unset or empty means
 /// same-origin only (no CORS layer). See [`HttpSecurity::cors_allowed_origins`].
@@ -357,6 +363,12 @@ pub enum ServeError {
     /// route prefix, which would panic `Router::merge`. Carries the colliding
     /// `"<version>/<resource>"` prefixes so the operator can rename a facade.
     RouteCollision(Vec<String>),
+    /// An opt-in observability exporter (ADR 0027) could not be installed — the
+    /// Prometheus recorder (already installed, or a bad bucket config) or the OTLP
+    /// tracing pipeline. A startup error: a service that asked for metrics/tracing
+    /// refuses to boot silently blind. Only constructed under the `metrics` /
+    /// `tracing-otlp` features.
+    Observability(String),
 }
 
 impl fmt::Display for ServeError {
@@ -371,6 +383,9 @@ impl fmt::Display for ServeError {
                  rename a facade so each resolves to a distinct `<version>/<resource>`",
                 prefixes.join(", ")
             ),
+            ServeError::Observability(m) => {
+                write!(f, "failed to install an observability exporter: {m}")
+            }
         }
     }
 }
@@ -379,7 +394,9 @@ impl std::error::Error for ServeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ServeError::Bind(e) | ServeError::Serve(e) => Some(e),
-            ServeError::Identity(_) | ServeError::RouteCollision(_) => None,
+            ServeError::Identity(_)
+            | ServeError::RouteCollision(_)
+            | ServeError::Observability(_) => None,
         }
     }
 }
@@ -507,6 +524,163 @@ pub async fn serve_router(
     .map_err(ServeError::Serve)?;
 
     Ok(())
+}
+
+/// A Seiva service with **opt-in observability** (ADR 0027).
+///
+/// [`serve`] is the zero-config path; this builder adds the exporters a service
+/// opts into, wired **only here at the composition root** so the default build
+/// links none. A `Server` with neither hook set behaves exactly like [`serve`]:
+/// today's JSON logs, no exporter.
+///
+/// - `with_metrics` (feature `metrics`) serves a Prometheus `/metrics` scrape
+///   surface on a **separate** bind — an admin port, off the public API surface
+///   and exempt from auth/rate-limiting like the health probes. The library crates
+///   already record against the `metrics` facade (`seiva_http::track_metrics`);
+///   this installs the recorder that gives those records a backend.
+/// - `with_tracing` (feature `tracing-otlp`) installs the OpenTelemetry OTLP span
+///   exporter and the W3C trace-context propagator.
+///
+/// # Example
+///
+/// ```no_run
+/// # #[cfg(feature = "metrics")]
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// use seiva_server::{Server, ServerConfig};
+///
+/// let config = ServerConfig::from_process_env()?;
+/// Server::new(config)
+///     .with_metrics("127.0.0.1:9090".parse()?)
+///     .serve(async {})
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct Server {
+    config: ServerConfig,
+    /// The Prometheus `/metrics` bind, when metrics are opted in.
+    #[cfg(feature = "metrics")]
+    metrics_addr: Option<SocketAddr>,
+    /// The OTLP tracing configuration, when tracing is opted in.
+    #[cfg(feature = "tracing-otlp")]
+    tracing: Option<seiva_observability::tracing::TracingConfig>,
+}
+
+impl Server {
+    /// A server over `config` with no observability exporter opted in (equivalent
+    /// to [`serve`] until a hook is added).
+    #[must_use]
+    pub fn new(config: ServerConfig) -> Self {
+        Self {
+            config,
+            #[cfg(feature = "metrics")]
+            metrics_addr: None,
+            #[cfg(feature = "tracing-otlp")]
+            tracing: None,
+        }
+    }
+
+    /// Opt in to the Prometheus `/metrics` exporter, served on `addr` — a
+    /// **separate** bind from the public API (ADR 0027). Installs the process-wide
+    /// recorder at [`serve`](Server::serve) time.
+    #[cfg(feature = "metrics")]
+    #[must_use]
+    pub fn with_metrics(mut self, addr: SocketAddr) -> Self {
+        self.metrics_addr = Some(addr);
+        self
+    }
+
+    /// Opt in to OpenTelemetry OTLP tracing (ADR 0027). The exporter endpoint,
+    /// protocol and sampling come from the standard `OTEL_*` environment; `config`
+    /// carries only the in-code overrides (the service name).
+    ///
+    /// When tracing is opted in, the OTLP subscriber is installed at
+    /// [`serve`](Server::serve) time, so the binary must **not** also call
+    /// [`observability::init`] (the first global subscriber wins).
+    #[cfg(feature = "tracing-otlp")]
+    #[must_use]
+    pub fn with_tracing(mut self, config: seiva_observability::tracing::TracingConfig) -> Self {
+        self.tracing = Some(config);
+        self
+    }
+
+    /// Serves the framework HTTP surface until `shutdown` resolves, alongside the
+    /// opted-in exporters, then drains.
+    ///
+    /// The one `shutdown` is fanned out to the main server and the (optional)
+    /// metrics server, so a single signal stops both. The main server is exactly
+    /// [`serve`]; the metrics server runs on its own task and bind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServeError::Observability`] if an opted-in exporter cannot be
+    /// installed, or the same errors as [`serve`] for the main server.
+    pub async fn serve(
+        self,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> Result<(), ServeError> {
+        // Fan one shutdown out to every server. `watch` holds the latch; a task
+        // flips it when `shutdown` resolves.
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            shutdown.await;
+            let _ = tx.send(true);
+        });
+
+        // Install the OTLP tracing pipeline before serving, replacing the default
+        // JSON-only subscriber. Held until after serving so its batch exporter can
+        // flush the span tail on shutdown.
+        #[cfg(feature = "tracing-otlp")]
+        let tracing_provider = match self.tracing {
+            Some(config) => Some(
+                seiva_observability::tracing::init(config)
+                    .map_err(|e| ServeError::Observability(e.to_string()))?,
+            ),
+            None => None,
+        };
+
+        // The Prometheus exporter on its own bind, sharing the shutdown latch. The
+        // recorder is process-global and install-once; a failure (already present,
+        // or a bad bucket config) fails the boot rather than serving blind.
+        #[cfg(feature = "metrics")]
+        if let Some(metrics_addr) = self.metrics_addr {
+            let handle = seiva_observability::metrics::install_recorder().map_err(|e| {
+                ServeError::Observability(format!("installing the Prometheus recorder: {e}"))
+            })?;
+            let mut metrics_rx = rx.clone();
+            let metrics_shutdown = async move {
+                let _ = metrics_rx.wait_for(|stop| *stop).await;
+            };
+            tokio::spawn(async move {
+                if let Err(error) = seiva_observability::metrics::serve_metrics(
+                    metrics_addr,
+                    handle,
+                    metrics_shutdown,
+                )
+                .await
+                {
+                    tracing::error!(%error, "the Prometheus /metrics exporter failed");
+                }
+            });
+            tracing::info!(addr = %metrics_addr, "serving Prometheus /metrics on a separate bind");
+        }
+
+        // The main server derives its shutdown from the same latch.
+        let mut main_rx = rx;
+        let main_shutdown = async move {
+            let _ = main_rx.wait_for(|stop| *stop).await;
+        };
+        let result = serve(self.config, main_shutdown).await;
+
+        // Flush and shut the span exporter down so the trailing spans are exported.
+        #[cfg(feature = "tracing-otlp")]
+        if let Some(provider) = tracing_provider {
+            let _ = provider.shutdown();
+        }
+
+        result
+    }
 }
 
 /// Resolves once the process is asked to shut down: Ctrl-C (SIGINT) on every

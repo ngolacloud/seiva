@@ -37,6 +37,7 @@ pub mod docs;
 pub mod guard;
 pub mod health;
 pub mod idempotency;
+pub mod metrics;
 pub mod problem;
 pub mod rate_limit;
 pub mod request_id;
@@ -62,6 +63,7 @@ pub use idempotency::{
     fingerprint, in_progress_problem, mismatch_problem, scoped_key, IdempotencyKey,
     OptionalIdempotencyKey, IDEMPOTENCY_HEADER, MAX_KEY_LEN,
 };
+pub use metrics::{track_metrics, REQUESTS_IN_FLIGHT, REQUESTS_TOTAL, REQUEST_DURATION_SECONDS};
 pub use problem::{Problem, ProblemResponse, PROBLEM_JSON};
 pub use rate_limit::{
     rate_limit, rate_limit_with_store, DistributedRateLimit, RateLimit, RateLimiter,
@@ -293,6 +295,14 @@ fn apply_framework_layers(
 
     // Outermost: so a short-circuited response (a 429, a 401, a CORS preflight)
     // still leaves through the security headers and gets a correlation id.
-    app.layer(from_fn(security_headers))
-        .layer(from_fn(request_id))
+    app = app
+        .layer(from_fn(security_headers))
+        .layer(from_fn(request_id));
+
+    // The metrics layer is the very outermost so its latency histogram and
+    // in-flight gauge measure the WHOLE handling (rate limit, auth, route). It
+    // reads the matched route TEMPLATE for a low-cardinality label and is a no-op
+    // until a recorder is installed at the root (ADR 0027); health probes are
+    // exempt inside the middleware.
+    app.layer(from_fn(metrics::track_metrics))
 }
