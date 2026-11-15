@@ -38,6 +38,9 @@ tracing = "0.1"
 # The worker tests drive the loop on a current-thread runtime and signal
 # shutdown over a oneshot.
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+# The typed-event test (`event::tests`) publishes through the in-memory
+# `RecordingEventPublisher` to prove `publish_event` carries the declared topic.
+seiva-testing = { workspace = true }
 
 [features]
 # DORM wired in by default, but as a feature so a project whose every module
