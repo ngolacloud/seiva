@@ -15,6 +15,7 @@ seiva-contract = { path = "../../../../crates/seiva-contract" }
 seiva-http = { path = "../../../../crates/seiva-http" }
 serde = { workspace = true }
 # For `StatusCode` in the `From<OrdersError> for Problem` mapping (the `409`
-# idempotency conflict). `seiva-http` already pulls axum; naming it here keeps the
-# status constant in the facade's own error mapping.
-axum = "0.8"
+# idempotency conflict). `Problem` carries an `http::StatusCode`, so the facade
+# names the pure `http` types crate — NOT `axum` — keeping the versioned contract
+# free of any transport runtime (ADR 0003; enforced by `seiva lint`).
+http = "1"

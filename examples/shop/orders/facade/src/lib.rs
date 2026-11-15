@@ -13,8 +13,8 @@
 
 #![allow(async_fn_in_trait)]
 
-use axum::http::StatusCode;
 use delonix_seiva::{facade, WireId, WireSchema};
+use http::StatusCode;
 use seiva_contract::{Problem, Validate, ValidationError};
 // `Ctx` (the request context: principal, tenant, idempotency key) is a transport
 // concept and stays in `seiva-http`; a facade opts into it only when the use case

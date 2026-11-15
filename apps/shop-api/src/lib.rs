@@ -38,9 +38,13 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use seiva_events::{EventSubscriber, InMemoryOutbox, InMemoryOutboxPublisher, SubscriberRegistry};
+use seiva_events::{
+    run_in_process_dispatch_worker, EventSubscriber, InMemoryOutbox, InMemoryOutboxPublisher,
+    LoggingDeadLetterSink, RetryPolicy, SubscriberRegistry, WorkerConfig,
+};
 use seiva_http::{
     router_with_modules, Authenticator, Health, HttpSecurity, Principal, TokenAuthenticator,
 };
@@ -179,12 +183,55 @@ pub struct BuiltApp {
     pub health: Health,
 }
 
+impl BuiltApp {
+    /// Spawn the in-process dispatch worker over the SHARED outbox/registry/inbox, so
+    /// the choreography progresses on its own while the service runs — the production
+    /// wiring of ADR 0021 Fase 2, not a per-test `drain_in_process` call.
+    ///
+    /// The worker polls the outbox on a short interval and, for each `orders.placed`,
+    /// runs the [`InventorySubscriber`] inside a [`UnitOfWork`](seiva_ports::UnitOfWork)
+    /// transaction (claim → reserve → mark together); a handler that keeps failing is
+    /// retried per the [`RetryPolicy`] and then dead-lettered through
+    /// [`LoggingDeadLetterSink`], so a poison order never blocks the ones behind it.
+    /// It shares state with the handles on `self` (the in-memory doubles clone their
+    /// inner `Arc`), so a stock reservation the worker makes is visible to the HTTP
+    /// controller immediately.
+    ///
+    /// Shutdown is tied to the process: the returned [`JoinHandle`](tokio::task::JoinHandle)
+    /// runs until the tokio runtime is dropped. `main` calls this before serving; an
+    /// e2e test calls it to observe the choreography advance with no manual drain.
+    pub fn spawn_dispatch_worker(&self) -> tokio::task::JoinHandle<seiva_events::WorkerReport> {
+        // The in-memory doubles are `Clone` and share their inner `Arc`, so these
+        // clones drive the SAME outbox/inbox/registry the HTTP side holds.
+        let reader = (*self.outbox).clone();
+        let registry = self.registry.clone();
+        let inbox = (*self.inbox).clone();
+        tokio::spawn(run_in_process_dispatch_worker(
+            // A short interval keeps the choreography snappy; `drain_threshold` lets a
+            // backlog drain straight through without waiting the interval each time.
+            WorkerConfig::new("shop-api-in-process-dispatch", Duration::from_millis(25))
+                .drain_fast_at(1),
+            // Runs for the life of the process (serve_router serves until killed).
+            std::future::pending::<()>(),
+            reader,
+            registry,
+            inbox,
+            // The dispatch-level transaction bookkeeping; the subscriber reserves
+            // through its own unit of work over the shared stock.
+            InMemoryUnitOfWork::new(),
+            RetryPolicy::default(),
+            LoggingDeadLetterSink,
+        ))
+    }
+}
+
 /// Composes the shop service and the live `orders.placed → inventory.reserved`
 /// choreography, returning the router and the handles that drive and observe it.
 ///
 /// See the [module docs](self) for how the stock is shared and the publisher
-/// injected. The returned [`BuiltApp`] is ready to serve; the choreography only
-/// progresses when a caller drains [`BuiltApp::outbox`].
+/// injected. The returned [`BuiltApp`] is ready to serve; call
+/// [`BuiltApp::spawn_dispatch_worker`] (as `main` does) to make the choreography
+/// progress on its own, or drain [`BuiltApp::outbox`] by hand in a test.
 #[must_use]
 pub fn build_app() -> BuiltApp {
     // One shared stock state; one shared outbox; one shared inbox.

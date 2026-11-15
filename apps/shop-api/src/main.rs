@@ -18,8 +18,9 @@
 //! A valid demo bearer is `shop-token` → a principal holding every shop permission.
 //! Bind address from `SHOP_API_ADDR` (default `127.0.0.1:8090`). Runs until killed.
 //!
-//! The in-process outbox drain (the choreography's driver) is exercised by
-//! `tests/choreography_e2e.rs`; this binary serves the HTTP surface.
+//! The in-process dispatch worker is spawned here (ADR 0021 Fase 2): with the service
+//! running, a `POST /v1/orders/place` reaches `inventory.reserved` on its own — no
+//! manual `drain_in_process` call. `tests/choreography_e2e.rs` proves that progress.
 
 use std::net::SocketAddr;
 
@@ -29,6 +30,11 @@ use shop_api::build_app;
 #[tokio::main]
 async fn main() {
     let app = build_app();
+
+    // Make the choreography progress on its own: the in-process dispatch worker drains
+    // the outbox continuously, so a placed order reserves inventory with no further
+    // wiring (ADR 0021 Fase 2). It runs for the life of the process.
+    let _dispatch_worker = app.spawn_dispatch_worker();
 
     let addr: SocketAddr = std::env::var("SHOP_API_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8090".to_owned())

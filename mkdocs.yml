@@ -325,4 +325,7 @@ nav:
           - 0021 · In-process event bus and choreography: adr/0021-in-process-event-bus-and-choreography.md
           - 0022 · Seed and demo data as CSV: adr/0022-seed-and-demo-data-as-csv.md
           - 0024 · Project kinds (--kind): adr/0024-project-kinds.md
+          - 0025 · WireSchema serde fidelity: adr/0025-wire-schema-serde-fidelity.md
+          - 0026 · Per-route load control: adr/0026-per-route-load-control.md
+          - 0027 · Typed event contract: adr/0027-typed-event-contract.md
   - API reference: https://ngolacloud.github.io/seiva/api/

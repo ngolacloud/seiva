@@ -31,7 +31,16 @@ dorm-core = "0.6"
 serde_json = "1"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+# `rt-multi-thread` so the live transactional proof can drive the DORM gateway's
+# pooled transaction (`DormUnitOfWork`) on a real runtime, like the other DORM
+# e2e tests; the offline tests stay on the current-thread default.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 # The in-memory idempotency double, so the gated live test can drive the driver's
 # inbox without a DORM-backed store (the DORM store lives in seiva-data-dorm).
 seiva-testing = { path = "../seiva-testing" }
+# The DORM-backed ports (`DormUnitOfWork` + `DormIdempotencyStore`), so the gated
+# live proof can show the inbox claim sharing the handler's real DORM transaction
+# — the Fase 2 transactional guarantee the in-memory doubles cannot exercise
+# (ADR 0021 addendum). This crate, like `seiva-outbox-relay`, is excluded from the
+# default workspace, so this dev-dep does not enter the DORM-free build.
+seiva-data-dorm = { path = "../seiva-data-dorm" }

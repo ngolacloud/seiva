@@ -65,6 +65,23 @@ Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`
     (`the_worker_drains_the_outbox_and_stops_on_shutdown`) e **live**
     (`live_in_process_worker_drains_the_dorm_outbox`, topic dedicado p/ isolar o
     cursor). Fecha o 0021 por completo.
+  - **F3 (FEITA, 2026-11-13) — durabilidade (ADR 0021 Adenda Fase 2).** Três
+    lacunas fechadas: (1) o `dispatch` recebe `UnitOfWork` e corre
+    `claim→handle→finish` numa transacção — um rollback **des-reclama** a chave de
+    inbox (novo `IdempotencyStore::release`, default no-op; DORM desfaz no rollback,
+    a dupla in-memory sobrepõe), corrigindo o bug de a falha transitória deixar a
+    chave presa em `InProgress` e o evento ser silenciosamente descartado; (2) o
+    `drain_in_process` ganha `RetryPolicy` (max_attempts + back-off exponencial) e
+    desvio para `DeadLetterSink` (`LoggingDeadLetterSink` default,
+    `InMemoryDeadLetterQueue` p/ prova), para um evento venenoso não bloquear a fila;
+    (3) `apps/shop-api` monta `run_in_process_dispatch_worker` no `build_app`
+    (`BuiltApp::spawn_dispatch_worker`) e no `main`, por isso a coreografia progride
+    com a app a correr. Provas: offline
+    `a_failed_delivery_unclaims_the_key_so_the_redelivery_is_fresh`,
+    `a_poison_event_is_dead_lettered_and_the_next_event_processes`,
+    `an_always_failing_subscriber_is_retried_then_dead_lettered`; e2e
+    `placing_an_order_reserves_stock_through_the_spawned_dispatch_worker`; **binário
+    vivo** (POST order → worker reserva → `available` 10→7, sem drain manual).
 
 ## Estado (2026-11-07) — ids no fio como strings (ADR 0018)
 

@@ -254,10 +254,10 @@ mod tests {
     use std::sync::Arc;
 
     use seiva_events::{
-        drain_in_process, run_in_process_dispatch_worker, EventSubscriber, SubscriberRegistry,
-        WorkerConfig,
+        drain_in_process, run_in_process_dispatch_worker, EventSubscriber, LoggingDeadLetterSink,
+        RetryPolicy, SubscriberRegistry, WorkerConfig,
     };
-    use seiva_testing::InMemoryIdempotencyStore;
+    use seiva_testing::{InMemoryIdempotencyStore, InMemoryUnitOfWork};
 
     /// A test subscriber that "reserves stock" by counting its runs.
     struct Counting(Arc<AtomicUsize>);
@@ -322,14 +322,20 @@ mod tests {
             let mut registry = SubscriberRegistry::new();
             registry.register(topic, Arc::new(Counting(runs.clone())));
             let inbox = InMemoryIdempotencyStore::new();
+            // The dispatch transaction + poison-event policy (ADR 0021 Fase 2). This
+            // live proof uses the in-memory inbox + UoW; the fully transactional claim
+            // (shared with the DORM session) is covered by the offline dispatch tests.
+            let uow = InMemoryUnitOfWork::new();
+            let policy = RetryPolicy::no_retry();
+            let dlq = LoggingDeadLetterSink;
 
-            let n = drain_in_process(&reader, &registry, &inbox)
+            let n = drain_in_process(&reader, &registry, &inbox, &uow, &policy, &dlq)
                 .await
                 .expect("the first drain pass succeeds");
             assert_eq!(n, 1, "one event drained");
             assert_eq!(runs.load(Ordering::SeqCst), 1, "inventory reserved once");
 
-            let n = drain_in_process(&reader, &registry, &inbox)
+            let n = drain_in_process(&reader, &registry, &inbox, &uow, &policy, &dlq)
                 .await
                 .expect("the second drain pass succeeds");
             assert_eq!(n, 0, "the cursor advanced; nothing left to drain");
@@ -407,6 +413,9 @@ mod tests {
                 reader,
                 registry,
                 inbox,
+                InMemoryUnitOfWork::new(),
+                RetryPolicy::no_retry(),
+                LoggingDeadLetterSink,
             )
             .await;
 
@@ -418,6 +427,211 @@ mod tests {
                 runs.load(Ordering::SeqCst),
                 2,
                 "both orders were reserved exactly once"
+            );
+        })
+        .await;
+    }
+
+    /// A subscriber that **fails its first delivery and succeeds on the retry**,
+    /// writing a business row into `proof_table` inside the dispatch transaction on
+    /// every call (recording which attempt wrote it). The failed attempt's row must
+    /// vanish with the rollback and only the successful retry's row survive — the
+    /// direct evidence that the business write, the inbox claim and `finish` share
+    /// one transaction (ADR 0021 Fase 2).
+    struct FailOnceThenSucceed {
+        calls: Arc<AtomicUsize>,
+        proof_table: &'static str,
+    }
+
+    #[async_trait]
+    impl EventSubscriber for FailOnceThenSucceed {
+        fn subscriber_id(&self) -> &str {
+            "inventory-rollback"
+        }
+
+        async fn handle(&self, _event: &CloudEvent) -> PortResult<()> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            // A real business write in the SAME ambient DORM session the dispatch
+            // transaction opened — so it commits or rolls back with the inbox claim.
+            db::run(
+                &format!("INSERT INTO {} (call_no) VALUES ($1)", self.proof_table),
+                &[Value::I64(call as i64)],
+            )
+            .await
+            .map_err(boxed)?;
+            if call == 1 {
+                // Fail AFTER the write, so the rollback must undo both the business
+                // row and the inbox claim this transaction took `Fresh`.
+                return Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    "injected failure on the first delivery",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    /// The **transactional** Fase 2 proof over real PostgreSQL: unlike the two tests
+    /// above (which drive the driver with the in-memory UoW/inbox that only share a
+    /// transaction by construction), this one injects the real [`DormUnitOfWork`] and
+    /// [`DormIdempotencyStore`], so the inbox claim is a row written in the handler's
+    /// own `db::atomic`.
+    ///
+    /// A subscriber fails its first delivery and succeeds on the retry (a
+    /// two-attempt [`RetryPolicy`]). The proof is in what survives the rollback:
+    ///
+    /// - the handler runs **twice** — so the retry's `begin` returned `Fresh`, which
+    ///   can only happen if the first attempt's rollback *un-claimed* the key (a
+    ///   stuck `InProgress` would have skipped the retry silently, running the
+    ///   handler once);
+    /// - exactly **one** business row commits, and it is the retry's (`call_no = 2`)
+    ///   — the failed attempt's row rolled back with its inbox claim.
+    ///
+    /// The DORM store's [`release`](seiva_ports::IdempotencyStore::release) is the
+    /// default no-op, so the un-claim here is the transaction rollback alone — the
+    /// guarantee the in-memory double cannot exercise. Gated on `SEIVA_DORM_TEST_DSN`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_failed_handler_unclaims_inbox_on_dorm_rollback() {
+        use seiva_data_dorm::{idempotency_migrations, DormIdempotencyStore, DormUnitOfWork};
+
+        let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+            eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the live rollback-unclaims proof");
+            return;
+        };
+
+        let topic = "orders.rollback.placed";
+        let consumer = "inventory-rollback-cursor";
+        let subscriber_id = "inventory-rollback";
+        let event_id = "rollback-order-1";
+        let proof_table = "seiva_outbox_rollback_proof";
+
+        // The unit of work opens its OWN session/transaction per dispatch, so it funds
+        // itself from a dedicated handle; the outer session below drives the reader,
+        // the setup DDL and the final assertions. Two handles, one database.
+        let uow = DormUnitOfWork::new(
+            dorm_core::db::Database::connect(&dsn, None, false)
+                .expect("connect the unit-of-work handle"),
+        );
+
+        let ambient = Arc::new(
+            dorm_core::db::Database::connect(&dsn, None, false)
+                .expect("connect the ambient/reader handle"),
+        );
+        dorm_core::db::with_session(ambient, async move {
+            // Schema: the outbox, the durable inbox, and a scratch business table.
+            for ddl in dorm_outbox::migrations() {
+                db::run_ddl(&ddl).await.expect("outbox migrations apply");
+            }
+            for ddl in idempotency_migrations() {
+                db::run_ddl(&ddl).await.expect("inbox migrations apply");
+            }
+            db::run_ddl(&format!("DROP TABLE IF EXISTS {proof_table}"))
+                .await
+                .expect("drop the scratch proof table");
+            db::run_ddl(&format!(
+                "CREATE TABLE {proof_table} (id bigserial PRIMARY KEY, call_no bigint NOT NULL)"
+            ))
+            .await
+            .expect("create the scratch proof table");
+
+            // Start from clean state so a re-run on a shared database proves the same
+            // thing: no leftover event, cursor or inbox claim from a prior run.
+            let key = seiva_ports::inbox_key(subscriber_id, event_id);
+            db::run(
+                &format!(
+                    "DELETE FROM {} WHERE key = $1",
+                    dorm_core::idempotency::TABLE
+                ),
+                &[Value::Text(key.clone())],
+            )
+            .await
+            .expect("clear any prior inbox claim");
+            db::run(
+                &format!("DELETE FROM {CURSOR} WHERE topic = $1"),
+                &[Value::Text(topic.to_string())],
+            )
+            .await
+            .expect("clear any prior cursor");
+            db::run(
+                &format!("DELETE FROM {OUTBOX} WHERE topic = $1"),
+                &[Value::Text(topic.to_string())],
+            )
+            .await
+            .expect("clear any prior outbox rows");
+
+            // Publish one order transactionally into the real outbox.
+            let event = CloudEvent::new(
+                event_id,
+                "/shop/orders",
+                topic,
+                serde_json::json!({ "order_id": event_id }),
+            );
+            db::atomic(move |_tx| async move {
+                dorm_outbox::publish(topic, &event.to_json()).await?;
+                Ok(())
+            })
+            .await
+            .expect("publish into the outbox");
+
+            // Drive the driver with the REAL DORM ports and a fail-once subscriber.
+            let reader = DormOutboxReader::new(consumer, topic);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let mut registry = SubscriberRegistry::new();
+            registry.register(
+                topic,
+                Arc::new(FailOnceThenSucceed {
+                    calls: calls.clone(),
+                    proof_table,
+                }),
+            );
+            let inbox = DormIdempotencyStore;
+            // Two attempts, no back-off: attempt 1 fails and rolls back, attempt 2 must
+            // see the key `Fresh` again and succeed — all within this one drain pass.
+            let policy = RetryPolicy::new(2, std::time::Duration::ZERO);
+            let dlq = LoggingDeadLetterSink;
+
+            let n = drain_in_process(&reader, &registry, &inbox, &uow, &policy, &dlq)
+                .await
+                .expect("the drain pass succeeds (the retry absorbs the first failure)");
+
+            assert_eq!(n, 1, "the one event was drained (via its retry)");
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                2,
+                "the handler ran twice: the retry's begin was Fresh, so the first \
+                 attempt's rollback un-claimed the inbox key (a stuck InProgress would \
+                 have run the handler only once)"
+            );
+
+            // Exactly one business row, and it is the RETRY's — the failed attempt's
+            // row rolled back together with its inbox claim (one shared transaction).
+            let rows = db::sql(
+                &format!("SELECT call_no FROM {proof_table} ORDER BY id"),
+                &[],
+            )
+            .await
+            .expect("read the proof table");
+            assert_eq!(rows.len(), 1, "only the successful retry's row committed");
+            assert_eq!(
+                rows[0].try_get::<i64>(0).expect("call_no"),
+                2,
+                "the surviving row is from the second (successful) attempt"
+            );
+
+            // The inbox claim committed as done, so a genuine redelivery now replays.
+            let claim = db::sql(
+                &format!(
+                    "SELECT status FROM {} WHERE key = $1",
+                    dorm_core::idempotency::TABLE
+                ),
+                &[Value::Text(seiva_ports::inbox_key(subscriber_id, event_id))],
+            )
+            .await
+            .expect("read the inbox claim");
+            assert_eq!(claim.len(), 1, "the inbox key is present after success");
+            assert_eq!(
+                claim[0].try_get::<String>(0).expect("status"),
+                "done",
+                "the committed claim is marked done"
             );
         })
         .await;

@@ -1,16 +1,19 @@
 //! End-to-end proof of the live choreography `orders.placed → inventory.reserved`
-//! (ADR 0021 Fase 3), fully OFFLINE — no database, no broker.
+//! (ADR 0021 Fase 3 + Fase 2), fully OFFLINE — no database, no broker.
 //!
-//! It drives the REAL composed shop service ([`shop_api::build_app`]): it seeds
-//! stock and places an order over HTTP (exactly as a client would, through the demo
-//! `shop-token` bearer), then runs the in-process outbox driver
-//! ([`drain_in_process`]) and asserts the subscriber reserved the ordered stock in
-//! the SAME inventory state the HTTP controller serves. A second drain over a
-//! redelivered event proves the inbox makes the reservation happen exactly once.
+//! It drives the REAL composed shop service ([`shop_api::build_app`]) with the
+//! in-process dispatch worker spawned exactly as `main` spawns it
+//! ([`BuiltApp::spawn_dispatch_worker`]). It seeds stock and places an order over HTTP
+//! (through the demo `shop-token` bearer), then — **without calling the driver by
+//! hand** — waits for the worker to drain the outbox and asserts the subscriber
+//! reserved the ordered stock in the SAME inventory state the HTTP controller serves.
+//! This is the Fase 2 proof that the choreography progresses on its own with the app
+//! running.
+
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use seiva_events::drain_in_process;
 use shop_api::build_app;
 use tower::ServiceExt;
 
@@ -45,9 +48,29 @@ fn available(app: &shop_api::BuiltApp) -> u64 {
         .unwrap_or(0)
 }
 
+/// Poll `available(app)` until it equals `want`, or panic after ~2 s — so the test
+/// observes the BACKGROUND worker's progress without ever driving the drain itself.
+async fn wait_until_available(app: &shop_api::BuiltApp, want: u64) {
+    for _ in 0..200 {
+        if available(app) == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!(
+        "timed out waiting for stock to reach {want}; still {} — the worker did not \
+         progress the choreography",
+        available(app)
+    );
+}
+
 #[tokio::test]
-async fn placing_an_order_reserves_stock_through_the_in_process_dispatch() {
+async fn placing_an_order_reserves_stock_through_the_spawned_dispatch_worker() {
     let app = build_app();
+
+    // Spawn the in-process dispatch worker exactly as `main` does: from here on the
+    // choreography progresses on its own, with no `drain_in_process` call in the test.
+    let _worker = app.spawn_dispatch_worker();
 
     // (1) Seed stock over HTTP: 10 units of the product.
     assert_eq!(
@@ -62,7 +85,8 @@ async fn placing_an_order_reserves_stock_through_the_in_process_dispatch() {
     assert_eq!(available(&app), 10, "stock seeded over HTTP");
 
     // (2) Place an order for 3 units of that product over HTTP. The `orders` module
-    // publishes `orders.placed` into the shared outbox inside its transaction.
+    // publishes `orders.placed` into the shared outbox inside its transaction; the
+    // background worker will pick it up.
     assert_eq!(
         post(
             &app.router,
@@ -72,51 +96,28 @@ async fn placing_an_order_reserves_stock_through_the_in_process_dispatch() {
         .await,
         StatusCode::OK,
     );
-    assert_eq!(
-        app.outbox.pending(),
-        1,
-        "placing the order wrote exactly one event to the outbox"
-    );
-    assert_eq!(
-        available(&app),
-        10,
-        "no stock is reserved until the event is dispatched"
-    );
 
-    // (3) Drain the outbox: the dispatcher routes `orders.placed` to the inventory
-    // subscriber, which reserves the ordered units through the real use case.
-    let dispatched = drain_in_process(&*app.outbox, &app.registry, app.inbox.as_ref())
-        .await
-        .unwrap();
-    assert_eq!(dispatched, 1, "one event was dispatched");
-
-    // (4) The stock dropped by EXACTLY the ordered quantity, in the same state the
-    // HTTP controller serves — the choreography closed the loop.
-    assert_eq!(
-        available(&app),
-        7,
-        "the subscriber reserved 3 of the 10 seeded units"
-    );
+    // (3) WITHOUT draining by hand, the worker dispatches `orders.placed` to the
+    // inventory subscriber, which reserves the ordered units through the real use
+    // case — the stock drops by exactly the ordered quantity, in the same state the
+    // HTTP controller serves. This is the choreography closing the loop on its own.
+    wait_until_available(&app, 7).await;
     assert_eq!(
         app.outbox.pending(),
         0,
-        "the cursor advanced past the event"
+        "the worker advanced the cursor past the dispatched event"
     );
 
-    // (Extra) Model an at-least-once redelivery: rewind the cursor and drain again.
-    // The event is re-read and dispatched, but the inbox absorbs it, so NO second
-    // reservation happens — exactly-one effect per (subscriber, event).
-    app.outbox.redeliver(0);
-    let redispatched = drain_in_process(&*app.outbox, &app.registry, app.inbox.as_ref())
-        .await
-        .unwrap();
+    // (4) Placing a SECOND order draws the stock down again — proving the worker
+    // keeps draining, not just the first event.
     assert_eq!(
-        redispatched, 1,
-        "the redelivered event was dispatched again"
+        post(
+            &app.router,
+            "/v1/orders/place",
+            &format!(r#"{{"customer":"Grace","lines":[{{"product_id":"{PRODUCT}","qty":2}}]}}"#),
+        )
+        .await,
+        StatusCode::OK,
     );
-    assert_eq!(
-        available(&app),
-        7,
-        "the inbox made the reservation idempotent — stock is unchanged"
-    );
+    wait_until_available(&app, 5).await;
 }

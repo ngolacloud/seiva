@@ -868,6 +868,7 @@ dependencies = [
  "inventory",
  "seiva-macros",
  "seiva-ports",
+ "seiva-testing",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2768,6 +2769,7 @@ dependencies = [
  "seiva-testing",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3265,8 +3267,8 @@ version = "0.1.0"
 name = "shop-orders-facade"
 version = "0.1.0"
 dependencies = [
- "axum",
  "delonix-seiva",
+ "http",
  "seiva-contract",
  "seiva-http",
  "serde",

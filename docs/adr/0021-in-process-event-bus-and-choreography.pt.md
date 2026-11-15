@@ -119,6 +119,92 @@ garantias.** O outbox mantém-se o ponto único de publicação nos dois modos.
   crate de módulo depende de outro crate de módulo (a independência de que o
   `module split` depende).
 
+## Adenda — Fase 2: durabilidade (despacho transaccional, retry/back-off, dead-letter)
+
+- Data: 2026-11-13
+- Estado: Aceite (estende a decisão acima; altera as assinaturas públicas de
+  `seiva_events::dispatch` / `drain_in_process` / `run_in_process_dispatch_worker`
+  e acrescenta um método com default ao port `IdempotencyStore`)
+
+O despachante da Fase 1 provou a coreografia offline mas deixou três lacunas que a
+nota «Fica mais difícil / dívida (2026-11-08)» antecipava — o retry, o back-off e a
+back-pressure estavam «especificados, não assumidos». A Fase 2 especifica-os e fecha
+um bug latente de correcção.
+
+**O bug.** O `dispatch` da Fase 1 reclama a chave de inbox (`begin` → `Fresh`), corre
+o handler e depois faz `finish` — **sem transacção à volta dos três**. Se o handler
+falha depois de um claim `Fresh`, o erro propaga-se e o driver deixa o evento pendente
+(bom), mas o claim fica a meio: a redistribuição seguinte vê `InProgress`, não faz
+**nenhum** efeito, devolve `Ok`, e o driver **avança o cursor para além do evento** —
+descartando-o em silêncio. Uma falha transitória perde assim o evento. O caminho do
+broker nunca teve este bug porque o seu claim e efeito já partilham uma transacção
+`db::atomic` (`seiva-outbox-relay::drain`), por isso um handler falhado faz rollback do
+claim e o retry volta a ser `Fresh`.
+
+**Decisão.**
+
+1. **O `dispatch` corre `claim → handle → finish` dentro de `UnitOfWork::transaction`**,
+   uma transacção por subscriber (o padrão de consumo que a ADR 0011 já define, agora
+   real para o caminho in-process). Um novo parâmetro obrigatório `uow: &U` transporta-a.
+   Com o gateway DORM o claim, as escritas do handler e a marca commitam atomicamente e
+   um rollback des-reclama a chave de graça — exactamente a garantia do caminho broker.
+   A transacção corre sob `Scope::Global`: o claim de inbox é bookkeeping de
+   infra-estrutura do próprio driver (o `scoped_key` já funde tenant + subscriber +
+   evento conforme a ADR 0011), e o envelope `CloudEvent` não transporta tenant na Fase 2
+   (o scoping por-evento fica adiado — ver abaixo).
+2. **O `IdempotencyStore` ganha um `release(scoped_key)` com default.** Um store cujo
+   `begin` entra na transacção do chamador (DORM) des-reclama no rollback
+   automaticamente, por isso o seu `release` é o no-op default. Um store que **não**
+   participa no `UnitOfWork` (a dupla in-memory, e qualquer store que um utilizador ligue
+   sem transacção partilhada) sobrepõe-no para largar um claim não-terminado. O
+   `dispatch` chama `release` só para um claim que **ele** obteve `Fresh` e cuja
+   transacção falhou — nunca uma chave `Replay`/`InProgress`/`Mismatch` que não lhe
+   pertence — por isso nenhum claim concorrente é perturbado. Isto mantém «um rollback
+   des-reclama a chave» verdadeiro para todos os stores, não só o DORM, com um único
+   corpo genérico de `dispatch`.
+3. **O `drain_in_process` desvia um evento venenoso para dead-letter em vez de bloquear
+   a fila.** Uma `RetryPolicy { max_attempts, base_backoff }` governa retries por-evento,
+   dentro do passo, com back-off exponencial; um evento que continua a falhar após
+   `max_attempts` é entregue a um `DeadLetterSink` e o cursor avança **para além** dele,
+   para o evento seguinte progredir. Sem isto, a Decisão 1 (que faz os retries voltarem a
+   correr mesmo) deixaria um evento permanentemente falhado a fazer retry para sempre e a
+   matar à fome todos os eventos seguintes — trocando um descarte silencioso por uma
+   paragem silenciosa. O `LoggingDeadLetterSink` é o default de produção; o
+   `InMemoryDeadLetterQueue` (atrás da feature `testing`) torna o desvio observável
+   offline.
+
+**Alternativas consideradas (Fase 2).**
+
+- *`release` explícito chamado sempre pelo `dispatch` em qualquer erro.* Rejeitado:
+  dispararia também em `Mismatch` (uma chave que o `dispatch` nunca reclamou) e poderia
+  correr em competição com um claim `InProgress` concorrente da mesma chave. Condicionar
+  o `release` a «obtivemos `Fresh` nesta transacção» é preciso e sem corridas.
+- *Um journal de transacção task-local a acoplar a UoW in-memory e o store* (espelhando a
+  sessão ambiente do DORM). Rejeitado por ser mais pesado e por alterar o comportamento
+  de todos os testes `InMemoryUnitOfWork` existentes; o `release` com default fica local
+  ao único caminho que dele precisa.
+- *Contagem durável de tentativas entre passos + back-off temporizado* (um evento
+  venenoso repetido ao longo de passos do worker em vez de dentro de um). Adiado: exige
+  um store durável de tentativas por-evento; o retry limitado dentro do passo +
+  dead-letter já satisfaz «o evento venenoso deixa de bloquear os seguintes» e mantém o
+  driver sem estado. O caminho broker mantém a sua própria semântica de retry.
+
+**Consequências (Fase 2).**
+
+- **Fica mais fácil:** uma falha transitória do handler é agora genuinamente repetida
+  (não descartada); uma falha permanente é posta em quarentena (não uma paragem); a
+  durabilidade do monólito iguala a do caminho broker.
+- **Fica mais difícil / dívida (datada 2026-11-13):** os sleeps de back-off dentro do
+  passo bloqueiam o único loop de drain enquanto um evento espera — aceitável para a
+  escala do driver in-process, revisto se um deployment precisar de retry concorrente
+  por-evento. O envelope `CloudEvent` ainda não transporta tenant, por isso a transacção
+  do `dispatch` é `Scope::Global`; acrescentar um tenant ao envelope e fazer scoping
+  por-evento é trabalho futuro.
+- **Imposição:** testes offline de que (a) um handler que falha uma vez é re-corrido
+  `Fresh` na redistribuição (o des-reclamar), e (b) um evento sempre-a-falhar aterra no
+  `InMemoryDeadLetterQueue` enquanto o evento seguinte processa; mais a app shop viva a
+  drenar via `run_in_process_dispatch_worker` montado em `build_app`.
+
 ## Relacionado
 
 - [ADR 0002](0002-core-ports-and-test-doubles.md) · [ADR 0003](0003-module-layering-and-facade-impl.md) · [ADR 0011](0011-durable-idempotency.md) · [ADR 0020](0020-command-bus-and-pipeline-behaviors.md)

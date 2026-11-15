@@ -118,6 +118,89 @@ guarantees.** The outbox stays the single point of publication in both modes.
   module crate depends on another module crate (the independence `module split`
   relies on).
 
+## Addendum — Fase 2: durability (transactional dispatch, retry/back-off, dead-letter)
+
+- Date: 2026-11-13
+- Status: Accepted (extends the decision above; changes the public signatures of
+  `seiva_events::dispatch` / `drain_in_process` / `run_in_process_dispatch_worker`
+  and adds one defaulted method to the `IdempotencyStore` port)
+
+The Fase 1 dispatcher proved the choreography offline but left three gaps the
+"Harder / debt (2026-11-08)" note anticipated — retry, back-off and back-pressure
+were "specified, not assumed". Fase 2 specifies them, and closes a latent
+correctness bug.
+
+**The bug.** Fase 1 `dispatch` claims the inbox key (`begin` → `Fresh`), runs the
+handler, then `finish`es — with **no transaction around the three**. If the handler
+errors after a `Fresh` claim, the error propagates and the driver leaves the event
+pending (good), but the claim is now stuck half-done: the next redelivery sees
+`InProgress`, performs **no** effect, returns `Ok`, and the driver **advances the
+cursor past the event** — silently dropping it. A transient failure thus loses the
+event. The broker path never had this bug because its claim and effect already share
+one `db::atomic` transaction (`seiva-outbox-relay::drain`), so a failed handler rolls
+the claim back and the retry is `Fresh` again.
+
+**Decision.**
+
+1. **`dispatch` runs `claim → handle → finish` inside `UnitOfWork::transaction`**, one
+   transaction per subscriber (the consume pattern ADR 0011 already defines, now made
+   real for the in-process path). A new required `uow: &U` parameter carries it. With
+   the DORM gateway the claim, the handler's writes and the mark commit atomically and
+   a rollback un-claims the key for free — exactly the broker path's guarantee. The
+   transaction runs under `Scope::Global`: the inbox claim is the driver's own
+   infrastructure bookkeeping (the `scoped_key` already folds tenant + subscriber +
+   event per ADR 0011), and the `CloudEvent` envelope carries no tenant in Fase 2
+   (per-event tenant scoping is deferred — see below).
+2. **`IdempotencyStore` gains a defaulted `release(scoped_key)`.** A store whose
+   `begin` joins the caller's transaction (DORM) un-claims on rollback automatically,
+   so its `release` is the default no-op. A store that does **not** participate in the
+   `UnitOfWork` (the in-memory double, and any store a user wires without a shared
+   transaction) overrides it to drop an unfinished claim. `dispatch` calls `release`
+   only for a claim **it** took `Fresh` whose transaction then failed — never a
+   `Replay`/`InProgress`/`Mismatch` key it did not own — so no concurrent claim is
+   disturbed. This keeps "a rollback un-claims the key" true for every store, not only
+   DORM, with a single generic `dispatch` body.
+3. **`drain_in_process` dead-letters a poison event instead of blocking the queue.** A
+   `RetryPolicy { max_attempts, base_backoff }` governs per-event, in-pass retries with
+   exponential back-off; an event that still fails after `max_attempts` is handed to a
+   `DeadLetterSink` and the cursor is advanced **past** it, so the next event
+   progresses. Without this, Decision 1 (which makes retries actually re-run) would let
+   one permanently-failing event retry forever and starve every later event — trading a
+   silent drop for a silent stall. `LoggingDeadLetterSink` is the production default;
+   `InMemoryDeadLetterQueue` (behind the `testing` feature) makes the divert observable
+   offline.
+
+**Alternatives considered (Fase 2).**
+
+- *Explicit `release` always called by `dispatch` on any error.* Rejected: it would
+  also fire on `Mismatch` (a key `dispatch` never claimed) and could race a concurrent
+  `InProgress` claim of the same key. Gating `release` on "we got `Fresh` this
+  transaction" is precise and race-free.
+- *A task-local transaction journal coupling the in-memory UoW and store* (mirroring
+  DORM's ambient session). Rejected as heavier and as changing the behaviour of every
+  existing `InMemoryUnitOfWork` test; the defaulted `release` is local to the one path
+  that needs it.
+- *Cross-pass durable attempt counting + timed back-off* (a poison event retried across
+  worker passes rather than within one). Deferred: it needs a durable per-event attempt
+  store; in-pass bounded retry + dead-letter already satisfies "the poison event stops
+  blocking the following ones" and keeps the driver stateless. The broker path keeps its
+  own retry semantics.
+
+**Consequences (Fase 2).**
+
+- **Easier:** a transient handler failure is now genuinely retried (not dropped); a
+  permanent failure is quarantined (not a stall); the monolith's durability equals the
+  broker path's.
+- **Harder / debt (dated 2026-11-13):** in-pass back-off sleeps block the single drain
+  loop while one event waits — acceptable for the in-process driver's scale, revisited
+  if a deployment needs concurrent per-event retry. The `CloudEvent` envelope still
+  carries no tenant, so `dispatch`'s transaction is `Scope::Global`; adding a tenant to
+  the envelope and scoping per event is future work.
+- **Enforcement:** offline tests that (a) a handler that fails once is re-run `Fresh` on
+  redelivery (the un-claim), and (b) an always-failing event lands in the
+  `InMemoryDeadLetterQueue` while the next event processes; plus the live shop app
+  draining via `run_in_process_dispatch_worker` mounted in `build_app`.
+
 ## Related
 
 - [ADR 0002](0002-core-ports-and-test-doubles.md) · [ADR 0003](0003-module-layering-and-facade-impl.md) · [ADR 0011](0011-durable-idempotency.md) · [ADR 0020](0020-command-bus-and-pipeline-behaviors.md)

@@ -968,6 +968,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "seiva-data-dorm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dorm-core",
+ "dorm-outbox",
+ "seiva-messaging",
+ "seiva-ports",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "seiva-events"
 version = "0.1.0"
 dependencies = [
@@ -975,6 +988,8 @@ dependencies = [
  "delonix-seiva",
  "seiva-messaging",
  "seiva-ports",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1002,6 +1017,7 @@ dependencies = [
  "delonix-seiva",
  "dorm-core",
  "dorm-outbox",
+ "seiva-data-dorm",
  "seiva-events",
  "seiva-messaging",
  "seiva-ports",

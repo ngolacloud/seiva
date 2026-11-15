@@ -164,6 +164,18 @@ fn is_dorm(dep: &str) -> bool {
     dep == "dorm" || dep.starts_with("dorm-")
 }
 
+/// Whether `dep` is a transport runtime the `facade` layer must never carry. The
+/// facade is the versioned contract, so a wire framework in it is a leak the
+/// generated controller/proto should own instead. `seiva-http` is the single
+/// NAMED exception — ADR 0003 lets a facade depend on it solely to name
+/// `seiva_http::Ctx` on its write methods — so it is deliberately absent here
+/// and stays permitted; `axum` (HTTP) and `seiva-grpc` (gRPC) are not. A facade
+/// needing an HTTP status constant for its error→`Problem` mapping uses the pure
+/// `http` types crate (as `examples/shop/orders/facade` does), never `axum`.
+fn is_forbidden_transport_in_facade(dep: &str) -> bool {
+    matches!(dep, "axum" | "seiva-grpc")
+}
+
 /// The reason, if any, that `layer` of `module` may not depend on `dep`
 /// (Clean-Architecture dependency rule; ADR 0003 of the Seiva repo).
 fn forbidden_layer_dep(module: &str, layer: &str, dep: &str) -> Option<String> {
@@ -174,13 +186,27 @@ fn forbidden_layer_dep(module: &str, layer: &str, dep: &str) -> Option<String> {
             (dep == "delonix-seiva" || dep == "seiva-ports" || is_dorm(dep) || suffix.is_some())
                 .then(|| format!("`domain` depends only on shared kernel types, not `{dep}`"))
         }
-        // The public contract: shared kernel + the Seiva macros only.
-        "facade" => (is_dorm(dep)
-            || matches!(
-                suffix,
-                Some("domain" | "application" | "infrastructure" | "interface")
-            ))
-        .then(|| format!("`facade` is the public contract and must not depend on `{dep}`")),
+        // The public contract: shared kernel + the Seiva macros only — never a
+        // transport runtime (ADR 0003 permits only `seiva_http::Ctx`), the data
+        // layer, or a sibling layer crate.
+        "facade" => {
+            if is_forbidden_transport_in_facade(dep) {
+                Some(format!(
+                    "`facade` is the versioned contract and must not depend on the transport crate `{dep}` (ADR 0003 permits only `seiva_http::Ctx`)"
+                ))
+            } else if is_dorm(dep)
+                || matches!(
+                    suffix,
+                    Some("domain" | "application" | "infrastructure" | "interface")
+                )
+            {
+                Some(format!(
+                    "`facade` is the public contract and must not depend on `{dep}`"
+                ))
+            } else {
+                None
+            }
+        }
         // Use cases + ports: its own domain/facade and `seiva-ports`; never the
         // framework runtime, the data layer, lower layers, or another module.
         "application" => {
@@ -294,12 +320,15 @@ pub fn lint_project(root: &Path) -> Result<Report, LintError> {
     // five layer-crate Cargo.toml files.
     let mut module_layers = Vec::new();
     for dir in &module_dirs {
-        let module = dir
+        let dir_name = dir
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_owned();
         let mut layers = BTreeMap::new();
+        // Identity from the crate name prefix (grouped modules differ from their
+        // directory name), falling back to the directory name.
+        let mut identity: Option<String> = None;
         for layer in LAYERS {
             let cargo = dir.join(layer).join("Cargo.toml");
             if cargo.is_file() {
@@ -307,11 +336,15 @@ pub fn lint_project(root: &Path) -> Result<Report, LintError> {
                     path: cargo.display().to_string(),
                     source,
                 })?;
+                identity = identity.or_else(|| module_identity(&text, layer));
                 layers.insert(layer.to_owned(), cargo_dependency_names(&text));
             }
         }
         if !layers.is_empty() {
-            module_layers.push(ModuleLayers { module, layers });
+            module_layers.push(ModuleLayers {
+                module: identity.unwrap_or(dir_name),
+                layers,
+            });
         }
     }
     report.violations.extend(check_layers(&module_layers));
@@ -347,21 +380,29 @@ pub fn scan_module_layers(modules_root: &Path) -> Result<Vec<ModuleLayers>, Lint
 
     let mut out = Vec::new();
     for dir in &dirs {
-        let module = dir
+        let dir_name = dir
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_owned();
         let mut layers = BTreeMap::new();
+        // The module identity is the layer crates' shared name prefix, not the
+        // directory name (they differ for a grouped module like
+        // `examples/shop/payments` → `shop-payments-*`); fall back to the dir name.
+        let mut identity: Option<String> = None;
         for layer in LAYERS {
             let cargo = dir.join(layer).join("Cargo.toml");
             if cargo.is_file() {
                 let text = std::fs::read_to_string(&cargo).map_err(read_err(&cargo))?;
+                identity = identity.or_else(|| module_identity(&text, layer));
                 layers.insert(layer.to_owned(), cargo_dependency_names(&text));
             }
         }
         if !layers.is_empty() {
-            out.push(ModuleLayers { module, layers });
+            out.push(ModuleLayers {
+                module: identity.unwrap_or(dir_name),
+                layers,
+            });
         }
     }
     Ok(out)
@@ -372,7 +413,11 @@ pub fn scan_module_layers(modules_root: &Path) -> Result<Vec<ModuleLayers>, Lint
 /// an unparseable manifest yields no names rather than failing the whole lint —
 /// the build would reject it anyway.
 fn cargo_dependency_names(text: &str) -> Vec<String> {
-    let Ok(toml::Value::Table(root)) = text.parse::<toml::Value>() else {
+    // Parse the manifest as a `Table` (the document root). `toml::Value`'s
+    // `FromStr` parses a single TOML *value*, not a document, so it rejects a
+    // real `Cargo.toml` — which would silently empty every layer's dependency
+    // list and turn the whole layer rule into a no-op.
+    let Ok(root) = text.parse::<toml::Table>() else {
         return Vec::new();
     };
     match root.get("dependencies") {
@@ -381,10 +426,73 @@ fn cargo_dependency_names(text: &str) -> Vec<String> {
     }
 }
 
+/// The module identity carried by a layer crate's `[package] name` — the prefix
+/// left once its `-<layer>` suffix is stripped (so `shop-payments-facade` →
+/// `shop-payments`). This is what the `application` rule compares a sibling-layer
+/// dependency against (`<module>-facade`), and it is NOT always the directory
+/// name: a grouped module under `examples/shop/payments/` is the crate
+/// `shop-payments-*`, not `payments-*`. Falls back (via the caller) to the
+/// directory name when a manifest has no `[package] name`.
+fn module_identity(text: &str, layer: &str) -> Option<String> {
+    let root = text.parse::<toml::Table>().ok()?;
+    let name = root.get("package")?.get("name")?.as_str()?;
+    name.strip_suffix(&format!("-{layer}")).map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::manifest::{Allow, ModuleSection, Uses};
+
+    /// Regression: `cargo_dependency_names` must actually extract the dependency
+    /// names from a real `Cargo.toml`. It once parsed with `text.parse::<toml::Value>()`,
+    /// which under toml 0.9 parses a single VALUE (not a document) and so rejected
+    /// every manifest — silently emptying every layer's dependency list and turning
+    /// the whole layer rule (and the `examples_layering` gate) into a no-op.
+    #[test]
+    fn cargo_dependency_names_reads_a_real_manifest() {
+        let manifest =
+            "[package]\nname = \"orders-facade\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\n# a comment naming axum in prose\n\
+             delonix-seiva = { version = \"0.1\", default-features = false }\n\
+             serde = { version = \"1\", features = [\"derive\"] }\n\n\
+             [dev-dependencies]\ntokio = \"1\"\n";
+        let mut deps = cargo_dependency_names(manifest);
+        deps.sort();
+        // The production deps are found; the dev-dependency `tokio` is NOT (the
+        // layer rule only governs production edges).
+        assert_eq!(deps, vec!["delonix-seiva".to_owned(), "serde".to_owned()]);
+    }
+
+    /// The module identity used by the layer rule is the crate-name prefix, so a
+    /// grouped module whose crates are `shop-payments-*` is the module
+    /// `shop-payments` even though its directory is `payments` — otherwise the
+    /// `application` rule reads its OWN `shop-payments-facade` as another module's.
+    #[test]
+    fn module_identity_is_the_crate_prefix_not_the_directory() {
+        let manifest = "[package]\nname = \"shop-payments-facade\"\nversion = \"0.1.0\"\n";
+        assert_eq!(
+            module_identity(manifest, "facade").as_deref(),
+            Some("shop-payments")
+        );
+        // A grouped module's application depending on its own facade is allowed
+        // once the identity is the crate prefix.
+        let m = layers(
+            "shop-payments",
+            &[(
+                "application",
+                &[
+                    "shop-payments-domain",
+                    "shop-payments-facade",
+                    "seiva-ports",
+                ],
+            )],
+        );
+        assert!(
+            check_layers(&[m]).is_empty(),
+            "a grouped module may depend on its own domain/facade"
+        );
+    }
 
     fn module(name: &str, facade: &str) -> ModuleManifest {
         ModuleManifest {
@@ -491,6 +599,45 @@ mod tests {
             v.len(),
             2,
             "only the infrastructure and domain deps are refused: {v:?}"
+        );
+    }
+
+    #[test]
+    fn facade_may_not_depend_on_a_transport_crate() {
+        // `axum` and `seiva-grpc` are wire runtimes — the generated controller
+        // and proto own transport, never the versioned contract. `seiva-http` is
+        // the ADR 0003 exception (it is named solely for `seiva_http::Ctx`), and
+        // `http` is the pure types crate a facade uses for its error→`Problem`
+        // status mapping; both must still pass.
+        let m = layers(
+            "orders",
+            &[(
+                "facade",
+                &[
+                    "axum",          // forbidden: HTTP transport
+                    "seiva-grpc",    // forbidden: gRPC transport
+                    "seiva-http",    // OK: ADR 0003 Ctx exception
+                    "http",          // OK: pure HTTP status types
+                    "delonix-seiva", // OK: the Seiva macros
+                ],
+            )],
+        );
+        let v = check_layers(&[m]);
+        assert_eq!(
+            v.len(),
+            2,
+            "only the two transport crates are refused: {v:?}"
+        );
+        assert!(
+            v.iter().all(|x| x.rule == "layer-dependency"
+                && x.module == "orders::facade"
+                && x.message.contains("transport crate")),
+            "both violations name the transport leak: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.message.contains("`axum`"))
+                && v.iter().any(|x| x.message.contains("`seiva-grpc`")),
+            "axum and seiva-grpc are each reported: {v:?}"
         );
     }
 
