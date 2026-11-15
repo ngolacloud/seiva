@@ -43,10 +43,10 @@ async fn main() -> ExitCode {
         rate_limit: None,
         ..HttpSecurity::default()
     };
-    // No authenticator wired yet, so guarded routes answer 403; supply an
-    // `Arc<dyn seiva_http::Authenticator>` (see `seiva-identity`) to admit
-    // callers. `None` leaves public routes serving.
-    let auth = None;
+    // No authenticator wired yet, so guarded routes answer 403; supply
+    // `AuthConfig::bearer(..)` (and optionally `.with_api_key(..)`, see
+    // `seiva-identity`) to admit callers. `none()` leaves public routes serving.
+    let auth = seiva_http::AuthConfig::none();
     // Module routers are merged here, BEFORE the framework layers wrap them —
     // `router_with_modules` merges then layers, so authn, security headers
     // and the rate limit apply to module routes too. `seiva module new`

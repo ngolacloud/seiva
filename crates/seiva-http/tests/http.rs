@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use seiva_http::{
     authn, permission_guard, request_id, router, router_with_modules, ApiKeyAuthenticator,
-    Authenticator, Authn, Health, HttpSecurity, Principal, RequiredPermission, TokenAuthenticator,
-    Valid, Validate, ValidationError, PROBLEM_JSON, REQUEST_ID_HEADER,
+    AuthConfig, Authenticator, Authn, Health, HttpSecurity, Principal, RequiredPermission,
+    TokenAuthenticator, Valid, Validate, ValidationError, PROBLEM_JSON, REQUEST_ID_HEADER,
 };
 
 /// Reads a response body into a JSON value.
@@ -517,4 +517,58 @@ async fn module_routes_merged_via_router_with_modules_get_the_authn_layer() {
         .await
         .unwrap();
     assert_eq!(ok.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn router_with_modules_mounts_the_api_key_path_at_app_level() {
+    // A1 fatia 2: the `X-API-Key` path must be reachable through the app-level
+    // builder, not only via `Authn::with_api_key` on a hand-rolled layer. A real
+    // `apps/<name>-api` hands `router_with_modules` an `AuthConfig::with_api_key`,
+    // and a guarded module route then admits a valid key and refuses an unknown one.
+    let module = Router::new()
+        .route("/demo", post(demo_create))
+        .layer(from_fn_with_state(
+            RequiredPermission("demo.create"),
+            permission_guard,
+        ));
+    let auth = AuthConfig::bearer(Arc::new(demo_authenticator()) as Arc<dyn Authenticator>)
+        .with_api_key(Arc::new(demo_api_keys()) as Arc<dyn Authenticator>);
+    let app = router_with_modules(Health::starting(), &HttpSecurity::default(), auth, module);
+
+    // A valid `X-API-Key` authenticates and the guard passes → 201, through the
+    // whole framework stack (the module route is inside the authn layer).
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/demo")
+                .header("x-api-key", "sk_live_good")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"title":"via-app-key"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    // And it carries the framework's security headers (the module route is inside them).
+    assert_eq!(created.headers()["x-content-type-options"], "nosniff");
+    let body = json_body(created.into_body()).await;
+    assert_eq!(body["title"], "via-app-key");
+
+    // An unknown key is refused by the authn layer before the route runs → 401.
+    let denied = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/demo")
+                .header("x-api-key", "sk_live_nope")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"title":"x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(denied.headers()["www-authenticate"], "ApiKey");
 }

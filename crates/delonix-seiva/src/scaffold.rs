@@ -593,7 +593,7 @@ fn service_main_rs(module: &str) -> String {
          //! `{module}` module; the same module still runs inside the monolith\n\
          //! (`apps/<project>-api`). Keep business logic out of here.\n\n\
          use axum::Router;\n\
-         use seiva_http::{{router_with_modules, Health, HttpSecurity}};\n\
+         use seiva_http::{{router_with_modules, AuthConfig, Health, HttpSecurity}};\n\
          use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
          use std::process::ExitCode;\n\n\
          #[tokio::main(flavor = \"multi_thread\")]\n\
@@ -613,7 +613,7 @@ fn service_main_rs(module: &str) -> String {
          \x20   }};\n\n\
          \x20   let health = Health::starting();\n\
          \x20   let security = HttpSecurity::default();\n\
-         \x20   let auth = None;\n\
+         \x20   let auth = AuthConfig::none();\n\
          \x20   // Seed + demo (ADR 0022): load `{module}`'s seed (idempotent upsert)\n\
          \x20   // on every boot, and its demo through the facade only in dev.\n\
          \x20   let load_demo = config.env.is_development() || std::env::var(\"SEIVA_LOAD_DEMO\").is_ok();\n\
@@ -1021,7 +1021,7 @@ fn app_main_rs(name: &str) -> String {
          //! wires each module's router in at the managed anchor below; keep business\n\
          //! logic out.\n\n\
          use axum::Router;\n\
-         use seiva_http::{{router_with_modules, Health, HttpSecurity}};\n\
+         use seiva_http::{{router_with_modules, AuthConfig, Health, HttpSecurity}};\n\
          use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
          use std::process::ExitCode;\n\n\
          #[tokio::main(flavor = \"multi_thread\")]\n\
@@ -1046,10 +1046,10 @@ fn app_main_rs(name: &str) -> String {
          \x20   // Transport security posture: secure response headers on, same-origin\n\
          \x20   // only (no CORS) until you add allowed origins.\n\
          \x20   let security = HttpSecurity::default();\n\
-         \x20   // No authenticator wired yet, so guarded routes answer 403; supply an\n\
-         \x20   // `Arc<dyn seiva_http::Authenticator>` (see `seiva-identity`) to admit\n\
-         \x20   // callers. `None` leaves public routes serving.\n\
-         \x20   let auth = None;\n\
+         \x20   // No authenticator wired yet, so guarded routes answer 403; supply\n\
+         \x20   // `AuthConfig::bearer(..)` (optionally `.with_api_key(..)`, see\n\
+         \x20   // `seiva-identity`) to admit callers. `none()` leaves public routes serving.\n\
+         \x20   let auth = AuthConfig::none();\n\
          \x20   // Module routers are merged here, BEFORE the framework layers wrap them —\n\
          \x20   // `router_with_modules` merges then layers, so authn, security headers\n\
          \x20   // and the rate limit apply to module routes too. `seiva module new`\n\
@@ -1176,7 +1176,7 @@ fn gateway_main_rs(name: &str) -> String {
          //! where marked (bring an HTTP client such as reqwest/hyper). Keep business\n\
          //! logic in the services behind the gateway, not here.\n\n\
          use axum::Router;\n\
-         use seiva_http::{{router_with_modules, Health, HttpSecurity}};\n\
+         use seiva_http::{{router_with_modules, AuthConfig, Health, HttpSecurity}};\n\
          use seiva_server::{{observability, serve_router, shutdown_signal, ServerConfig}};\n\
          use std::process::ExitCode;\n\n\
          #[tokio::main(flavor = \"multi_thread\")]\n\
@@ -1191,7 +1191,7 @@ fn gateway_main_rs(name: &str) -> String {
          \x20   }};\n\
          \x20   let health = Health::starting();\n\
          \x20   let security = HttpSecurity::default();\n\
-         \x20   let auth = None;\n\
+         \x20   let auth = AuthConfig::none();\n\
          \x20   // A gateway hosts NO modules of its own. Build your upstream-aggregation\n\
          \x20   // routes here and merge them into `routes` BEFORE `router_with_modules`\n\
          \x20   // layers authn, security headers and the rate limit over them.\n\

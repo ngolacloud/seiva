@@ -214,7 +214,9 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn registry_sees_the_authenticated_principal_through_the_layers() {
-    use seiva_http::{router_with_modules, Health, HttpSecurity, Principal, TokenAuthenticator};
+    use seiva_http::{
+        router_with_modules, AuthConfig, Health, HttpSecurity, Principal, TokenAuthenticator,
+    };
 
     // The composition a real root uses: console mounted into `modules`, then layered.
     let modules = mount(axum::Router::new());
@@ -222,7 +224,7 @@ async fn registry_sees_the_authenticated_principal_through_the_layers() {
     let app = router_with_modules(
         Health::starting(),
         &HttpSecurity::default(),
-        Some(Arc::new(auth)),
+        AuthConfig::bearer(Arc::new(auth)),
         modules,
     );
 

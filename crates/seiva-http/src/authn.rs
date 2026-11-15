@@ -33,16 +33,18 @@ use crate::request_id::RequestIdExt;
 /// The `X-API-Key` request header carrying an opaque API key.
 static X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
 
-/// The authenticators the [`authn`] middleware consults: the `Authorization:
-/// Bearer` path (JWT or static token) and, optionally, an opaque `X-API-Key` path
-/// running alongside it (ADR 0006).
+/// The authenticators the [`authn`] middleware consults: an optional
+/// `Authorization: Bearer` path (JWT or static token) and an optional opaque
+/// `X-API-Key` path running alongside it (ADR 0006). At least one is set — the
+/// middleware is never mounted when both are absent (see [`AuthConfig`]).
 ///
-/// Build it with [`Authn::bearer_only`] (the form every `router_with_*` uses) or
-/// [`Authn::with_api_key`] to also admit `X-API-Key` callers, then mount with
-/// [`axum::middleware::from_fn_with_state`]`(authn_state, authn)`.
+/// Build it with [`Authn::bearer_only`] or [`Authn::with_api_key`], then mount
+/// with [`axum::middleware::from_fn_with_state`]`(authn_state, authn)`. A
+/// composition root rarely builds it directly: the `router_with_*` builders take
+/// an [`AuthConfig`] and derive the right `Authn` from it.
 #[derive(Clone)]
 pub struct Authn {
-    bearer: Arc<dyn Authenticator>,
+    bearer: Option<Arc<dyn Authenticator>>,
     api_key: Option<Arc<dyn Authenticator>>,
 }
 
@@ -53,7 +55,7 @@ impl Authn {
     #[must_use]
     pub fn bearer_only(bearer: Arc<dyn Authenticator>) -> Self {
         Self {
-            bearer,
+            bearer: Some(bearer),
             api_key: None,
         }
     }
@@ -64,8 +66,74 @@ impl Authn {
     #[must_use]
     pub fn with_api_key(bearer: Arc<dyn Authenticator>, api_key: Arc<dyn Authenticator>) -> Self {
         Self {
-            bearer,
+            bearer: Some(bearer),
             api_key: Some(api_key),
+        }
+    }
+}
+
+/// App-level authentication the `router_with_*` builders mount: an optional
+/// `Authorization: Bearer` authenticator and an optional `X-API-Key` one, each
+/// admitted only when set (ADR 0006). This is the config an `apps/<name>-api`
+/// composition root hands the framework.
+///
+/// A bare `Option<Arc<dyn Authenticator>>` converts into an `AuthConfig` carrying
+/// that bearer and **no** `X-API-Key` path, so every existing call-site keeps
+/// working unchanged; reach the `X-API-Key` path with [`AuthConfig::with_api_key`].
+/// When neither authenticator is set ([`AuthConfig::none`]) no authn layer is
+/// mounted at all — no caller is ever authenticated, so guarded routes answer
+/// `403` while public routes still serve.
+#[derive(Clone, Default)]
+pub struct AuthConfig {
+    bearer: Option<Arc<dyn Authenticator>>,
+    api_key: Option<Arc<dyn Authenticator>>,
+}
+
+impl AuthConfig {
+    /// No authentication: no caller is ever authenticated (guarded routes `403`,
+    /// public routes still serve). The explicit, inference-friendly form of a bare
+    /// `None` authenticator.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Authenticate `Authorization: Bearer` against `bearer`; no `X-API-Key` path.
+    #[must_use]
+    pub fn bearer(bearer: Arc<dyn Authenticator>) -> Self {
+        Self {
+            bearer: Some(bearer),
+            api_key: None,
+        }
+    }
+
+    /// Also admit `X-API-Key` callers, authenticated against `api_key` (consulted
+    /// **before** the bearer path). Independent of whether a bearer is set, so an
+    /// `AuthConfig::none().with_api_key(..)` admits only `X-API-Key` callers.
+    #[must_use]
+    pub fn with_api_key(mut self, api_key: Arc<dyn Authenticator>) -> Self {
+        self.api_key = Some(api_key);
+        self
+    }
+
+    /// The [`Authn`] middleware state for this config, or `None` when neither a
+    /// bearer nor an `X-API-Key` authenticator is set — in which case no authn
+    /// layer is mounted (deny-by-default via the per-route guard still applies).
+    pub(crate) fn into_authn(self) -> Option<Authn> {
+        match (self.bearer, self.api_key) {
+            (None, None) => None,
+            (bearer, api_key) => Some(Authn { bearer, api_key }),
+        }
+    }
+}
+
+impl From<Option<Arc<dyn Authenticator>>> for AuthConfig {
+    /// A bearer-only (or no-op, when `None`) config — the historical
+    /// `Option<Arc<dyn Authenticator>>` parameter, carried through unchanged.
+    fn from(bearer: Option<Arc<dyn Authenticator>>) -> Self {
+        Self {
+            bearer,
+            api_key: None,
         }
     }
 }
@@ -114,13 +182,19 @@ pub async fn authn(State(authn): State<Authn>, mut request: Request, next: Next)
     };
 
     // A credential WAS presented: it must authenticate, or the request is refused.
+    // With no bearer authenticator configured (an `X-API-Key`-only deployment),
+    // there is nothing to validate it against — deny, rather than fall through.
+    let Some(bearer_auth) = authn.bearer.as_ref() else {
+        return unauthorized(request, "Bearer");
+    };
+
     let bearer = header
         .strip_prefix("Bearer ")
         .or_else(|| header.strip_prefix("bearer "))
         .unwrap_or("")
         .trim();
 
-    match authn.bearer.authenticate(bearer) {
+    match bearer_auth.authenticate(bearer) {
         Ok(principal) => {
             request.extensions_mut().insert(principal);
             next.run(request).await

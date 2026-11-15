@@ -42,15 +42,13 @@ pub mod request_id;
 pub mod security;
 pub mod valid;
 
-use std::sync::Arc;
-
 use axum::extract::DefaultBodyLimit;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::get;
 use axum::{Json, Router};
 
 pub use audit::audit;
-pub use authn::{authn, Authn};
+pub use authn::{authn, AuthConfig, Authn};
 pub use bus::{Authorize, Idempotent, DEFAULT_IDEMPOTENCY_TTL};
 pub use ctx::Ctx;
 pub use docs::{docs_handler, redoc_handler, scalar_handler, DOCS_HTML};
@@ -146,16 +144,19 @@ pub fn router(health: Health) -> Router {
 /// only when [`HttpSecurity::cors_allowed_origins`] is non-empty (otherwise the
 /// browser enforces same-origin).
 pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
-    router_with_auth(health, security, None)
+    router_with_auth(health, security, AuthConfig::none())
 }
 
 /// Builds the framework router under `security` and an optional authentication
-/// layer: when `authenticator` is `Some`, every request is authenticated (ADR
-/// 0006) ahead of any route's [`permission_guard`] — a missing bearer becomes
-/// [`Principal::anonymous`] (public routes still serve, guarded routes `403`),
-/// a present-but-invalid one is a `401`. `None` mounts no authn layer (no caller
-/// is ever authenticated, so guarded routes answer `403`): the composition root
-/// supplies an [`Authenticator`] to actually admit callers.
+/// layer, described by `auth` (an [`AuthConfig`], or any `Option<Arc<dyn
+/// Authenticator>>` which converts into a bearer-only one). When it carries any
+/// authenticator, every request is authenticated (ADR 0006) ahead of any route's
+/// [`permission_guard`] — a missing credential becomes [`Principal::anonymous`]
+/// (public routes still serve, guarded routes `403`), a present-but-invalid one
+/// is a `401`. [`AuthConfig::none`] mounts no authn layer (no caller is ever
+/// authenticated, so guarded routes answer `403`): the composition root supplies
+/// an [`Authenticator`] to actually admit callers. Pass
+/// [`AuthConfig::with_api_key`] to also admit opaque `X-API-Key` callers.
 ///
 /// Layer order, outermost-first: [`request_id()`] → [`security_headers`] →
 /// [`authn()`] → the rate limiter → CORS → the body-size limit → the route.
@@ -164,12 +165,12 @@ pub fn router_with_security(health: Health, security: &HttpSecurity) -> Router {
 pub fn router_with_auth(
     health: Health,
     security: &HttpSecurity,
-    authenticator: Option<Arc<dyn Authenticator>>,
+    auth: impl Into<AuthConfig>,
 ) -> Router {
     apply_framework_layers(
         framework_routes(health, security.expose_docs),
         security,
-        authenticator,
+        auth.into(),
         None,
     )
 }
@@ -184,16 +185,20 @@ pub fn router_with_auth(
 /// headers, no rate limit. Merging the modules *before* layering (what this does)
 /// is the only order that applies the framework's guarantees to module routes.
 /// Mount each module's generated controller router into `modules` and pass it here.
+///
+/// `auth` is an [`AuthConfig`] (or any `Option<Arc<dyn Authenticator>>`, which
+/// converts into a bearer-only one): pass [`AuthConfig::with_api_key`] to also
+/// admit opaque `X-API-Key` callers against the module routes.
 pub fn router_with_modules(
     health: Health,
     security: &HttpSecurity,
-    authenticator: Option<Arc<dyn Authenticator>>,
+    auth: impl Into<AuthConfig>,
     modules: Router,
 ) -> Router {
     apply_framework_layers(
         framework_routes(health, security.expose_docs).merge(modules),
         security,
-        authenticator,
+        auth.into(),
         None,
     )
 }
@@ -209,14 +214,14 @@ pub fn router_with_modules(
 pub fn router_with_modules_distributed(
     health: Health,
     security: &HttpSecurity,
-    authenticator: Option<Arc<dyn Authenticator>>,
+    auth: impl Into<AuthConfig>,
     modules: Router,
     distributed: DistributedRateLimit,
 ) -> Router {
     apply_framework_layers(
         framework_routes(health, security.expose_docs).merge(modules),
         security,
-        authenticator,
+        auth.into(),
         Some(distributed),
     )
 }
@@ -253,7 +258,7 @@ fn framework_routes(health: Health, expose_docs: bool) -> Router {
 fn apply_framework_layers(
     app: Router,
     security: &HttpSecurity,
-    authenticator: Option<Arc<dyn Authenticator>>,
+    auth: AuthConfig,
     distributed: Option<DistributedRateLimit>,
 ) -> Router {
     let mut app = app
@@ -280,8 +285,8 @@ fn apply_framework_layers(
         app = app.layer(from_fn_with_state(limiter, rate_limit));
     }
 
-    if let Some(auth) = authenticator {
-        app = app.layer(from_fn_with_state(Authn::bearer_only(auth), authn));
+    if let Some(authn_state) = auth.into_authn() {
+        app = app.layer(from_fn_with_state(authn_state, authn));
     }
 
     // Outermost: so a short-circuited response (a 429, a 401, a CORS preflight)
