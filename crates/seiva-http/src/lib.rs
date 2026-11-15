@@ -50,7 +50,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 
 pub use audit::audit;
-pub use authn::authn;
+pub use authn::{authn, Authn};
 pub use bus::{Authorize, Idempotent, DEFAULT_IDEMPOTENCY_TTL};
 pub use ctx::Ctx;
 pub use docs::{docs_handler, redoc_handler, scalar_handler, DOCS_HTML};
@@ -74,7 +74,7 @@ pub use valid::{Valid, Validate, ValidationError};
 // The identity model is owned by `seiva-identity` (transport-free, shared with
 // MCP); re-exported here so a `seiva_http::Principal` import keeps working.
 pub use seiva_identity::{
-    AuthError, Authenticator, JwtAuthenticator, Principal, TokenAuthenticator,
+    ApiKeyAuthenticator, AuthError, Authenticator, JwtAuthenticator, Principal, TokenAuthenticator,
 };
 
 /// The default maximum request body size (1 MiB). Oversized bodies are rejected
@@ -281,7 +281,7 @@ fn apply_framework_layers(
     }
 
     if let Some(auth) = authenticator {
-        app = app.layer(from_fn_with_state(auth, authn));
+        app = app.layer(from_fn_with_state(Authn::bearer_only(auth), authn));
     }
 
     // Outermost: so a short-circuited response (a 429, a 401, a CORS preflight)
