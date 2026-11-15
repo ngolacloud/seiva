@@ -15,6 +15,8 @@
 //! so public routes still serve, while a *present-but-invalid* one is a `401`).
 //!
 //! - [`TokenAuthenticator`] — a static token → principal map (dev/test).
+//! - [`ApiKeyAuthenticator`] — an opaque `X-API-Key` → principal map with
+//!   revocation; the key is stored only as its SHA-256 digest (hash at rest).
 //! - [`JwtAuthenticator`] — verifies an OIDC/JWT against an injected JWKS
 //!   (RS256 / ES256, `iss`/`aud`/`exp`/`nbf`), mapping its claims to a principal.
 
@@ -209,6 +211,83 @@ impl Authenticator for TokenAuthenticator {
     }
 }
 
+/// An opaque **API-key** → [`Principal`] map with revocation: the `X-API-Key`
+/// counterpart to [`TokenAuthenticator`], sitting behind the same
+/// [`Authenticator`] trait so a transport treats it like any other bearer path.
+///
+/// An API key is a long-lived opaque secret a service presents instead of an
+/// interactive OIDC/JWT login — never a JWT (it carries no claims; the [`Principal`]
+/// and its scopes are what the key was *registered* with). The two mechanisms run
+/// side by side: `seiva-http`'s middleware reads `X-API-Key` against this, and
+/// `Authorization: Bearer` against the JWT path.
+///
+/// # Hash at rest, revocation
+///
+/// A key is stored **only as its SHA-256 digest**, exactly like
+/// [`TokenAuthenticator`] — the clear secret never sits in process memory, and the
+/// digest-keyed lookup leaks only pre-image-resistant bytes under a timing
+/// side-channel. [`revoke`](Self::revoke) drops a key by its digest; a revoked or
+/// never-registered key authenticates to nothing (`InvalidToken`), so rejection is
+/// the default. An empty map denies every request — zero trust out of the box.
+#[derive(Clone, Default)]
+pub struct ApiKeyAuthenticator {
+    keys: std::collections::HashMap<[u8; 32], Principal>,
+}
+
+impl ApiKeyAuthenticator {
+    /// A new, empty authenticator. On its own it rejects every key.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register one `key` → `principal` (the scopes the key grants), builder-style.
+    /// The key is stored as its SHA-256 digest, never in clear.
+    #[must_use]
+    pub fn with_key(mut self, key: impl AsRef<str>, principal: Principal) -> Self {
+        self.keys.insert(token_digest(key.as_ref()), principal);
+        self
+    }
+
+    /// Register one `key` → `principal` in place (stored as a SHA-256 digest).
+    pub fn insert(&mut self, key: impl AsRef<str>, principal: Principal) {
+        self.keys.insert(token_digest(key.as_ref()), principal);
+    }
+
+    /// Revoke `key`: after this it authenticates to nothing (`InvalidToken`).
+    /// Returns `true` if the key was registered (and is now gone), `false` if it
+    /// was not known. Keyed on the digest, so the clear key is never compared.
+    pub fn revoke(&mut self, key: impl AsRef<str>) -> bool {
+        self.keys.remove(&token_digest(key.as_ref())).is_some()
+    }
+
+    /// How many keys are registered. Mostly for tests and health checks.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Whether no keys are registered (so every request is denied).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
+
+impl Authenticator for ApiKeyAuthenticator {
+    fn authenticate(&self, key: &str) -> Result<Principal, AuthError> {
+        if key.is_empty() {
+            return Err(AuthError::MissingCredentials);
+        }
+        // Look up by the key's digest: a revoked or unknown key simply has no entry,
+        // and the comparison is over digest bytes, which never reveal the key.
+        self.keys
+            .get(&token_digest(key))
+            .cloned()
+            .ok_or(AuthError::InvalidToken)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +313,42 @@ mod tests {
         assert_eq!(auth.authenticate("nope"), Err(AuthError::InvalidToken));
         assert_eq!(auth.authenticate(""), Err(AuthError::MissingCredentials));
         assert!(TokenAuthenticator::new().authenticate("anything").is_err());
+    }
+
+    #[test]
+    fn api_key_authenticates_to_principal_with_scopes() {
+        let auth = ApiKeyAuthenticator::new().with_key(
+            "sk_live_abc123",
+            Principal::in_tenant("svc-billing", "acme", ["invoices.read", "invoices.write"]),
+        );
+        let principal = auth.authenticate("sk_live_abc123").expect("valid key");
+        assert_eq!(principal.subject, "svc-billing");
+        assert!(principal.owns("acme"));
+        assert!(principal.has("invoices.read"));
+        assert!(principal.has("invoices.write"));
+    }
+
+    #[test]
+    fn api_key_denies_unknown_empty_and_revoked() {
+        let mut auth = ApiKeyAuthenticator::new()
+            .with_key("sk_live_abc123", Principal::new("svc", ["invoices.read"]));
+        // Unknown and empty are refused — deny by default.
+        assert_eq!(
+            auth.authenticate("sk_live_nope"),
+            Err(AuthError::InvalidToken)
+        );
+        assert_eq!(auth.authenticate(""), Err(AuthError::MissingCredentials));
+        // An empty authenticator rejects everything.
+        assert!(ApiKeyAuthenticator::new().authenticate("anything").is_err());
+        // Revocation: the once-valid key now authenticates to nothing.
+        assert!(auth.authenticate("sk_live_abc123").is_ok());
+        assert!(auth.revoke("sk_live_abc123"));
+        assert_eq!(
+            auth.authenticate("sk_live_abc123"),
+            Err(AuthError::InvalidToken)
+        );
+        assert_eq!(auth.len(), 0);
+        // Revoking an unknown key is a no-op that reports it was not present.
+        assert!(!auth.revoke("sk_live_never"));
     }
 }
