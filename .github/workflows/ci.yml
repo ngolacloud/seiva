@@ -72,6 +72,65 @@ jobs:
       - name: Build the docs
         run: cargo doc --no-deps --workspace --document-private-items
 
+  # The three reference data-layer adapters (ADR 0030): DORM (the default), sqlx
+  # and SeaORM. Each implements the `seiva-ports` service ports over the ambient
+  # scope-based transaction; each is EXCLUDED from the workspace (so the gate above
+  # stays ORM-free) and built here in a matrix. All three are DORM-free to resolve
+  # — the DORM gateway depends on the PUBLISHED `dorm-core`/`dorm-outbox` from
+  # crates.io, so this job needs no token (unlike `dorm-gateway` below, which also
+  # builds the git-coupled relay/RAG/MCP companions). A Postgres service backs the
+  # live round-trips, which are env-gated per adapter and skip when the DSN is
+  # unset — so the offline fmt/clippy/build still pass without a database.
+  adapters:
+    name: adapter (${{ matrix.adapter }})
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seiva_adapters
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    # The three DSNs point at the one Postgres service; each adapter's live tests
+    # read only their own var (the others are inert for that leg), so setting all
+    # three for every leg is harmless and keeps the env keys literal (GitHub Actions
+    # does not allow an expression in an env KEY). DORM takes a libpq-style DSN
+    # (tokio-postgres); sqlx and SeaORM take a URL.
+    env:
+      SEIVA_DORM_TEST_DSN: "host=localhost port=5432 user=postgres password=postgres dbname=seiva_adapters sslmode=disable"
+      SEIVA_SQLX_TEST_DSN: "postgres://postgres:postgres@localhost:5432/seiva_adapters"
+      SEIVA_SEAORM_TEST_DSN: "postgres://postgres:postgres@localhost:5432/seiva_adapters"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: dorm
+            manifest: crates/seiva-data-dorm/Cargo.toml
+          - adapter: sqlx
+            manifest: crates/seiva-data-sqlx/Cargo.toml
+          - adapter: seaorm
+            manifest: crates/seiva-data-seaorm/Cargo.toml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.manifest }}
+      - name: Format
+        run: cargo fmt --manifest-path "${{ matrix.manifest }}" --all --check
+      - name: Lint
+        run: cargo clippy --manifest-path "${{ matrix.manifest }}" --all-targets --all-features -- -D warnings
+      - name: Test (live round-trips via the Postgres service)
+        # Serialize: the live tests each create/drop shared tables on one Postgres.
+        run: cargo test --manifest-path "${{ matrix.manifest }}" --all-features -- --test-threads=1
+
   # The git-coupled crates (the DORM data-layer gateway and its relay/RAG/MCP
   # companions) are EXCLUDED from the workspace, so the jobs above stay DORM-free
   # and need no credentials. This job builds and tests them against the private

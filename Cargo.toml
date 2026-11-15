@@ -15,6 +15,12 @@ resolver = "2"
 # the `dorm` feature wires it in (owner decision: CI token + build coupling).
 exclude = [
     "crates/seiva-data-dorm",
+    # The sqlx and SeaORM reference adapters (ADR 0030, Fatia 2). DORM-free, but
+    # kept OUT of the default members so the core build pulls neither sqlx nor
+    # SeaORM nor a Postgres client (ADR 0030: "none in the default workspace
+    # members"). They are built in the dedicated `adapters` CI matrix job.
+    "crates/seiva-data-sqlx",
+    "crates/seiva-data-seaorm",
     "crates/seiva-outbox-relay",
     # RAG worker and the MCP-over-HTTP endpoint are DORM-git-coupled too.
     "crates/seiva-rag-worker",

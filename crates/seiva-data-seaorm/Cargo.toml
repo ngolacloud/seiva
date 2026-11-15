@@ -1,0 +1,46 @@
+# seiva-data-seaorm — the SeaORM reference data-layer adapter (ADR 0030, Fatia 2).
+#
+# One of the three reference adapters that implement `seiva-ports`. It is the
+# direct answer to Loco (which weds SeaORM): the SAME ORM, under a framework that
+# does not force it on you. The ports run over SeaORM's `DatabaseTransaction`; the
+# user migrates with `sea-orm-cli`.
+#
+# The whole adapter sits behind the `seaorm` cargo feature (on by default so the
+# crate's own `cargo test` builds it), exactly as the ADR requires — a composition
+# root turns it on; nothing in the Seiva core links it.
+#
+# Deliberately NOT a member of the Seiva workspace (ADR 0030: "none in the default
+# workspace members"): the DORM-free core build must not pull SeaORM. CI builds it
+# in the dedicated `adapters` matrix job.
+[package]
+name = "seiva-data-seaorm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = ["seaorm"]
+# The adapter proper. Off → the crate is empty (the ports are not implemented).
+seaorm = ["dep:sea-orm"]
+
+[dependencies]
+seiva-ports = { path = "../seiva-ports" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+serde_json = "1"
+# SeaORM over its sqlx-postgres backend. No `macros` (no derived entities — the
+# adapter speaks raw SQL through `Statement`), and JSON `details` is cast in SQL
+# (`$7::jsonb`) so no `with-json` feature is needed.
+sea-orm = { version = "2.0", default-features = false, features = [
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# The end-to-end proof drives a real `examples/notes` use case through this adapter.
+notes-domain = { path = "../../examples/notes/domain" }
+notes-facade = { path = "../../examples/notes/facade" }
+notes-application = { path = "../../examples/notes/application" }
+seiva-testing = { path = "../seiva-testing" }
