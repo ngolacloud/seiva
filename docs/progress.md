@@ -4,6 +4,24 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-15) — camada de dados plugável (ADR 0030)
+
+Reposicionamento: a fronteira de dados já é neutra (`seiva-ports` sem tipos de ORM;
+duas implementações provam-no — `seiva-data-dorm` e os duplos in-memory de
+`seiva-testing`), mas a história de produto empurrava o DORM como único caminho.
+
+- **[ADR 0030](adr/0030-pluggable-data-layer.md) — A camada de dados é plugável:**
+  o DORM é o adaptador por omissão, não um requisito; sqlx e SeaORM passam a
+  adaptadores de referência de primeira classe (`seiva-data-sqlx`, `seiva-data-seaorm`),
+  cada um atrás da sua feature, nenhum ligado pelo núcleo. A neutralidade torna-se
+  fitness function (`seiva lint` recusa um ORM em `application`/`domain`).
+- **Fatia 1 (esta): política + posicionamento** — ADR 0030 (EN+pt) e README
+  reposicionado ("bring your own data layer"). **Feito.**
+- **Fatia 2 (por fazer):** implementar `seiva-data-sqlx` + `seiva-data-seaorm`
+  ponta-a-ponta contra os ports; matriz de CI a construir os três adaptadores.
+- **Fatia 3 (por fazer):** destravar a CLI — `seiva module new --data sqlx|seaorm|external`
+  e tornar `seiva db *` honesto fora do DORM (delegar na ferramenta nativa).
+
 ## Estado (2026-11-08) — bus de comandos + eventos in-process (ADR 0020/0021)
 
 Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`

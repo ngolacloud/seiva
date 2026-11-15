@@ -1,8 +1,10 @@
 # Delonix Seiva
 
 A Rust backend framework for robust, high-criticality systems — backend only,
-ergonomic and batteries-included, a production- and cluster-ready server, and
-[DORM](https://github.com/ngolacloud/dorm) as the default (optional) data layer.
+ergonomic and batteries-included, a production- and cluster-ready server, and a
+**data layer you choose**: [DORM](https://github.com/ngolacloud/dorm) by default,
+or sqlx / SeaORM if that is what you already run. Seiva is the full-stack Rust
+framework that does not wed you to an ORM.
 
 Seiva is part of the Delonix family: **Delonix Engine** (containers and
 microVMs), **DORM** (the ORM), and **Delonix Seiva** (this framework).
@@ -21,6 +23,10 @@ microVMs), **DORM** (the ORM), and **Delonix Seiva** (this framework).
   from it — no reflection, all known at compile time.
 - Zero trust between modules, even in the same process: every facade method
   declares the permission a caller must hold, and the transport enforces it.
+- **The data layer is pluggable, by contract, not by accident.** Your domain and
+  application code target `seiva-ports`, never an ORM. DORM is the default adapter;
+  sqlx and SeaORM are first-class reference adapters. Bring the data layer you
+  already run (ADR 0030).
 
 ## A taste
 
@@ -50,17 +56,32 @@ See the **[Quickstart](docs/quickstart.md)** to go end to end, and the
 **[Architecture guide](docs/architecture.md)** for the layering and every crate's
 role.
 
-## DORM is the default, and optional
+## Bring your own data layer — DORM is the default, not a requirement
 
-The DORM data layer is wired in by default, but as a cargo feature. A project (or
-a single module) whose data lives elsewhere switches it off and pulls in no ORM
-at all, owning its own connections with the libraries it chooses.
+The whole data-layer surface is a set of traits in `seiva-ports` (`UnitOfWork`,
+`EventPublisher`, `IdGenerator`, `Clock`, `IdempotencyStore`, `AuditSink`,
+`RateLimitStore`) plus the repository port each module declares in its own
+`domain`. **No ORM type ever crosses that boundary** — so the adapter underneath
+is a choice you make at the composition root, not a decision the framework makes
+for you:
 
-The framework **core never depends on DORM**: the ORM enters only through the
-`seiva-data-dorm` gateway behind the `dorm` feature. The dependency is one-way —
-Seiva depends on DORM, DORM never on Seiva. Everything in this workspace builds
-and tests **without** the private DORM repository; the DORM-coupled crates are a
-separate, token-gated build (see the architecture guide).
+| Adapter | Feature | You get | You bring |
+|---------|---------|---------|-----------|
+| **DORM** (default) | `dorm` | migrations, transactional outbox, admin studio, per-module schema — batteries included | nothing; shortest path from zero |
+| **sqlx** | `sqlx` | the ports over `sqlx::Transaction` | your schema + `sqlx migrate` |
+| **SeaORM** | `seaorm` | the ports over SeaORM's `transaction()` | your entities + `sea-orm-cli` |
+
+Already running sqlx or SeaORM in production? Adopting Seiva does not mean
+rewriting persistence — implement the ports, keep your schema and queries. The
+design is **ADR 0030**; `seiva-testing` ships an in-memory adapter that proves the
+same contract.
+
+The framework **core never depends on DORM** — or on any ORM. DORM enters only
+through the `seiva-data-dorm` gateway behind the `dorm` feature, and the
+dependency is one-way (Seiva → DORM, never the reverse). Everything in this
+workspace builds and tests **without** the private DORM repository; the
+DORM-coupled crates are a separate, token-gated build (see the architecture
+guide).
 
 ## The workspace at a glance
 
