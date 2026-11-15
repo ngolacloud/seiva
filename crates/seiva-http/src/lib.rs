@@ -30,6 +30,7 @@
 
 pub mod audit;
 pub mod authn;
+pub mod backpressure;
 pub mod bus;
 pub mod ctx;
 pub mod docs;
@@ -49,6 +50,7 @@ use axum::{Json, Router};
 
 pub use audit::audit;
 pub use authn::{authn, AuthConfig, Authn};
+pub use backpressure::{with_route_controls, RouteControls, RouteLimit};
 pub use bus::{Authorize, Idempotent, DEFAULT_IDEMPOTENCY_TTL};
 pub use ctx::Ctx;
 pub use docs::{docs_handler, redoc_handler, scalar_handler, DOCS_HTML};
