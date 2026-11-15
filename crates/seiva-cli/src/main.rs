@@ -364,7 +364,7 @@ fn append_patch_section(manifest: &Path, framework_root: &str) -> std::io::Resul
     std::fs::write(manifest, cargo)
 }
 
-fn module_new(name: &str, external: bool, admin: bool) -> ExitCode {
+fn module_new(name: &str, data: Option<&str>, admin: bool) -> ExitCode {
     if let Err(err) = scaffold::validate_name(name) {
         eprintln!("seiva: {err}");
         return ExitCode::FAILURE;
@@ -376,14 +376,24 @@ fn module_new(name: &str, external: bool, admin: bool) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    if external {
-        eprintln!(
-            "seiva: `--data external` is not implemented yet (planned for the data-layer phase)."
-        );
-        return ExitCode::from(64);
-    }
+    // `--data` chooses the infrastructure data adapter: default in-memory, `dorm` to
+    // also pave a typed DORM-backed repository behind the module's `dorm` feature.
+    let data = match data {
+        None | Some("") => scaffold::ModuleData::InMemory,
+        Some("dorm") => scaffold::ModuleData::Dorm,
+        Some("external") => {
+            eprintln!(
+                "seiva: `--data external` is not implemented yet (planned for the data-layer phase)."
+            );
+            return ExitCode::from(64);
+        }
+        Some(other) => {
+            eprintln!("seiva: unknown `--data {other}` (expected `dorm` or `external`).");
+            return ExitCode::from(64);
+        }
+    };
 
-    let files = match scaffold::module_files(name, admin) {
+    let files = match scaffold::module_files_with_data(name, admin, data) {
         Ok(files) => files,
         Err(err) => {
             eprintln!("seiva: {err}");
@@ -406,7 +416,12 @@ fn module_new(name: &str, external: bool, admin: bool) -> ExitCode {
     } else {
         ""
     };
-    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema, and wired into the composition root.{admin_note}");
+    let data_note = if matches!(data, scaffold::ModuleData::Dorm) {
+        " Paved a typed DORM repository behind the `dorm` feature (enable it and swap `InMemoryRecordRepository` for `dorm_adapter::DormRecordRepository` in the composition root)."
+    } else {
+        ""
+    };
+    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema, and wired into the composition root.{admin_note}{data_note}");
     ExitCode::SUCCESS
 }
 
@@ -1572,9 +1587,7 @@ fn main() -> ExitCode {
             ProjectAction::New { name, kind } => project_new(&name, kind.as_deref()),
         },
         Command::Module { action } => match action {
-            ModuleAction::New { name, data, admin } => {
-                module_new(&name, data.as_deref() == Some("external"), admin)
-            }
+            ModuleAction::New { name, data, admin } => module_new(&name, data.as_deref(), admin),
             ModuleAction::Split { name } => module_split(&name),
             ModuleAction::Merge { name } => module_merge(&name),
         },
