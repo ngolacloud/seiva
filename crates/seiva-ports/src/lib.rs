@@ -272,6 +272,29 @@ pub trait IdempotencyStore: Send + Sync {
     /// [`begin`](Self::begin) returns [`Replay`](IdempotencyOutcome::Replay).
     async fn finish(&self, scoped_key: &str, response: &[u8]) -> PortResult<()>;
 
+    /// Releases a claim taken by [`begin`](Self::begin) that will **not** be
+    /// [`finish`](Self::finish)ed, so a later `begin` for the same key is
+    /// [`Fresh`](IdempotencyOutcome::Fresh) again instead of
+    /// [`InProgress`](IdempotencyOutcome::InProgress).
+    ///
+    /// A caller invokes this when the effect it reserved the key for **failed**
+    /// before `finish`: without it the orphaned `InProgress` claim makes every
+    /// redelivery skip the effect until the TTL elapses, turning a transient
+    /// handler error into a lost effect (ADR 0028 — the at-least-once direction).
+    /// Where the reservation and the effect share one transaction, that
+    /// transaction's rollback is the compensation and this is not needed; this is
+    /// the compensating seam for stores/drivers that cannot wrap both in a single
+    /// transaction (the in-process dispatcher over a non-transactional store).
+    ///
+    /// Releasing a key that is already finished, already absent, or never claimed
+    /// is a no-op. The default is a no-op (returns `Ok`) for append-only stores
+    /// that expire records some other way; such a store keeps the pre-ADR-0028
+    /// skip-until-TTL behaviour until it overrides this.
+    async fn abort(&self, scoped_key: &str) -> PortResult<()> {
+        let _ = scoped_key;
+        Ok(())
+    }
+
     /// Deletes records whose TTL has elapsed; returns how many. A scheduled
     /// worker calls this so the store does not grow without bound. The default is
     /// a no-op (returns `0`) for stores that expire records some other way.

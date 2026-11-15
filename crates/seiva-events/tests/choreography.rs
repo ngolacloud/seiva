@@ -147,3 +147,75 @@ async fn a_failing_subscriber_does_not_advance_the_cursor() {
         "the cursor did not advance; the event stays for retry"
     );
 }
+
+#[tokio::test]
+async fn a_transient_subscriber_failure_still_runs_the_effect_on_retry() {
+    // D-1 / ADR 0028: a subscriber that fails *transiently* on the first delivery
+    // and succeeds on the retry must still run its effect exactly once. Before the
+    // claim was compensated on failure, pass 1 left an orphaned `InProgress` inbox
+    // claim; the retry saw it, treated it as "already consumed", skipped the
+    // handler, advanced the cursor, and the effect was LOST until the 24h TTL. With
+    // `IdempotencyStore::abort` releasing the failed claim, the retry is `Fresh`
+    // again and the effect finally runs. This test FAILS without the compensation
+    // (effect count stays 0 and the second pass dispatches nothing).
+    struct FlakyOnce {
+        attempts: Arc<AtomicU64>,
+        effects: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl EventSubscriber for FlakyOnce {
+        fn subscriber_id(&self) -> &str {
+            "inventory"
+        }
+
+        async fn handle(&self, _event: &CloudEvent) -> PortResult<()> {
+            // Fail only the first attempt, then succeed and record the effect.
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err("stock service briefly unavailable".into());
+            }
+            self.effects.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    let attempts = Arc::new(AtomicU64::new(0));
+    let effects = Arc::new(AtomicU64::new(0));
+    let mut registry = SubscriberRegistry::new();
+    registry.register(
+        "orders.placed",
+        Arc::new(FlakyOnce {
+            attempts: attempts.clone(),
+            effects: effects.clone(),
+        }),
+    );
+    // One shared inbox across both passes — the dedup authority, and where the
+    // orphaned claim would otherwise strand the effect.
+    let inbox = InMemoryIdempotencyStore::new();
+
+    let outbox = InMemoryOutbox::new();
+    outbox.publish(orders_placed("order-1"));
+
+    // Pass 1: the subscriber fails. The driver surfaces the error, leaves the cursor
+    // put, and the failed claim is compensated (released) rather than stranded.
+    let first = drain_in_process(&outbox, &registry, &inbox).await;
+    assert!(first.is_err(), "the transient failure surfaces");
+    assert_eq!(outbox.pending(), 1, "the event stays pending for retry");
+    assert_eq!(effects.load(Ordering::SeqCst), 0, "no effect ran yet");
+
+    // Pass 2 (the retry): the subscriber now succeeds. Because the orphaned claim was
+    // released, `begin` is `Fresh` again and the effect finally runs — exactly once.
+    let second = drain_in_process(&outbox, &registry, &inbox).await.unwrap();
+    assert_eq!(second, 1, "the event was re-dispatched on retry");
+    assert_eq!(
+        effects.load(Ordering::SeqCst),
+        1,
+        "the effect ran exactly once, on the successful retry (lost without the fix)"
+    );
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        2,
+        "the handler was retried"
+    );
+    assert_eq!(outbox.pending(), 0, "the cursor advanced after the success");
+}

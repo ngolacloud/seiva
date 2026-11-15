@@ -265,6 +265,19 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
         }
         Ok(())
     }
+
+    async fn abort(&self, scoped_key: &str) -> PortResult<()> {
+        // Release an un-finished claim so a redelivery is `Fresh` again. A
+        // finished record (`response: Some`) is a real `Replay` and must survive,
+        // so only an in-flight (`response: None`) claim is removed.
+        let mut keys = self.keys.lock().expect("idempotency store poisoned");
+        if let Some(record) = keys.get(scoped_key) {
+            if record.response.is_none() {
+                keys.remove(scoped_key);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// An [`AuditSink`] that records every entry for assertions. Cheap to clone and
@@ -504,5 +517,47 @@ mod tests {
                 .unwrap(),
             IdempotencyOutcome::Fresh
         );
+    }
+
+    #[tokio::test]
+    async fn abort_releases_an_in_flight_claim_but_preserves_a_finished_one() {
+        let store = InMemoryIdempotencyStore::new();
+        let ttl = Duration::from_secs(60);
+
+        // An in-flight claim (begun, not finished) is released by `abort`, so the
+        // next `begin` is `Fresh` again — the compensation for a failed effect.
+        assert_eq!(
+            store.begin("k-inflight", "fp", ttl).await.unwrap(),
+            IdempotencyOutcome::Fresh
+        );
+        assert_eq!(
+            store.begin("k-inflight", "fp", ttl).await.unwrap(),
+            IdempotencyOutcome::InProgress,
+            "a second begin before finish/abort is InProgress"
+        );
+        store.abort("k-inflight").await.unwrap();
+        assert_eq!(
+            store.begin("k-inflight", "fp", ttl).await.unwrap(),
+            IdempotencyOutcome::Fresh,
+            "abort released the orphaned claim"
+        );
+
+        // A finished claim is a real Replay and must survive abort (idempotency is
+        // not undone just because a later, unrelated abort fires on the key).
+        store.finish("k-done", b"resp").await.unwrap(); // no-op: never begun
+        assert_eq!(
+            store.begin("k-done", "fp", ttl).await.unwrap(),
+            IdempotencyOutcome::Fresh
+        );
+        store.finish("k-done", b"resp").await.unwrap();
+        store.abort("k-done").await.unwrap();
+        assert_eq!(
+            store.begin("k-done", "fp", ttl).await.unwrap(),
+            IdempotencyOutcome::Replay(b"resp".to_vec()),
+            "abort must not erase a finished (Replay) record"
+        );
+
+        // Aborting a never-claimed key is a no-op.
+        store.abort("k-absent").await.unwrap();
     }
 }

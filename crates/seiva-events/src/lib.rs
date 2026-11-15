@@ -204,12 +204,24 @@ pub async fn dispatch<S: IdempotencyStore>(
         // key with the same fingerprint, so a redelivery can never be a Mismatch.
         match inbox.begin(&key, &event.id, INBOX_TTL).await? {
             IdempotencyOutcome::Fresh => {
-                // Order mirrors the broker consume path (claim → effect → mark);
-                // in Fase 2 these commit in one transaction.
-                subscriber.handle(event).await?;
+                // Order mirrors the broker consume path (claim → effect → mark).
+                // The store here is not transactional, so a failed effect is
+                // compensated by releasing the claim (`abort`): the redelivery is
+                // `Fresh` again and re-runs the effect, instead of seeing an
+                // orphaned `InProgress` and skipping it until the TTL — the
+                // silent-loss path this closes (ADR 0028, at-least-once). Where a
+                // transactional store wraps claim+effect+mark, its rollback is the
+                // compensation and `abort` is a documented no-op.
+                if let Err(err) = subscriber.handle(event).await {
+                    inbox.abort(&key).await?;
+                    return Err(err);
+                }
                 inbox.finish(&key, &[]).await?;
             }
-            // Already consumed by this subscriber — a redelivery, no effect.
+            // Already consumed by this subscriber — a redelivery, no effect. A
+            // durable `InProgress` is only reached here when a concurrent claim is
+            // genuinely in flight (a transactional store); the non-transactional
+            // in-process path compensates on failure above, so it never strands one.
             IdempotencyOutcome::Replay(_) | IdempotencyOutcome::InProgress => {}
             IdempotencyOutcome::Mismatch => {
                 return Err(Box::new(InboxMismatch {
@@ -311,9 +323,11 @@ pub const DRAIN_BATCH: usize = 128;
 /// **At-least-once.** The cursor advances (`reader.advance`) only after [`dispatch`]
 /// returns `Ok`. If a subscriber errors, `dispatch` propagates the error, this
 /// returns early, and the cursor is left where it was — so the event is re-read on
-/// the next pass (and, under the integrated DORM transaction, the failed inbox claim
-/// rolls back, so the retry is `Fresh` again). A redelivery that *does* get through
-/// is absorbed by the inbox: the effect runs exactly once per `(subscriber, event)`.
+/// the next pass. `dispatch` releases the failed subscriber's inbox claim
+/// ([`IdempotencyStore::abort`]) before propagating, so the retry is `Fresh` and
+/// re-runs the effect (a transactional store uses its rollback instead). A
+/// redelivery that *does* get through is absorbed by the inbox: the effect runs
+/// exactly once per `(subscriber, event)`.
 pub async fn drain_in_process<R, S>(
     reader: &R,
     registry: &SubscriberRegistry,
