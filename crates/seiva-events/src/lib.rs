@@ -257,6 +257,15 @@ async fn dispatch_to_subscribers<S: IdempotencyStore>(
                     event_id: event.id.clone(),
                 }));
             }
+            // A future outcome kind is handled conservatively (fail-closed): refuse
+            // rather than risk skipping or double-running the subscriber's effect.
+            other => {
+                return Err(format!(
+                    "unhandled inbox outcome {other:?} for subscriber {}",
+                    subscriber.subscriber_id()
+                )
+                .into());
+            }
         }
     }
     Ok(())

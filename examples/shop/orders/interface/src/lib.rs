@@ -316,14 +316,17 @@ where
         // `Validate → Transactional{ Idempotent → handler }`; without it:
         // `Validate → Transactional{ handler }`. `Transactional` opens its own
         // (in-process) transaction, so `place_work` must not.
+        // The scope is derived server-side from the caller (never the body): a
+        // tenant's order is placed under `Scope::Tenant`, not a fixed `Scope::Global`.
+        let scope = ctx.scope();
         let result = match idem {
             Some(idem) => {
-                let chain = Validate::new(Transactional::new(idem, DirectUnitOfWork));
+                let chain = Validate::new(Transactional::new(idem, DirectUnitOfWork, scope));
                 Mediator::new(chain).send(PlaceOrderCommand(cmd)).await
             }
             None => {
                 let handler = PlaceWorkHandler::new(Arc::clone(&self.service));
-                let chain = Validate::new(Transactional::new(handler, DirectUnitOfWork));
+                let chain = Validate::new(Transactional::new(handler, DirectUnitOfWork, scope));
                 Mediator::new(chain).send(PlaceOrderCommand(cmd)).await
             }
         };

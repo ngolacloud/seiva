@@ -55,15 +55,13 @@ pub async fn audit(
 
     let response = next.run(request).await;
 
-    let entry = AuditEntry {
-        actor: principal.subject,
-        tenant: principal.tenant,
+    let entry = AuditEntry::new(
+        principal.subject,
         operation,
-        object: None,
-        outcome: response.status().as_u16().to_string(),
-        request_id,
-        details: Vec::new(),
-    }
+        response.status().as_u16().to_string(),
+    )
+    .in_tenant(principal.tenant)
+    .with_request_id(request_id)
     .redacted();
 
     if let Err(error) = sink.record(&entry).await {

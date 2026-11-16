@@ -4,6 +4,35 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-16) — aceitação da comunidade: contrato estável + scope fail-closed
+
+Re-avaliação contra os 6 pontos de [COMMUNITY_ACCEPTANCE](audits/rust-engineering/2026-11/seiva/COMMUNITY_ACCEPTANCE.md).
+Fechadas as duas jogadas que não dependem de `git push`:
+
+- **Ponto 3 — contrato SemVer-estável (parcial, núcleo feito):** `#[non_exhaustive]`
+  nos seis tipos do contrato — `Problem`, `ValidationError` (`seiva-contract`) e
+  `Scope`, `IdempotencyOutcome`, `RateLimitDecision`, `AuditEntry` (`seiva-ports`).
+  `AuditEntry` ganhou um builder (`new` + `in_tenant`/`on_object`/`with_request_id`/
+  `with_detail`), já que um struct `#[non_exhaustive]` não se constrói por literal
+  fora do crate; os 4 call-sites (seiva-http + adaptadores dorm/sqlx/seaorm)
+  migraram. Os `match` externos sobre os enums ganharam uma arm `_` **fail-closed**:
+  `seiva-events` recusa um outcome desconhecido (nunca salta o efeito), o bus trata-o
+  como conflito, e o gateway DORM faz `panic` antes de correr uma query sem scope.
+  **Falta** (sessão própria): `#![deny(missing_docs)]` nos crates estáveis + gate
+  `cargo public-api`.
+- **Ponto 5 — segurança por default (núcleo feito):** a pipeline CQRS deixa de fixar
+  `Scope::Global`. `seiva_http::Ctx::scope()` deriva o scope **server-side** do
+  principal (`Scope::Tenant` quando há tenant); `Transactional::new(inner, uow, scope)`
+  passa a exigir o scope; o módulo `orders` passa `ctx.scope()`. Prova: o teste
+  `an_ok_command_commits…` (seiva-cqrs) assere `uow().scopes() == [Scope::Tenant("acme")]`
+  — uma escrita de um caller com tenant já não corre cross-tenant. **Falta** (sessão
+  própria, ADR 0029): lint BOLA que recusa `Scope::Global` literal fora de allowlist,
+  migrar os 7 exemplos para tenant-scoped, e o teste live 2-tenant.
+
+Gates verdes: `fmt` + `clippy --all-targets --all-features` (0 warnings) + `cargo test
+--workspace` (436 lib/integração, 0 falhas; adaptadores excluídos compilam, live
+gated saltam). **Não committado / não pushado.**
+
 ## Estado (2026-11-15) — camada de dados plugável (ADR 0030)
 
 Reposicionamento: a fronteira de dados já é neutra (`seiva-ports` sem tipos de ORM;

@@ -398,6 +398,13 @@ pub async fn rate_limit_with_store(
             tracing::warn!(target: "seiva::rate_limit", %error, "rate-limit store failed; failing open");
             next.run(request).await
         }
+        // A future decision kind this middleware does not yet understand: serve the
+        // request (consistent with this limiter's documented fail-open on store
+        // error), but surface it so the gap is visible.
+        Ok(other) => {
+            tracing::warn!(target: "seiva::rate_limit", ?other, "unhandled rate-limit decision; serving");
+            next.run(request).await
+        }
     }
 }
 

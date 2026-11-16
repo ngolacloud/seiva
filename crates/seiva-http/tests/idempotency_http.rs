@@ -78,6 +78,7 @@ async fn create(
         }
         IdempotencyOutcome::Mismatch => Err(mismatch_problem().into()),
         IdempotencyOutcome::InProgress => Err(in_progress_problem().into()),
+        _ => Err(in_progress_problem().into()),
     }
 }
 

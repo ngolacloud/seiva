@@ -18,6 +18,7 @@ use std::convert::Infallible;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use seiva_identity::Principal;
+use seiva_ports::Scope;
 
 use crate::idempotency::IdempotencyKey;
 
@@ -79,6 +80,26 @@ impl Ctx {
     #[must_use]
     pub fn subject(&self) -> &str {
         &self.principal.subject
+    }
+
+    /// The data [`Scope`] this request runs under, derived **server-side** from the
+    /// authenticated caller — never from the request body (OWASP API1). A caller
+    /// bound to a tenant yields [`Scope::Tenant`], so every `tenant_scoped` write in
+    /// the use case is constrained to that tenant automatically.
+    ///
+    /// This is what the CQRS pipeline must pass to `UnitOfWork::transaction` instead
+    /// of a fixed [`Scope::Global`]: a tenant's command no longer runs cross-tenant
+    /// by default. The remaining gap — a tenant-less/anonymous caller still maps to
+    /// [`Scope::Global`] here — is closed by the BOLA fitness lint and the
+    /// `#[model(tenant_scoped)]` policy (ADR 0029), which forbid a literal
+    /// `Scope::Global` outside a maintenance allowlist.
+    #[must_use]
+    pub fn scope(&self) -> Scope {
+        self.principal
+            .tenant
+            .as_deref()
+            .and_then(Scope::tenant)
+            .unwrap_or(Scope::Global)
     }
 
     /// Whether the caller holds `permission`.

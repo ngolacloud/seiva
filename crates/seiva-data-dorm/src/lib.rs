@@ -110,6 +110,10 @@ where
     match scope {
         Scope::Tenant(tenant) => dorm_core::db::with_tenant(tenant.into_string(), fut).await,
         Scope::Global => dorm_core::db::with_system_scope(fut).await,
+        // A future `Scope` kind must be mapped onto DORM enforcement explicitly
+        // before it ships; until then refuse (fail-closed) rather than silently
+        // run a query with no tenant constraint.
+        _ => panic!("unmapped Scope variant reached the DORM gateway (fail-closed)"),
     }
 }
 
@@ -988,19 +992,13 @@ mod tests {
         .expect("audit setup succeeds");
 
         // Record an entry whose sensitive detail was redacted by the caller.
-        let entry = AuditEntry {
-            actor: "alice".to_owned(),
-            tenant: Some("acme".to_owned()),
-            operation: "POST /v1/accounts/create_user".to_owned(),
-            object: Some("user-1".to_owned()),
-            outcome: "201".to_owned(),
-            request_id: Some("req-xyz".to_owned()),
-            details: vec![
-                ("username".to_owned(), "alice".to_owned()),
-                ("password".to_owned(), "secret".to_owned()),
-            ],
-        }
-        .redacted();
+        let entry = AuditEntry::new("alice", "POST /v1/accounts/create_user", "201")
+            .in_tenant(Some("acme"))
+            .on_object(Some("user-1"))
+            .with_request_id(Some("req-xyz"))
+            .with_detail("username", "alice")
+            .with_detail("password", "secret")
+            .redacted();
         sink.record(&entry).await.expect("audit record persists");
 
         // Read it back and assert the row + that the secret never landed.

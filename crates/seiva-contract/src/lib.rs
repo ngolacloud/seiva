@@ -36,7 +36,11 @@ pub trait Validate {
 
 /// Why a body was rejected as invalid. A single message in this first cut; a
 /// later phase can carry a per-field map.
+///
+/// `#[non_exhaustive]`: construct it through [`ValidationError::new`], never by
+/// field literal, so a later per-field map is a non-breaking addition.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ValidationError {
     /// A human-readable reason, surfaced as the problem's `detail`.
     pub message: String,
@@ -106,7 +110,12 @@ pub fn expose_error_details() -> bool {
 /// word buys nothing, and the smaller footprint keeps the whole value comfortably
 /// under clippy's `result_large_err` threshold. That is why no crate returning
 /// `Result<_, Problem>` needs to silence that lint.
+///
+/// `#[non_exhaustive]`: build one through the status helpers ([`Problem::forbidden`],
+/// …) and the builder methods, never by field literal, so new RFC 9457 members are
+/// a non-breaking addition.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Problem {
     /// A URI reference identifying the problem type. Defaults to `about:blank`,
     /// which RFC 9457 treats as "no extra semantics beyond the status code".

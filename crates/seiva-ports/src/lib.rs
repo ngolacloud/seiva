@@ -111,7 +111,11 @@ impl std::fmt::Display for TenantId {
 /// deliberate cross-tenant case is [`Global`](Scope::Global), which the gateway
 /// maps onto DORM's **audited** system-scope escape (it emits a `tracing` event),
 /// so a global query is a visible choice on the record, never an accident.
+///
+/// `#[non_exhaustive]`: a consumer matches with a `_` arm, so a future scope kind
+/// (e.g. an organisation tier above tenant) is a non-breaking addition.
 #[derive(Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Scope {
     /// Constrain all `tenant_scoped` access to this tenant.
     Tenant(TenantId),
@@ -225,7 +229,11 @@ pub trait UnitOfWork: Send + Sync {
 /// collide here. The `fingerprint` the caller passes alongside pins the key to one
 /// request's semantically-relevant bytes; reusing the key with a different
 /// fingerprint is [`Mismatch`](IdempotencyOutcome::Mismatch) and must not execute.
+///
+/// `#[non_exhaustive]`: a consumer matches with a `_` arm, so a future outcome is a
+/// non-breaking addition.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IdempotencyOutcome {
     /// First claim: the caller performs the effect, then calls
     /// [`finish`](IdempotencyStore::finish) with the response to persist.
@@ -308,7 +316,11 @@ pub trait IdempotencyStore: Send + Sync {
 /// correlation id. Field-level `details` are **redacted** of secrets before they
 /// ever reach a sink (see [`AuditEntry::redacted`]); the full request body with
 /// its secrets is never stored.
+///
+/// `#[non_exhaustive]`: build one from [`AuditEntry::default`] and set fields, never
+/// by exhaustive literal, so a new audit field is a non-breaking addition.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct AuditEntry {
     /// The acting principal's subject (empty for anonymous).
     pub actor: String,
@@ -327,6 +339,52 @@ pub struct AuditEntry {
 }
 
 impl AuditEntry {
+    /// Starts an entry for `actor` performing `operation` with the given `outcome`
+    /// (e.g. an HTTP status as a string), then refined through the builder methods.
+    /// Build entries this way, not by field literal: [`AuditEntry`] is
+    /// `#[non_exhaustive]`, so a new field never breaks a caller.
+    #[must_use]
+    pub fn new(
+        actor: impl Into<String>,
+        operation: impl Into<String>,
+        outcome: impl Into<String>,
+    ) -> Self {
+        Self {
+            actor: actor.into(),
+            operation: operation.into(),
+            outcome: outcome.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Scopes the entry to `tenant`.
+    #[must_use]
+    pub fn in_tenant(mut self, tenant: Option<impl Into<String>>) -> Self {
+        self.tenant = tenant.map(Into::into);
+        self
+    }
+
+    /// Records the target object's id.
+    #[must_use]
+    pub fn on_object(mut self, object: Option<impl Into<String>>) -> Self {
+        self.object = object.map(Into::into);
+        self
+    }
+
+    /// Attaches the request's correlation id.
+    #[must_use]
+    pub fn with_request_id(mut self, request_id: Option<impl Into<String>>) -> Self {
+        self.request_id = request_id.map(Into::into);
+        self
+    }
+
+    /// Appends one redactable detail pair (redaction happens in [`redacted`](Self::redacted)).
+    #[must_use]
+    pub fn with_detail(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.details.push((name.into(), value.into()));
+        self
+    }
+
     /// Returns the entry with every sensitive `details` value replaced by
     /// `"[redacted]"` ([`is_sensitive_field`]). Call this before recording so a
     /// password, hash, token or key can never land in the audit log.
@@ -375,7 +433,11 @@ pub trait AuditSink: Send + Sync {
 }
 
 /// The outcome of a rate-limit check for one client (ADR 0015).
+///
+/// `#[non_exhaustive]`: a consumer matches with a `_` arm, so a future decision
+/// kind is a non-breaking addition.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RateLimitDecision {
     /// Within budget — serve the request.
     Permitted,
