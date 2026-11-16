@@ -15,6 +15,8 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Trait-only ports (UnitOfWork, EventPublisher, Clock, IdGenerator) for the Delonix Seiva framework."
+keywords = ["ports", "hexagonal", "traits", "framework", "backend"]
+categories = ["rust-patterns"]
 
 [dependencies]
 # The single allowed dependency: async fns in traits still need boxing for

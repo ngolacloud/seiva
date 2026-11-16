@@ -81,6 +81,11 @@ members = [
     # a retry policy with exponential backoff (the SAME schedule as the outbox
     # relay's RelayPolicy) and a timeout wrapper. Data-layer-free, so a member.
     "crates/seiva-resilience",
+    # The inter-service client: how one module calls another module's service once
+    # split into microservices, wrapping every call in seiva-resilience's breaker +
+    # retry + timeout over an injected transport. The first real consumer of the
+    # resilience primitives. Transport-agnostic and data-layer-free, so a member.
+    "crates/seiva-client",
     # Application-layer CQRS dispatch: a statically-wired command/query mediator
     # with typed middleware (instrumentation, query caching). Data-layer-free.
     "crates/seiva-cqrs",

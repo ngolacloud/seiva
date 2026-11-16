@@ -1,5 +1,11 @@
 # Delonix Seiva
 
+[![crates.io](https://img.shields.io/crates/v/delonix-seiva.svg)](https://crates.io/crates/delonix-seiva)
+[![docs.rs](https://img.shields.io/docsrs/delonix-seiva)](https://docs.rs/delonix-seiva)
+[![CI](https://github.com/ngolacloud/seiva/actions/workflows/ci.yml/badge.svg)](https://github.com/ngolacloud/seiva/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/delonix-seiva.svg)](#license)
+[![MSRV 1.75+](https://img.shields.io/badge/MSRV-1.75%2B-blue.svg)](#install)
+
 A Rust backend framework for robust, high-criticality systems — backend only,
 ergonomic and batteries-included, a production- and cluster-ready server, and a
 **data layer you choose**: [DORM](https://github.com/ngolacloud/dorm) by default,
@@ -56,6 +62,30 @@ See the **[Quickstart](docs/quickstart.md)** to go end to end, and the
 **[Architecture guide](docs/architecture.md)** for the layering and every crate's
 role.
 
+## Install
+
+The library crates are on **crates.io** (dual MIT/Apache, MSRV 1.75). Add the
+pieces a service needs — the framework core, the HTTP transport and the runtime:
+
+```sh
+cargo add delonix-seiva seiva-http seiva-server
+# the trait-only data boundary + in-memory doubles for tests
+cargo add seiva-ports --dev seiva-testing
+```
+
+The **`seiva` CLI** (scaffolds projects/modules, runs the dev loop, lints the
+architecture) is not yet on crates.io — its demo commands depend on in-tree
+example modules. Install it from git meanwhile:
+
+```sh
+cargo install --git https://github.com/ngolacloud/seiva seiva-cli
+seiva project new shop && cd shop   # scaffold a project
+```
+
+Generated projects depend only on the published library crates, never on the
+CLI, so this does not affect them. See [docs/publishing.md](docs/publishing.md)
+for the per-crate publish status.
+
 ## Bring your own data layer — DORM is the default, not a requirement
 
 The whole data-layer surface is a set of traits in `seiva-ports` (`UnitOfWork`,
@@ -108,6 +138,31 @@ The DORM-coupled crates (`seiva-data-dorm`, `seiva-outbox-relay`,
 default build; they compile against the private DORM repo in a token-gated CI
 job.
 
+## Seiva vs other Rust frameworks
+
+Seiva is not another router — `seiva-http` builds *on* one (axum/tower). It sits
+where a batteries-included, opinionated framework sits; its closest neighbour is
+Loco.rs. An honest comparison (for the FastAPI/Django angle, see
+[docs/competitive-landscape.md](docs/competitive-landscape.md)):
+
+| Dimension | axum / actix-web / Poem | Loco.rs | **Seiva** |
+| --- | --- | --- | --- |
+| Shape | routing + extractors library | Rails-style MVC monolith | modules that own their data |
+| Batteries (scaffold, auth, admin, migrations) | ✖ bring your own | ✅ generators, jobs, mailers | ✅ CLI scaffold, auth, admin, migrations |
+| Data layer | your choice (unopinionated) | SeaORM (coupled) | **pluggable by contract** — DORM default, sqlx/SeaORM adapters (ADR 0030) |
+| Architecture enforcement | none | convention | **compiler-enforced** 5-layer crate graph + fitness lint |
+| Monolith ↔ microservice | manual | monolith | **same code, by composition** (`seiva module split`) |
+| One contract → HTTP + gRPC + OpenAPI | manual (Poem derives OpenAPI only) | partial | **one facade → all three**, no reflection |
+| Maturity / ecosystem | ✅ large (axum, actix) | 🟡 growing | ✖ nascent |
+
+**Reach for Seiva** when you want Django/Rails completeness in native Rust, with
+Clean Architecture you cannot accidentally violate, module-level zero-trust, and
+the freedom to run one binary or many from the same code — without being wedded
+to a single ORM. **Reach for plain axum/actix** for a small service where a
+router plus a handful of crates is enough, or where five crates per module is
+more ceremony than the problem needs. Seiva trades a steeper start for structure
+that holds up in high-criticality systems.
+
 ## Status
 
 The framework is wired end to end and green in CI: the facade/controller/CQRS
@@ -115,6 +170,11 @@ core, the three transports (HTTP, gRPC, OpenAPI) generated from one descriptor,
 the `seiva-server` runtime, the scaffolder, and two reference modules (`notes`,
 `accounts`). Persistence through DORM is wired behind the `dorm` feature and
 activates once the private-repo CI token is configured.
+
+The library crates are **published on crates.io** (v0.1.0) under a dual
+MIT/Apache licence. This is an early release: the API may still change before
+1.0, and the ecosystem is nascent — feedback and contributions are welcome (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
 
 See [`docs/adr/`](docs/adr/) for the design decisions and
 [`docs/progress.md`](docs/progress.md) for the roadmap state.

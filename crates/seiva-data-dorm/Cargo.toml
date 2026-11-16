@@ -24,6 +24,12 @@ seiva-ports = { path = "../seiva-ports" }
 # The outbox stores CloudEvents (the shape the relay reconstructs), so the
 # gateway wraps the application's event data in a CloudEvent envelope here.
 seiva-messaging = { path = "../seiva-messaging" }
+# The event-boundary trace-context facade (ADR 0027): `inject_current` stamps the
+# outbox envelope's W3C `traceparent`/`tracestate` from the emitting span.
+# `default-features = false` links NO exporter — a no-op until a service enables
+# the crate's `tracing` feature at its composition root (the proof test enables it
+# via a dev-dependency), so this gateway stays zero-cost by default.
+seiva-observability = { path = "../seiva-observability", default-features = false }
 # DORM as published crates (depend by version; see the header).
 dorm-core = "0.6"
 # The transactional outbox: EventPublisher writes the event here in the same

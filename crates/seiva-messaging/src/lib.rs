@@ -5,8 +5,11 @@
 //! database.
 //!
 //! The envelope is [CloudEvents 1.0](https://cloudevents.io): every message
-//! carries `id`, `source`, `type`, `specversion`, an optional `time` and a W3C
-//! `traceparent`, plus a JSON `data` body.
+//! carries `id`, `source`, `type`, `specversion`, an optional `time` and the W3C
+//! trace-context extension (`traceparent` + `tracestate`), plus a JSON `data`
+//! body. The trace-context attributes are injected by the publisher and extracted
+//! by the consumer so a choreography reads as one distributed trace across the
+//! outbox→broker→subscriber hop (ADR 0027).
 //!
 //! Broker backends implement [`Publisher`] behind Cargo features: **NATS**
 //! (`nats`, ADR 0051), **AMQP/RabbitMQ** (`amqp`, ADR 0052) and **Kafka**
@@ -53,14 +56,21 @@ pub struct CloudEvent {
     pub ty: String,
     /// RFC3339, optional.
     pub time: Option<String>,
-    /// W3C trace context, carried end to end for distributed tracing.
+    /// W3C `traceparent`, carried end to end for distributed tracing — the parent
+    /// span id of the use case that emitted the event. Set by the publisher from
+    /// the current context; read by the consumer to parent its handling span.
     pub traceparent: Option<String>,
+    /// W3C `tracestate`, the vendor trace-context extension that rides alongside
+    /// `traceparent`. Carried verbatim so no vendor's trace metadata is lost across
+    /// the hop; only meaningful when `traceparent` is set.
+    pub tracestate: Option<String>,
     /// The event body.
     pub data: serde_json::Value,
 }
 
 impl CloudEvent {
-    /// A new event with the required attributes; `time`/`traceparent` unset.
+    /// A new event with the required attributes; `time`/`traceparent`/`tracestate`
+    /// unset.
     pub fn new(
         id: impl Into<String>,
         source: impl Into<String>,
@@ -73,12 +83,20 @@ impl CloudEvent {
             ty: ty.into(),
             time: None,
             traceparent: None,
+            tracestate: None,
             data,
         }
     }
 
     pub fn with_traceparent(mut self, traceparent: impl Into<String>) -> Self {
         self.traceparent = Some(traceparent.into());
+        self
+    }
+
+    /// Set the W3C `tracestate` (the vendor trace-context extension). Only
+    /// meaningful alongside a `traceparent`.
+    pub fn with_tracestate(mut self, tracestate: impl Into<String>) -> Self {
+        self.tracestate = Some(tracestate.into());
         self
     }
 
@@ -100,6 +118,9 @@ impl CloudEvent {
         if let Some(tp) = &self.traceparent {
             map.insert("traceparent".into(), tp.clone().into());
         }
+        if let Some(ts) = &self.tracestate {
+            map.insert("tracestate".into(), ts.clone().into());
+        }
         map.insert("data".into(), self.data.clone());
         serde_json::Value::Object(map)
     }
@@ -119,6 +140,10 @@ impl CloudEvent {
             time: v.get("time").and_then(|x| x.as_str()).map(str::to_string),
             traceparent: v
                 .get("traceparent")
+                .and_then(|x| x.as_str())
+                .map(str::to_string),
+            tracestate: v
+                .get("tracestate")
                 .and_then(|x| x.as_str())
                 .map(str::to_string),
             data: v.get("data").cloned().unwrap_or(serde_json::Value::Null),
@@ -424,11 +449,13 @@ mod tests {
             "app.deployed",
             serde_json::json!({ "app": "api" }),
         )
-        .with_traceparent("00-abc-def-01");
+        .with_traceparent("00-abc-def-01")
+        .with_tracestate("vendor=xyz");
         let json = ce.to_json();
         assert_eq!(json["specversion"], "1.0");
         assert_eq!(json["type"], "app.deployed");
         assert_eq!(json["traceparent"], "00-abc-def-01");
+        assert_eq!(json["tracestate"], "vendor=xyz");
         assert_eq!(CloudEvent::from_json(&json).unwrap(), ce);
     }
 

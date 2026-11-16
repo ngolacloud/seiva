@@ -55,7 +55,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use delonix_seiva::worker::run_worker;
 use seiva_messaging::CloudEvent;
+use seiva_observability::trace_context::{self, TraceContext};
 use seiva_ports::{inbox_key, IdempotencyOutcome, IdempotencyStore, PortResult};
+use tracing::Instrument;
 
 // The worker runtime (interval loop + graceful shutdown + metrics) is the
 // framework's; this crate only supplies the per-pass job. Re-exported so a caller
@@ -198,6 +200,32 @@ pub async fn dispatch<S: IdempotencyStore>(
     registry: &SubscriberRegistry,
     inbox: &S,
 ) -> PortResult<()> {
+    // Open a handling span and parent it to the trace context the publisher injected
+    // onto the envelope, so the emitting use case's span is the parent of this one
+    // (ADR 0027) — the trace survives the outbox→broker→subscriber hop. Both are
+    // no-ops until a service enables `seiva-observability/tracing` at its root, so
+    // the default build pays nothing (`set_parent` does not even touch the span).
+    let span =
+        tracing::info_span!("seiva.event.dispatch", event_type = %event.ty, event_id = %event.id);
+    trace_context::set_parent(
+        &span,
+        &TraceContext {
+            traceparent: event.traceparent.clone(),
+            tracestate: event.tracestate.clone(),
+        },
+    );
+    dispatch_to_subscribers(event, registry, inbox)
+        .instrument(span)
+        .await
+}
+
+/// The subscriber fan-out of [`dispatch`], factored out so the handling span wraps
+/// exactly the per-subscriber claim → handle → mark loop.
+async fn dispatch_to_subscribers<S: IdempotencyStore>(
+    event: &CloudEvent,
+    registry: &SubscriberRegistry,
+    inbox: &S,
+) -> PortResult<()> {
     for subscriber in registry.subscribers_for(&event.ty) {
         let key = inbox_key(subscriber.subscriber_id(), &event.id);
         // The event id is the fingerprint: the same event always claims the same
@@ -303,11 +331,122 @@ pub trait OutboxReader {
     async fn advance(&self, position: u64) -> PortResult<()>;
 }
 
-/// How many events [`drain_in_process`] pulls per pass. A pass dispatches at most
-/// this many events, then returns; a worker loops on it, sleeping when it returns
-/// `0`. The constant lives here because the offline driver takes no configuration;
-/// the DORM adapter reads its batch size from the relay's `RelayConfig` instead.
+/// How many events a drain pass pulls by default — the [`RelayPolicy::default`]
+/// batch. A pass dispatches at most this many events, then returns; a worker loops
+/// on it, sleeping when it returns `0`.
 pub const DRAIN_BATCH: usize = 128;
+
+/// How a drain pass behaves on failure — the **in-process twin of
+/// `dorm_outbox::RelayConfig`**, so a monolith's in-process driver and a split
+/// service's broker relay apply **one** failure policy (max attempts, exponential
+/// backoff, then dead-letter), not two drifting sets of constants (ADR 0028, D-2).
+///
+/// The broker policy lives in the DORM-git-coupled `dorm-outbox`, which this
+/// DORM-free crate cannot name; this is its structural equal, carrying the same
+/// three knobs with the same meaning and the same [`backoff`](Self::backoff)
+/// formula. The DORM boundary (`seiva-outbox-relay`) provides the
+/// `From<RelayPolicy> for dorm_outbox::RelayConfig` that makes one `RelayPolicy`
+/// drive both paths, so the shared policy is the single source of truth.
+///
+/// The backoff **formula** is not duplicated here: [`backoff`](Self::backoff)
+/// delegates to [`seiva_resilience::RetryPolicy`] (see [`retry_policy`](Self::retry_policy)),
+/// so the exponential schedule lives in exactly one crate and the in-process
+/// drain, the broker relay and a `seiva-client` inter-service call all pace a
+/// transient failure identically — one source, not three drifting copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayPolicy {
+    /// Events pulled per [`drain_in_process_with`] pass — the `read_batch` size.
+    pub batch: usize,
+    /// How many times a single event's [`dispatch`] is attempted before it is
+    /// dead-lettered and the cursor advances past it. Must be `>= 1`.
+    pub max_attempts: u32,
+    /// Base backoff between a failing event's attempts; doubles each attempt,
+    /// capped at 30× base — the exact schedule `dorm_outbox::relay` sleeps.
+    pub backoff_base_ms: u64,
+}
+
+impl Default for RelayPolicy {
+    /// The same failure policy as `dorm_outbox::RelayConfig::default()` — five
+    /// attempts with a 50 ms base backoff — over the in-process [`DRAIN_BATCH`].
+    fn default() -> Self {
+        Self {
+            batch: DRAIN_BATCH,
+            max_attempts: 5,
+            backoff_base_ms: 50,
+        }
+    }
+}
+
+impl RelayPolicy {
+    /// This failure policy's [`seiva_resilience::RetryPolicy`] — the same
+    /// `max_attempts` and `backoff_base_ms`, so the shared resilience crate owns
+    /// the retry schedule and this policy carries only the extra `batch` knob the
+    /// drain pass needs. One place defines the backoff; everything derives from it.
+    #[must_use]
+    pub fn retry_policy(&self) -> seiva_resilience::RetryPolicy {
+        seiva_resilience::RetryPolicy {
+            max_attempts: self.max_attempts,
+            backoff_base_ms: self.backoff_base_ms,
+        }
+    }
+
+    /// The backoff before the `attempt`-th retry (1-based), doubling each attempt
+    /// and capped at 30× the base — byte-for-byte the schedule `dorm_outbox::relay`
+    /// uses, so a transient failure is paced identically in-process and over the
+    /// broker.
+    ///
+    /// Delegates to [`seiva_resilience::RetryPolicy::backoff`]: the formula lives
+    /// in the resilience crate, not duplicated here, so the drain, the relay and a
+    /// `seiva-client` call share one schedule by construction.
+    #[must_use]
+    pub fn backoff(&self, attempt: u32) -> Duration {
+        self.retry_policy().backoff(attempt)
+    }
+}
+
+/// Where an event goes when its [`dispatch`] has failed
+/// [`max_attempts`](RelayPolicy::max_attempts) times — the in-process twin of
+/// `dorm_outbox`'s dead-letter table (`dorm_outbox_dead`).
+///
+/// Dead-lettering is what keeps a permanently-failing event from **blocking the
+/// head of the line forever**: once the retry budget is spent, the driver hands
+/// the event here and advances the cursor past it, exactly as `dorm_outbox::relay`
+/// does (ADR 0028). The sink is the seam between the DORM-free driver and where the
+/// poisoned event is durably recorded: [`TracingDeadLetters`] only logs it (the
+/// offline/demo default), while the DORM adapter in `seiva-outbox-relay` inserts it
+/// into the real `dorm_outbox_dead` table so the in-process and broker paths bury a
+/// poison pill the same way.
+#[async_trait]
+pub trait DeadLetterSink {
+    /// Record `record` as undeliverable, with the last `error`. The driver advances
+    /// the cursor past the event **only after** this returns `Ok`; an `Err` here
+    /// leaves the cursor put, so a failing sink re-reads (and re-attempts) the event
+    /// rather than dropping it silently.
+    async fn dead_letter(&self, record: &OutboxRecord, error: &str) -> PortResult<()>;
+}
+
+/// The default [`DeadLetterSink`]: log the poisoned event at `error` level and drop
+/// it. This is the **offline/in-memory** default — honest for a demo or a monolith
+/// over the non-durable [`InMemoryOutbox`], where there is no table to write. A
+/// production monolith draining the real outbox should pass the DORM dead-letter
+/// adapter from `seiva-outbox-relay` instead, so a poison pill is **durably** kept
+/// rather than only logged.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TracingDeadLetters;
+
+#[async_trait]
+impl DeadLetterSink for TracingDeadLetters {
+    async fn dead_letter(&self, record: &OutboxRecord, error: &str) -> PortResult<()> {
+        tracing::error!(
+            target: "seiva::events",
+            event_id = %record.event.id,
+            event_type = %record.event.ty,
+            error,
+            "in-process event dead-lettered after exhausting its retry budget"
+        );
+        Ok(())
+    }
+}
 
 /// The in-process outbox **driver**: one pass that drains a batch from `reader`,
 /// [`dispatch`]es each event to `registry`'s subscribers (deduped through `inbox`),
@@ -320,14 +459,20 @@ pub const DRAIN_BATCH: usize = 128;
 /// monolith runs this driver or a split service drains the broker — which is what
 /// makes `seiva module split` a swap of dispatcher rather than a rewrite (ADR 0021).
 ///
-/// **At-least-once.** The cursor advances (`reader.advance`) only after [`dispatch`]
-/// returns `Ok`. If a subscriber errors, `dispatch` propagates the error, this
-/// returns early, and the cursor is left where it was — so the event is re-read on
-/// the next pass. `dispatch` releases the failed subscriber's inbox claim
-/// ([`IdempotencyStore::abort`]) before propagating, so the retry is `Fresh` and
-/// re-runs the effect (a transactional store uses its rollback instead). A
-/// redelivery that *does* get through is absorbed by the inbox: the effect runs
-/// exactly once per `(subscriber, event)`.
+/// **At-least-once, then dead-letter.** The cursor advances (`reader.advance`) only
+/// after an event is fully handled. A failing [`dispatch`] is retried up to
+/// [`max_attempts`](RelayPolicy::max_attempts) with the policy's exponential
+/// [`backoff`](RelayPolicy::backoff) (the inbox [`abort`](IdempotencyStore::abort)
+/// on each failure makes every retry `Fresh`, so a transient failure's effect still
+/// runs exactly once). If the retry budget is spent the event is handed to the
+/// dead-letter sink and the cursor advances past it, so a poison pill never blocks
+/// the head of the line — the **exact** policy `dorm_outbox::relay` applies on the
+/// broker path. A redelivery that *does* get through is absorbed by the inbox: the
+/// effect runs exactly once per `(subscriber, event)`.
+///
+/// This convenience uses [`RelayPolicy::default`] and [`TracingDeadLetters`] (the
+/// offline/demo defaults); call [`drain_in_process_with`] to supply a tuned policy
+/// or a durable dead-letter sink.
 pub async fn drain_in_process<R, S>(
     reader: &R,
     registry: &SubscriberRegistry,
@@ -337,16 +482,71 @@ where
     R: OutboxReader + Sync,
     S: IdempotencyStore,
 {
-    let batch = reader.read_batch(DRAIN_BATCH).await?;
-    let mut dispatched = 0usize;
+    drain_in_process_with(
+        reader,
+        registry,
+        inbox,
+        RelayPolicy::default(),
+        &TracingDeadLetters,
+    )
+    .await
+}
+
+/// [`drain_in_process`] with an explicit failure [`policy`](RelayPolicy) and
+/// [`dead_letters`](DeadLetterSink) sink — the full driver that lets a deployment
+/// tune the retry budget/backoff and route poison pills to a durable store.
+///
+/// For each drained event it attempts [`dispatch`] up to
+/// [`max_attempts`](RelayPolicy::max_attempts), sleeping the policy's
+/// [`backoff`](RelayPolicy::backoff) between attempts; on success it advances the
+/// cursor, and on a spent budget it dead-letters the event (via `dead_letters`) and
+/// advances past it. Returns how many events the cursor advanced past this pass
+/// (dispatched **plus** dead-lettered) — a worker loops on it and sleeps on `0`.
+pub async fn drain_in_process_with<R, S, D>(
+    reader: &R,
+    registry: &SubscriberRegistry,
+    inbox: &S,
+    policy: RelayPolicy,
+    dead_letters: &D,
+) -> PortResult<usize>
+where
+    R: OutboxReader + Sync,
+    S: IdempotencyStore,
+    D: DeadLetterSink + Sync,
+{
+    let batch = reader.read_batch(policy.batch).await?;
+    let mut handled = 0usize;
     for record in batch {
-        // Dispatch first, advance second — the whole point of at-least-once: a
-        // failure here propagates before the cursor moves, leaving the event pending.
-        dispatch(&record.event, registry, inbox).await?;
-        reader.advance(record.position).await?;
-        dispatched += 1;
+        // Retry this event in-pass, exactly as `dorm_outbox::relay` loops over its
+        // attempts: a local counter, exponential backoff between tries, dead-letter
+        // once the budget is spent. The cursor moves only when the event is settled
+        // (dispatched or dead-lettered), so at-least-once holds and a poison pill is
+        // buried instead of stalling the line.
+        let mut attempt = 0u32;
+        loop {
+            match dispatch(&record.event, registry, inbox).await {
+                Ok(()) => {
+                    reader.advance(record.position).await?;
+                    handled += 1;
+                    break;
+                }
+                Err(err) => {
+                    attempt += 1;
+                    if attempt >= policy.max_attempts {
+                        // Budget spent: record the poison pill and step over it so the
+                        // consumer does not stall (the sink's own failure, by contrast,
+                        // leaves the cursor put — see `DeadLetterSink::dead_letter`).
+                        dead_letters.dead_letter(&record, &err.to_string()).await?;
+                        reader.advance(record.position).await?;
+                        handled += 1;
+                        break;
+                    }
+                    tokio::time::sleep(policy.backoff(attempt)).await;
+                }
+            }
+        }
     }
-    Ok(dispatched)
+    Ok(handled)
 }
 
 /// Run [`drain_in_process`] in a loop until `shutdown` resolves — the in-process
@@ -362,6 +562,10 @@ where
 /// reacts with no further wiring. Swapping it for `run_relay_worker` (same shape,
 /// same subscriber) is exactly the `module split` from monolith to microservice:
 /// only the dispatcher changes, not the subscriber and not the guarantees.
+///
+/// This convenience applies [`RelayPolicy::default`] and [`TracingDeadLetters`]; use
+/// [`run_in_process_dispatch_worker_with`] to tune the retry policy or route poison
+/// pills to a durable dead-letter sink.
 pub async fn run_in_process_dispatch_worker<R, S, Sig>(
     config: WorkerConfig,
     shutdown: Sig,
@@ -374,18 +578,53 @@ where
     S: IdempotencyStore,
     Sig: Future<Output = ()>,
 {
+    run_in_process_dispatch_worker_with(
+        config,
+        shutdown,
+        reader,
+        registry,
+        inbox,
+        RelayPolicy::default(),
+        TracingDeadLetters,
+    )
+    .await
+}
+
+/// [`run_in_process_dispatch_worker`] with an explicit failure [`policy`](RelayPolicy)
+/// and [`dead_letters`](DeadLetterSink) sink, so a production monolith loops the
+/// driver with the same retry budget as the broker relay and buries poison pills in
+/// a durable store (e.g. the DORM `dorm_outbox_dead` adapter) rather than only
+/// logging them.
+pub async fn run_in_process_dispatch_worker_with<R, S, D, Sig>(
+    config: WorkerConfig,
+    shutdown: Sig,
+    reader: R,
+    registry: SubscriberRegistry,
+    inbox: S,
+    policy: RelayPolicy,
+    dead_letters: D,
+) -> WorkerReport
+where
+    R: OutboxReader + Sync,
+    S: IdempotencyStore,
+    D: DeadLetterSink + Sync,
+    Sig: Future<Output = ()>,
+{
     let reader = Arc::new(reader);
     let inbox = Arc::new(inbox);
     let registry = Arc::new(registry);
+    let dead_letters = Arc::new(dead_letters);
     run_worker(config, shutdown, move || {
         // Each pass owns its clones, so the future borrows only its own locals and
         // stays `Send` across `.await` — the same shape as the relay worker.
         let reader = Arc::clone(&reader);
         let inbox = Arc::clone(&inbox);
         let registry = Arc::clone(&registry);
+        let dead_letters = Arc::clone(&dead_letters);
         async move {
-            let dispatched = drain_in_process(&*reader, &registry, &*inbox).await?;
-            Ok(dispatched as u64)
+            let handled =
+                drain_in_process_with(&*reader, &registry, &*inbox, policy, &*dead_letters).await?;
+            Ok(handled as u64)
         }
     })
     .await
@@ -478,6 +717,64 @@ impl OutboxReader for InMemoryOutbox {
     }
 }
 
+/// An in-memory [`DeadLetterSink`] double (behind the `testing` feature): it
+/// captures every dead-lettered `(record, error)` so a test can assert a poison
+/// pill was buried — the offline stand-in for the real `dorm_outbox_dead` table.
+///
+/// It is the dead-letter counterpart of [`InMemoryOutbox`]: a `Mutex`-guarded log,
+/// nothing durable, enough to prove the driver's head-of-line-unblocking policy
+/// (dead-letter + advance) in parity with `dorm_outbox::relay` with no database.
+#[cfg(any(test, feature = "testing"))]
+#[derive(Clone, Default)]
+pub struct InMemoryDeadLetters {
+    inner: Arc<Mutex<Vec<(OutboxRecord, String)>>>,
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl InMemoryDeadLetters {
+    /// An empty dead-letter log.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every `(record, error)` dead-lettered so far, oldest first.
+    #[must_use]
+    pub fn captured(&self) -> Vec<(OutboxRecord, String)> {
+        self.inner
+            .lock()
+            .expect("InMemoryDeadLetters poisoned")
+            .clone()
+    }
+
+    /// How many events have been dead-lettered.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("InMemoryDeadLetters poisoned")
+            .len()
+    }
+
+    /// Whether nothing has been dead-lettered yet.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl DeadLetterSink for InMemoryDeadLetters {
+    async fn dead_letter(&self, record: &OutboxRecord, error: &str) -> PortResult<()> {
+        self.inner
+            .lock()
+            .expect("InMemoryDeadLetters poisoned")
+            .push((record.clone(), error.to_owned()));
+        Ok(())
+    }
+}
+
 /// An [`EventPublisher`](seiva_ports::EventPublisher) that writes into an
 /// [`InMemoryOutbox`] (behind the `testing` feature): the publish side of the
 /// offline choreography, the in-memory stand-in for a use case writing the
@@ -547,8 +844,19 @@ impl seiva_ports::EventPublisher for InMemoryOutboxPublisher {
         let data = serde_json::from_slice(payload).unwrap_or_else(|_| {
             serde_json::Value::String(String::from_utf8_lossy(payload).into_owned())
         });
-        self.outbox
-            .publish(CloudEvent::new(id, &self.source, topic, data));
+        // Inject the current trace context onto the envelope as it is written to the
+        // outbox (ADR 0027), so the consumer can parent its handling span to the
+        // emitting use case. A no-op (empty context) until a service opts into
+        // tracing, so the offline build carries no trace attributes.
+        let mut event = CloudEvent::new(id, &self.source, topic, data);
+        let tc = trace_context::inject_current();
+        if let Some(traceparent) = tc.traceparent {
+            event = event.with_traceparent(traceparent);
+        }
+        if let Some(tracestate) = tc.tracestate {
+            event = event.with_tracestate(tracestate);
+        }
+        self.outbox.publish(event);
         Ok(())
     }
 }

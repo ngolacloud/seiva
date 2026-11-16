@@ -960,6 +960,7 @@ dependencies = [
  "dorm-core",
  "dorm-outbox",
  "seiva-messaging",
+ "seiva-observability",
  "seiva-ports",
  "serde_json",
  "tokio",
@@ -973,6 +974,10 @@ dependencies = [
  "serde_json",
  "tracing",
 ]
+
+[[package]]
+name = "seiva-observability"
+version = "0.1.0"
 
 [[package]]
 name = "seiva-ports"

@@ -12,6 +12,9 @@
 //!   the facade and serve `/metrics` on a dedicated bind.
 //! - the `tracing` module (feature `tracing`) — install an OTLP tracing layer
 //!   configured from the standard `OTEL_*` environment.
+//! - the [`trace_context`] module (always present) — the event-boundary facade the
+//!   data-layer-free library crates call to inject/extract W3C trace context across
+//!   the outbox→broker→subscriber hop; a no-op until the `tracing` feature is on.
 //!
 //! (Both modules are feature-gated, so they are documented only when their feature
 //! is enabled; the links are omitted here to keep the default-feature doc build
@@ -30,3 +33,5 @@ pub mod metrics;
 
 #[cfg(feature = "tracing")]
 pub mod tracing;
+
+pub mod trace_context;

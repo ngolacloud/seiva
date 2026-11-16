@@ -21,6 +21,7 @@
 
 use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
+use seiva_observability::trace_context;
 use seiva_ports::{
     AuditEntry, AuditSink, BoxError, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
     IdempotencyStore, PortResult, Scope, UnitOfWork,
@@ -239,12 +240,25 @@ impl EventPublisher for DormOutboxPublisher {
         // the framework data layer; the CloudEvents `type` is the topic.
         let data: serde_json::Value =
             serde_json::from_slice(payload).map_err(|e| Box::new(e) as BoxError)?;
-        let event = CloudEvent::new(
+        let mut event = CloudEvent::new(
             uuid::Uuid::new_v4().to_string(),
             "urn:delonix-seiva:data-layer",
             topic,
             data,
         );
+        // Inject the current trace context onto the envelope as it is written to the
+        // outbox (ADR 0027, Fase 2), so the relay consumer can parent its handling
+        // span to the emitting use case — symmetric to `InMemoryOutboxPublisher` on
+        // the in-process path. A no-op (empty context) until a service opts into
+        // `seiva-observability/tracing` at its root, so the default build carries no
+        // trace attributes and pays nothing.
+        let tc = trace_context::inject_current();
+        if let Some(traceparent) = tc.traceparent {
+            event = event.with_traceparent(traceparent);
+        }
+        if let Some(tracestate) = tc.tracestate {
+            event = event.with_tracestate(tracestate);
+        }
         dorm_outbox::publish(topic, &event.to_json())
             .await
             .map(|_| ())
