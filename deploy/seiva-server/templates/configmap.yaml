@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "seiva-server.fullname" . }}-env
+  labels:
+    {{- include "seiva-server.labels" . | nindent 4 }}
+data:
+  # The container binds all interfaces on the chart port; the process default is
+  # loopback-only (127.0.0.1:8080), which would be unreachable in a pod.
+  SEIVA_HTTP_ADDR: "0.0.0.0:{{ .Values.containerPort }}"
+  {{- if .Values.metrics.enabled }}
+  # ADR 0027: the Prometheus exporter binds its own address, separate from the app.
+  SEIVA_METRICS_ADDR: "0.0.0.0:{{ .Values.metrics.port }}"
+  {{- end }}
+  {{- range $key, $value := .Values.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

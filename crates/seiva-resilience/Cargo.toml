@@ -1,0 +1,45 @@
+# seiva-resilience — the framework's production resilience primitives: a circuit
+# breaker, a retry policy and a timeout wrapper. The guardrails a Seiva service
+# puts between itself and a dependency that can fail, time out or fall over.
+#
+# Data-layer-free (DORM-free): it composes futures and times transitions off a
+# monotonic clock; it never touches a database, broker or the DORM gateway, so it
+# lives in the default workspace `members` and carries NO `dorm` feature. The
+# outbound webhook sender and the future inter-service client are its consumers.
+#
+# The retry backoff schedule is byte-for-byte `seiva_events::RelayPolicy::backoff`
+# (and therefore `dorm_outbox::relay`), so a transient failure is paced the same
+# whether the outbox relay retries it or a caller wraps an operation here.
+[package]
+name = "seiva-resilience"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Production resilience primitives for Delonix Seiva: a circuit breaker (closed/open/half-open), a retry policy with exponential backoff, and a timeout wrapper. Data-layer-free."
+readme = "README.md"
+keywords = ["circuit-breaker", "retry", "resilience", "backoff", "timeout"]
+categories = ["asynchronous", "network-programming"]
+
+[dependencies]
+# A small, unit-variant error enum (`TimedOut`). `thiserror` keeps the
+# Display/Error impls terse; no inline data, so clippy `result_large_err` stays
+# quiet.
+thiserror = { workspace = true }
+# The retry combinator sleeps `backoff` between attempts and the timeout wraps
+# `tokio::time::timeout` — only the `time` driver rides in; the crate starts no
+# runtime of its own (the caller's does).
+tokio = { workspace = true, features = ["time"] }
+# A breaker trips and recovers at the edge of a service; `tracing` records each
+# state transition (closed→open→half-open→closed) as a near-free span/event until
+# a subscriber is installed. The lightweight facade only — no subscriber, no
+# runtime.
+tracing = { version = "0.1" }
+
+[dev-dependencies]
+# The tests drive async `call`/`retry`/`timeout` on a current-thread runtime; the
+# library brings no runtime of its own.
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }

@@ -1,0 +1,23 @@
+apiVersion: v2
+name: seiva-server
+description: >-
+  A production-ready deployment of a Delonix Seiva service (the `seiva-server`
+  runtime): a non-root distroless pod with liveness/readiness probes on
+  /health/*, horizontal autoscaling, a PodDisruptionBudget and a graceful-
+  shutdown-aware rollout.
+type: application
+# The chart's own version. Bump on any template change.
+version: 0.1.0
+# The Seiva release this chart defaults to (overridable via image.tag).
+appVersion: "0.1.0"
+keywords:
+  - seiva
+  - rust
+  - backend
+  - framework
+home: https://github.com/ngolacloud/seiva
+sources:
+  - https://github.com/ngolacloud/seiva
+maintainers:
+  - name: NgolaCloud
+    email: angolar.devops@gmail.com

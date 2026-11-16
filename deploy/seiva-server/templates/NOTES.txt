@@ -1,0 +1,18 @@
+{{ include "seiva-server.fullname" . }} is deploying.
+
+Service:   {{ include "seiva-server.fullname" . }} ({{ .Values.service.type }}, port {{ .Values.service.port }})
+Replicas:  {{ if .Values.autoscaling.enabled }}autoscaled {{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }}{{ else }}{{ .Values.replicaCount }} (fixed){{ end }}
+Image:     {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+
+Health endpoints (what the probes hit):
+  /health/live   — 200 in every state; a draining pod stays alive to finish in-flight work
+  /health/ready  — 200 only while Ready AND the critical-dependency check passes
+
+Check rollout:
+  kubectl rollout status deploy/{{ include "seiva-server.fullname" . }}
+
+Port-forward to try it:
+  kubectl port-forward svc/{{ include "seiva-server.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -fsS localhost:8080/health/ready
+
+Operational runbooks: docs/runbooks/ (startup, dependency degradation / breaker open, rollback).

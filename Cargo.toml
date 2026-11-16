@@ -77,6 +77,10 @@ members = [
     "crates/seiva-config",
     # Standard Webhooks signing/verification (HMAC-SHA256, replay window).
     "crates/seiva-webhooks",
+    # Production resilience primitives: a circuit breaker (closed/open/half-open),
+    # a retry policy with exponential backoff (the SAME schedule as the outbox
+    # relay's RelayPolicy) and a timeout wrapper. Data-layer-free, so a member.
+    "crates/seiva-resilience",
     # Application-layer CQRS dispatch: a statically-wired command/query mediator
     # with typed middleware (instrumentation, query caching). Data-layer-free.
     "crates/seiva-cqrs",
