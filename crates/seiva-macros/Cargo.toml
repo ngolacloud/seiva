@@ -18,6 +18,8 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Procedural macros for the Delonix Seiva framework (#[seiva::facade])."
+keywords = ["macros", "proc-macro", "framework", "codegen", "facade"]
+categories = ["development-tools::procedural-macro-helpers"]
 
 [lib]
 proc-macro = true

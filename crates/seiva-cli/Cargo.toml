@@ -16,13 +16,6 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "The Delonix Seiva CLI (binary `seiva`): scaffold projects and modules, run the dev loop, lint the architecture."
-# Not published yet: the demo commands (`user create`, built-in `openapi`/`proto`)
-# depend on the example crates (`notes-*`, `accounts-*`, all publish = false).
-# Install meanwhile with `cargo install --git https://github.com/ngolacloud/seiva
-# seiva-cli`. Generated projects do NOT depend on the CLI, so this does not block
-# them. Publishing it to crates.io is gated on extracting those demo commands
-# (see docs/publishing.md).
-publish = false
 
 [[bin]]
 name = "seiva"
@@ -31,30 +24,23 @@ path = "src/main.rs"
 [dependencies]
 delonix-seiva = { workspace = true }
 clap = { workspace = true }
-# DORM-free sibling crates the new `openapi`/`proto`/`user` commands drive. Path
-# deps (siblings), kept out of the `dorm` feature: these commands never touch the
-# data layer, so they must build with default features and `--no-default-features`
-# alike.
-seiva-openapi = { path = "../seiva-openapi" }
-seiva-grpc = { path = "../seiva-grpc" }
-# The built-in demonstration facade the CLI documents at compile time.
-notes-facade = { path = "../../examples/notes/facade" }
 serde_json = "1"
-# `seiva user create` drives the real `accounts` module use case (the CLI is the
-# application/composition layer): it builds an AccountsService over the in-memory
-# repository and in-process ports. The module hashes with seiva-auth internally,
-# so the CLI no longer depends on seiva-auth directly.
-accounts-facade = { path = "../../examples/accounts/facade" }
-accounts-application = { path = "../../examples/accounts/application" }
-accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
-accounts-interface = { path = "../../examples/accounts/interface" }
-seiva-ports = { workspace = true }
-async-trait = { workspace = true }
-# A current-thread runtime to drive the module's async use case from the sync CLI.
-tokio = { version = "1", features = ["rt"] }
+# Demonstration-only, behind the `demo` feature (default off). Both are published
+# to crates.io, so their `version` lets `cargo publish` resolve them even though
+# the feature is off by default — unlike the `examples/` crates (`notes-*`,
+# `accounts-*`), which are `publish = false` and so cannot be dependencies of a
+# publishable crate (even optional path deps block `cargo publish`). The demo
+# facade and user-create are therefore self-contained in `src/demo.rs`, built
+# only from these published crates. See docs/publishing.md.
+seiva-openapi = { path = "../seiva-openapi", version = "0.1.0", optional = true }
+seiva-auth = { path = "../seiva-auth", version = "0.1.0", optional = true }
 
 [features]
 # Forward the data-layer toggle to the framework crate so `--no-default-features`
 # on the binary genuinely links a DORM-free build (provable via `seiva doctor`).
 default = ["dorm"]
 dorm = ["delonix-seiva/dorm"]
+# The built-in demonstration commands (`seiva openapi`/`user create` outside a
+# project). Off in the published binary; a project's own `openapi`/`proto` work
+# without it. `cargo install seiva-cli --features demo` turns them on.
+demo = ["dep:seiva-openapi", "dep:seiva-auth"]

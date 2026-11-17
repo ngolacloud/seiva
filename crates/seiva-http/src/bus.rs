@@ -34,7 +34,7 @@
 //!         Validate::new(
 //!             Transactional::new(
 //!                 Idempotent::new(handler, store, scoped_key, fingerprint, ttl),
-//!                 uow,
+//!                 uow, ctx.scope(),
 //!             ),
 //!         ),
 //!         principal, required,
@@ -224,7 +224,7 @@ where
 ///
 /// `begin`/handler/`finish` and the outbox write have to commit as one atom
 /// (ADR 0011). Compose it as the innermost link of the transactional scope —
-/// `Transactional::new(Idempotent::new(handler, …), uow)` — so the key reservation
+/// `Transactional::new(Idempotent::new(handler, …), uow, ctx.scope())` — so the key reservation
 /// commits with the mutation it guards. Placed *outside* a transaction it would
 /// reserve a key that a later rollback could not release, which is exactly the
 /// failure mode ADR 0011 avoided by rejecting an outer idempotency middleware.
@@ -336,6 +336,9 @@ where
             // Status-bearing 409s: boxed as `Problem`, recovered verbatim at the edge.
             IdempotencyOutcome::InProgress => Err(BoxError::from(in_progress_problem())),
             IdempotencyOutcome::Mismatch => Err(BoxError::from(mismatch_problem())),
+            // A future outcome kind is treated as a conflict (fail-closed): refuse
+            // rather than silently re-run the mutation.
+            _ => Err(BoxError::from(in_progress_problem())),
         }
     }
 }

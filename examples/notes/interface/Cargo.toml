@@ -10,3 +10,9 @@ publish = false
 
 [dependencies]
 notes-facade = { path = "../facade" }
+# The interface holds the application service and the re-exported `NoteRepository`
+# port, derives the tenant `Scope` from the `&Ctx`, and delegates. It depends on
+# `application` (never `infrastructure`/`domain`) and the HTTP/ports kernel.
+notes-application = { path = "../application" }
+seiva-http = { path = "../../../crates/seiva-http" }
+seiva-ports = { workspace = true }

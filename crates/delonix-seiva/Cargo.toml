@@ -15,6 +15,8 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Delonix Seiva — a Rust backend framework for robust, high-criticality systems. Only backend; DORM as the default data layer."
+keywords = ["framework", "backend", "web", "microservices", "ddd"]
+categories = ["web-programming::http-server"]
 
 [dependencies]
 seiva-ports = { workspace = true }

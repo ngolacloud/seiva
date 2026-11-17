@@ -909,6 +909,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "metrics"
+version = "0.24.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89550ee9f79e88fef3119de263694973a8adb26c21d75322164fb8c493039fe2"
+dependencies = [
+ "portable-atomic",
+ "rapidhash",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1066,6 +1076,12 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "postgres-protocol"
@@ -1231,6 +1247,15 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rapidhash"
+version = "4.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5da7e78a036ce858e8d55b7e7dc8ba3a88b78350fd2155d3591bbd966b58589e"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "redox_syscall"
@@ -1428,6 +1453,7 @@ dependencies = [
  "dorm-core",
  "dorm-outbox",
  "seiva-messaging",
+ "seiva-observability",
  "seiva-ports",
  "serde_json",
  "uuid",
@@ -1438,8 +1464,13 @@ name = "seiva-events"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "delonix-seiva",
  "seiva-messaging",
+ "seiva-observability",
  "seiva-ports",
+ "seiva-resilience",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1448,6 +1479,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "delonix-seiva",
+ "metrics",
  "seiva-contract",
  "seiva-cqrs",
  "seiva-identity",
@@ -1457,6 +1489,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "sha2 0.10.9",
+ "tokio",
  "tower-http",
  "tracing",
 ]
@@ -1489,6 +1522,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-observability"
+version = "0.1.0"
+
+[[package]]
 name = "seiva-openapi"
 version = "0.1.0"
 dependencies = [
@@ -1507,8 +1544,10 @@ dependencies = [
  "dorm-outbox",
  "seiva-events",
  "seiva-messaging",
+ "seiva-observability",
  "seiva-ports",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1516,6 +1555,15 @@ name = "seiva-ports"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+]
+
+[[package]]
+name = "seiva-resilience"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -442,12 +442,16 @@ where
 pub struct Transactional<H, U> {
     inner: H,
     uow: U,
+    scope: Scope,
 }
 
 impl<H, U> Transactional<H, U> {
-    /// Wrap `inner`, running each command inside a transaction from `uow`.
-    pub fn new(inner: H, uow: U) -> Self {
-        Self { inner, uow }
+    /// Wrap `inner`, running each command inside a transaction from `uow` under
+    /// `scope`. The `scope` is the request's tenant scope, derived **server-side**
+    /// from the authenticated caller (`seiva_http::Ctx::scope`) — never a fixed
+    /// [`Scope::Global`], so a tenant's command stays constrained to that tenant.
+    pub fn new(inner: H, uow: U, scope: Scope) -> Self {
+        Self { inner, uow, scope }
     }
 
     /// Borrow the wrapped inner handler/behavior.
@@ -473,7 +477,7 @@ where
         // closure moves `cmd` and borrows `&self.inner`; both are `Send`, so the
         // boxed future the port returns stays `Send`.
         self.uow
-            .transaction(Scope::Global, move || self.inner.handle(cmd))
+            .transaction(self.scope.clone(), move || self.inner.handle(cmd))
             .await
     }
 }
@@ -743,7 +747,8 @@ mod tests {
         let handler = RecordingAdder::new();
         let calls = handler.calls();
         let uow = InMemoryUnitOfWork::new();
-        let mediator = Mediator::new(Transactional::new(handler, uow));
+        let acme = Scope::tenant("acme").expect("non-empty");
+        let mediator = Mediator::new(Transactional::new(handler, uow, acme.clone()));
 
         let out = mediator.send(RecordedSum(2, 40)).await.unwrap();
 
@@ -751,6 +756,9 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         // The handler returned `Ok`, so the scope-based unit of work committed.
         assert_eq!(mediator.handler().uow().outcomes(), [TxOutcome::Committed]);
+        // The transaction ran under the scope it was given — not a fixed
+        // `Scope::Global` (SG1 / acceptance point 5).
+        assert_eq!(mediator.handler().uow().scopes(), [acme]);
     }
 
     #[tokio::test]
@@ -759,7 +767,7 @@ mod tests {
 
         // `Failing` always returns `Err`, so the transaction body fails.
         let uow = InMemoryUnitOfWork::new();
-        let mediator = Mediator::new(Transactional::new(Failing, uow));
+        let mediator = Mediator::new(Transactional::new(Failing, uow, Scope::Global));
 
         let result = mediator.send(Boom).await;
 

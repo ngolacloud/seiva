@@ -228,6 +228,22 @@ impl InMemoryIdempotencyStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Drop an **in-flight** (un-`finish`ed) claim so a later `begin` is `Fresh`
+    /// again; a finished record (`response: Some`) is a real `Replay` and must
+    /// survive. Shared by the async [`abort`](IdempotencyStore::abort) (error-leg
+    /// compensation) and the synchronous
+    /// [`abort_blocking`](IdempotencyStore::abort_blocking) (cancellation-leg
+    /// compensation) so both release identically. Pure in-memory work (lock +
+    /// mutate), so it is safe to call from a `Drop` guard.
+    fn release_in_flight(&self, scoped_key: &str) {
+        let mut keys = self.keys.lock().expect("idempotency store poisoned");
+        if let Some(record) = keys.get(scoped_key) {
+            if record.response.is_none() {
+                keys.remove(scoped_key);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -267,16 +283,18 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
     }
 
     async fn abort(&self, scoped_key: &str) -> PortResult<()> {
-        // Release an un-finished claim so a redelivery is `Fresh` again. A
-        // finished record (`response: Some`) is a real `Replay` and must survive,
-        // so only an in-flight (`response: None`) claim is removed.
-        let mut keys = self.keys.lock().expect("idempotency store poisoned");
-        if let Some(record) = keys.get(scoped_key) {
-            if record.response.is_none() {
-                keys.remove(scoped_key);
-            }
-        }
+        // Release an un-finished claim so a redelivery is `Fresh` again (the
+        // error-leg compensation). A finished record (`response: Some`) is a real
+        // `Replay` and must survive, so only an in-flight claim is removed.
+        self.release_in_flight(scoped_key);
         Ok(())
+    }
+
+    fn abort_blocking(&self, scoped_key: &str) {
+        // The synchronous twin of `abort`, for a `Drop` guard compensating a
+        // cancelled in-process dispatch (it cannot `.await`): same in-flight
+        // release, no IO.
+        self.release_in_flight(scoped_key);
     }
 }
 

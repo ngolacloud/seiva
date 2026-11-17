@@ -23,6 +23,15 @@ seiva-ports = { path = "../seiva-ports" }
 # this crate supplies a DORM adapter for. `default-features = false` drops the
 # in-memory `InMemoryOutbox` double — the real reader here is the DORM one.
 seiva-events = { path = "../seiva-events", default-features = false }
+# `drain` opens a handling span per event so a subscriber's work joins the
+# emitter's trace. `tracing` on its own is the lightweight facade crate (no
+# subscriber, no runtime): a span is near-free until a subscriber is installed.
+tracing = "0.1"
+# The event-boundary trace-context facade (ADR 0027): `set_parent` on handle parents
+# the drain span to the envelope's trace context. `default-features = false` links
+# NO exporter — a no-op until a service enables the crate's `tracing` feature at its
+# root (the proof test enables it via a dev-dependency).
+seiva-observability = { path = "../seiva-observability", default-features = false }
 # To implement the `OutboxReader` (an `async-trait` trait) over DORM.
 async-trait = "0.1"
 # DORM by published version (owner decision, roadmap P0-1); resolved from crates.io.
@@ -35,3 +44,18 @@ tokio = { version = "1", features = ["rt", "macros"] }
 # The in-memory idempotency double, so the gated live test can drive the driver's
 # inbox without a DORM-backed store (the DORM store lives in seiva-data-dorm).
 seiva-testing = { path = "../seiva-testing" }
+# The relay trace-propagation proof turns ON the facade's real runtime: this dev
+# edge enables `seiva-observability/tracing`, so for the TEST build the no-op facade
+# becomes real W3C propagation (feature unification) while a plain
+# `cargo build -p seiva-outbox-relay` still links nothing.
+seiva-observability = { path = "../seiva-observability", default-features = false, features = ["tracing"] }
+# The DORM-backed publisher the proof writes the outbox through, so `inject_current`
+# stamps the envelope on the real gateway path (not the in-memory double).
+seiva-data-dorm = { path = "../seiva-data-dorm" }
+# An in-memory span exporter + the `tracing-opentelemetry` bridge, so the proof can
+# install a tracer, drive a real drain pass, and assert the handling span's parent is
+# the emitting span. Versions match the coherent OTLP set seiva-observability pins.
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["testing"] }
+tracing-opentelemetry = "0.33"
+tracing-subscriber = "0.3"

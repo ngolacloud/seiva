@@ -174,7 +174,7 @@ mod tests {
             RateLimitDecision::Limited { retry_after } => {
                 assert!(retry_after > Duration::ZERO, "retry-after must be positive");
             }
-            RateLimitDecision::Permitted => panic!("over budget should be Limited"),
+            other => panic!("over budget should be Limited, got {other:?}"),
         }
 
         // Cleanup.

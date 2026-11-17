@@ -2022,6 +2022,7 @@ name = "notes-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
 ]
 
 [[package]]
@@ -2037,7 +2038,10 @@ dependencies = [
 name = "notes-interface"
 version = "0.1.0"
 dependencies = [
+ "notes-application",
  "notes-facade",
+ "seiva-http",
+ "seiva-ports",
 ]
 
 [[package]]
@@ -2181,6 +2185,7 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.5",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -2980,19 +2985,22 @@ dependencies = [
 name = "seiva-cli"
 version = "0.1.0"
 dependencies = [
- "accounts-application",
- "accounts-facade",
- "accounts-infrastructure",
- "accounts-interface",
- "async-trait",
  "clap",
  "delonix-seiva",
- "notes-facade",
- "seiva-grpc",
+ "seiva-auth",
  "seiva-openapi",
- "seiva-ports",
  "serde_json",
+]
+
+[[package]]
+name = "seiva-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "seiva-resilience",
+ "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3053,11 +3061,18 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "delonix-seiva",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "seiva-messaging",
+ "seiva-observability",
  "seiva-ports",
+ "seiva-resilience",
  "seiva-testing",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3166,6 +3181,15 @@ dependencies = [
  "redis",
  "seiva-ports",
  "tokio",
+]
+
+[[package]]
+name = "seiva-resilience"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

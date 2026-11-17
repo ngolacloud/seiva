@@ -159,7 +159,7 @@ pub async fn authn(State(authn): State<Authn>, mut request: Request, next: Next)
         {
             return match api_key_auth.authenticate(&key) {
                 Ok(principal) => {
-                    request.extensions_mut().insert(principal);
+                    request.extensions_mut().insert(Arc::new(principal));
                     next.run(request).await
                 }
                 Err(_) => unauthorized(request, "ApiKey"),
@@ -177,7 +177,9 @@ pub async fn authn(State(authn): State<Authn>, mut request: Request, next: Next)
     let Some(header) = presented else {
         // No credential: the anonymous principal. The per-route guard, not this
         // layer, is what denies a guarded route — so public routes keep serving.
-        request.extensions_mut().insert(Principal::anonymous());
+        request
+            .extensions_mut()
+            .insert(Arc::new(Principal::anonymous()));
         return next.run(request).await;
     };
 
@@ -196,7 +198,7 @@ pub async fn authn(State(authn): State<Authn>, mut request: Request, next: Next)
 
     match bearer_auth.authenticate(bearer) {
         Ok(principal) => {
-            request.extensions_mut().insert(principal);
+            request.extensions_mut().insert(Arc::new(principal));
             next.run(request).await
         }
         Err(_) => unauthorized(request, "Bearer"),

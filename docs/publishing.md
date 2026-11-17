@@ -4,17 +4,32 @@ Para um projeto gerado por `seiva project new` compilar **standalone** (fora da
 árvore do framework), os crates `seiva-*`/`delonix-seiva` têm de estar
 disponíveis por versão (crates.io). O scaffold **já emite deps por versão**
 (`delonix-seiva = { version = "0.1", … }`, `seiva-http = "0.1"`, …; as camadas
-intra-projeto ficam `path`), por isso só falta **publicar** os crates para um
-projeto gerado compilar sozinho.
+intra-projeto ficam `path`).
 
-## Estado de publish-readiness (medido 2026-11-04)
+## Estado: PUBLICADO em crates.io (v0.1.0, 2026-11-05)
 
-**Prontos (`cargo package` passa):** `seiva-ports`, `seiva-config`, `seiva-auth`,
-`seiva-webhooks`, `seiva-macros`, `seiva-cqrs`, `seiva-openapi`, `delonix-seiva`,
-`seiva-testing`. Metadata completa; deps internas já carregam `version` via
-`[workspace.dependencies]`.
+Os **crates de biblioteca estão publicados** em crates.io sob licença dupla
+MIT/Apache. Um projecto gerado compila standalone com `cargo add`/scaffold, sem
+patches nem git. Verificado 2026-11-16:
 
-**DESBLOQUEADOS nesta campanha** (demo extraída → `cargo package` passa):
+| Crate | crates.io |
+| --- | --- |
+| `seiva-ports`, `seiva-macros`, `seiva-testing`, `seiva-messaging` | ✅ publicado |
+| `delonix-seiva`, `seiva-openapi`, `seiva-auth`, `seiva-config` | ✅ publicado |
+| `seiva-webhooks`, `seiva-cqrs`, `seiva-http`, `seiva-server` | ✅ publicado |
+| `seiva-cli` | ✖ `publish = false` (ver abaixo) |
+
+Para re-publicar uma nova versão, segue a ordem topológica no fim deste
+documento.
+
+### Histórico de publish-readiness (medido 2026-11-04, antes do corte)
+
+**Prontos à data (`cargo package` passava):** `seiva-ports`, `seiva-config`,
+`seiva-auth`, `seiva-webhooks`, `seiva-macros`, `seiva-cqrs`, `seiva-openapi`,
+`delonix-seiva`, `seiva-testing`. Metadata completa; deps internas já carregam
+`version` via `[workspace.dependencies]`.
+
+**DESBLOQUEADOS na campanha** (demo extraída → `cargo package` passa):
 - `seiva-http`: removido o demo `notes_router`/`notes-facade`; fica só com
   problem/valid/guard/health/security/rate_limit/docs + o builder de router. Os
   testes exercem os primitivos com uma rota inline (sem exemplo).
@@ -37,8 +52,9 @@ esses comandos serem extraídos. Projetos gerados **não** dependem do CLI, por
 isso isto não os afecta. Publicá-lo em crates.io fica para quando os comandos-
 demo saírem (decisão de produto, abaixo).
 
-**O único passo que falta para o projeto gerado compilar sozinho:** publicar os
-11 crates de biblioteca (owner-only). O scaffold já referencia a versão.
+**FEITO:** os 12 crates de biblioteca foram publicados em crates.io (v0.1.0,
+2026-11-05). Um projecto gerado compila standalone com `cargo add`/scaffold. O
+único crate por publicar é o `seiva-cli` (abaixo).
 
 **Decisão de produto diferida (não bloqueia nada do acima):**
 - `seiva-cli` depende dos exemplos (`notes-facade`, `accounts-*`) porque os
@@ -49,26 +65,49 @@ demo saírem (decisão de produto, abaixo).
   projeto gerado — só a publicação do próprio CLI em crates.io (instala via
   `cargo install --git` entretanto).
 
-## O que falta (release pass dedicado)
+## `seiva-cli` — destravado estruturalmente (2026-11-16)
 
-1. **Decidir `seiva-grpc`** (publicar vs tirar do módulo gerado) e **`seiva-cli`**
-   (destino dos comandos-demo), conforme acima.
-2. ~~Extrair as demos de `seiva-http`/`seiva-server`~~ ✅ feito nesta campanha.
-   Resta (opcional) a divisão `seiva-runtime` demo-free vs demo, se se quiser um
-   binário de exemplo `accounts-server` separado.
-3. **(histórico) `seiva-cli`**: o caminho `user create`/`openapi`/`proto` deixa de depender dos
-     exemplos (ou move a demonstração para um exemplo).
-2. **Decisão de distribuição (do dono):** crates.io (deps por `version`) **ou**
-   git tag (`{ git = "…seiva", tag = "v0.1.0" }`). Recomendo **crates.io** para o
-   getting-started de 5 min ser `cargo add`/scaffold sem git.
-3. **Scaffold:** substituir `FRAMEWORK_CRATES` (path placeholder) pela forma
-   escolhida em (2) — deps por `version` (crates.io) ou `git`+`tag`.
-4. **Publicar** por ordem topológica (owner-only, precisa de conta crates.io e é
-   irreversível):
-   `seiva-ports` → `seiva-macros` → `seiva-testing` → `seiva-messaging` →
-   `delonix-seiva` → `seiva-openapi` → `seiva-auth` → `seiva-config` →
-   `seiva-webhooks` → `seiva-cqrs` → `seiva-http` → `seiva-server` → `seiva-cli`.
-   (`cargo publish -p <crate>` por crate, de baixo para cima.)
+O `seiva-cli` **deixou de ter `publish = false`**. Os comandos-demo foram
+tratados pela decisão de produto **feature-gate** (branch `feat/seiva-cli-publishable`):
+
+- As dependências de exemplo não publicáveis (`notes-facade`, `accounts-*`) e o
+  `seiva-grpc` (ainda `publish = false`) **saíram** do `seiva-cli`. Mesmo como
+  dependências `optional` atrás de uma feature desligada, bloqueavam o
+  empacotamento: `cargo publish` **exige `version` em toda a dependência `path`,
+  mesmo optional** — e essas crates não estão em crates.io.
+- A demonstração passou a ser **auto-contida** em `crates/seiva-cli/src/demo.rs`,
+  construída só a partir de crates publicados (`delonix-seiva`, `seiva-openapi`,
+  `seiva-auth`): o facade `Notes` inline (que `seiva openapi` documenta) e um
+  `user create` inline com as mesmas regras de domínio + Argon2id do `accounts`.
+- Tudo isto atrás da feature `demo` (**default off**). O binário publicado é
+  magro — scaffold/lint/db/start + `openapi`/`proto` **dentro de um projecto**
+  (que correm na mesma, via subprocesso). `cargo install seiva-cli --features demo`
+  reactiva os comandos de demonstração. O `proto` built-in fora-de-projecto foi
+  removido (dependia de `seiva-grpc`, não publicado).
+
+**Prova nesta sessão:** `cargo publish -p seiva-cli --dry-run --no-verify` passa
+(empacota 6 ficheiros; o manifesto e as versões das deps resolvem). O
+empacotamento deixou de estar bloqueado.
+
+**O que ainda falta para publicar de facto (release do workspace, dono):** o
+`cargo publish --dry-run` **completo** (com verificação de compilação) ainda
+falha, mas **não por causa do `seiva-cli`** — falha porque compila o tarball
+contra `delonix-seiva 0.1.0` de crates.io, que está **atrás do workspace local**
+(a API `scaffold` ganhou `DataLayer`/`ProjectKind`/`add_app_member`/… desde a
+publicação de 2026-11-05). É preciso **cortar uma nova versão e republicar**
+`delonix-seiva` (e `seiva-openapi`/`seiva-auth` se mudaram) **antes** de publicar
+o `seiva-cli`. Segue a ordem topológica abaixo.
+
+## Ordem topológica para (re)publicar
+
+Para cortar uma nova versão da biblioteca, publica de baixo para cima
+(`cargo publish -p <crate>`), esperando cada crate propagar no índice antes do
+seguinte:
+
+`seiva-ports` → `seiva-macros` → `seiva-testing` → `seiva-messaging` →
+`delonix-seiva` → `seiva-openapi` → `seiva-auth` → `seiva-config` →
+`seiva-webhooks` → `seiva-cqrs` → `seiva-http` → `seiva-server`
+(→ `seiva-cli`, uma vez destravado acima).
 
 ## Nota
 

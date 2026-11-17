@@ -24,6 +24,8 @@ repository = "https://github.com/ngolacloud/seiva"
 homepage = "https://github.com/ngolacloud/seiva"
 rust-version = "1.75"
 description = "Delonix Seiva — the service runtime: mounts the facade-driven HTTP app, runs a worker host, reads 12-factor config, shuts down gracefully. DORM-free."
+keywords = ["server", "runtime", "web", "backend", "framework"]
+categories = ["web-programming::http-server"]
 
 [features]
 # Native observability (ADR 0027), wired ONLY here at the composition root so the

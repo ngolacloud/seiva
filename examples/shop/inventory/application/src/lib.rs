@@ -45,6 +45,7 @@ where
     async fn receive_stock(&self, product_id: u128, qty: u64) -> PortResult<StockDto> {
         let stock = self
             .uow
+            // seiva:allow-global — demo module, single-tenant illustration; per-module tenant-scoping tracked separately (ADR 0029)
             .transaction(Scope::Global, || async {
                 let mut stock = self
                     .repository
@@ -72,6 +73,7 @@ where
     async fn reserve_stock(&self, product_id: u128, qty: u64) -> PortResult<StockDto> {
         let stock = self
             .uow
+            // seiva:allow-global — demo module, single-tenant illustration; per-module tenant-scoping tracked separately (ADR 0029)
             .transaction(Scope::Global, || async {
                 let mut stock = self
                     .repository

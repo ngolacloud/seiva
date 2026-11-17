@@ -12,6 +12,8 @@
 //! treated as [`Principal::anonymous`] — holding nothing — so an unauthenticated
 //! caller is denied, not admitted.
 
+use std::sync::Arc;
+
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -163,15 +165,25 @@ pub async fn permission_guard(
     request: Request,
     next: Next,
 ) -> Response {
-    let principal = request
-        .extensions()
-        .get::<Principal>()
-        .cloned()
-        .unwrap_or_else(Principal::anonymous);
-
-    // The fail-closed decision is shared with the `Authorize` behavior via
-    // `require_permission`, so there is one rule, not two that can diverge.
-    let problem = match require_permission(&principal, required.0) {
+    // Read the principal by reference — the guard only needs `&Principal`, never
+    // an owned one, so a guarded route (and every PUBLIC route, where `required`
+    // is empty) pays no `Principal` deep-clone (panel finding E2). The decision is
+    // computed while the borrow is live, then the borrow ends before `request`
+    // moves into the inner service.
+    let anonymous;
+    let decision = {
+        let principal = match request.extensions().get::<Arc<Principal>>() {
+            Some(principal) => principal.as_ref(),
+            None => {
+                anonymous = Principal::anonymous();
+                &anonymous
+            }
+        };
+        // The fail-closed decision is shared with the `Authorize` behavior via
+        // `require_permission`, so there is one rule, not two that can diverge.
+        require_permission(principal, required.0)
+    };
+    let problem = match decision {
         Ok(()) => return next.run(request).await,
         Err(problem) => problem,
     };

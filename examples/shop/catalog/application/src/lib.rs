@@ -55,6 +55,7 @@ where
         // run inside it, so with the DORM gateway the event lands in the
         // transactional outbox in the SAME transaction as the business change.
         self.uow
+            // seiva:allow-global — demo module, single-tenant illustration; per-module tenant-scoping tracked separately (ADR 0029)
             .transaction(Scope::Global, || async {
                 self.repository.save_product(&product).await?;
                 self.events.publish("catalog.product_added", &event).await

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://ngolacloud.github.io/seiva/
+    about: Guides, tutorials, architecture, and ADRs.
+  - name: Question / discussion
+    url: https://github.com/ngolacloud/seiva/discussions
+    about: Ask a question or discuss an idea before filing an issue.

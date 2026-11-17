@@ -1,0 +1,45 @@
+# seiva-client — the inter-service client: how one Seiva module calls another
+# module's service (its facade over HTTP/gRPC) once they are split into separate
+# microservices, with the framework's resilience guardrails wrapped around every
+# call. It is the first real consumer of `seiva-resilience`: a call runs inside a
+# `CircuitBreaker`, retries a transient failure on the framework's one
+# `RetryPolicy` schedule, and times each attempt out.
+#
+# Data-layer-free (DORM-free) and transport-agnostic: it composes futures around a
+# `Transport` seam the caller injects (the same adapter pattern as the rest of the
+# framework), so it names no HTTP/gRPC client and tests fully OFFLINE against an
+# in-memory transport. The concrete HTTP transport is a downstream adapter, not a
+# dependency of this crate. It lives in the default workspace `members`.
+[package]
+name = "seiva-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Inter-service client for Delonix Seiva: calls another module's service through a circuit breaker, a retry policy and a per-attempt timeout, over an injected transport. Data-layer-free."
+readme = "README.md"
+keywords = ["microservices", "resilience", "circuit-breaker", "retry", "client"]
+categories = ["asynchronous", "network-programming"]
+
+[dependencies]
+# The three guardrails this crate wires together: the breaker, the retry policy
+# (the single framework-wide backoff schedule) and the per-attempt timeout.
+seiva-resilience = { version = "0.1.0", path = "../seiva-resilience" }
+# The `Transport` seam is object-safe (a caller stores the client over
+# `Arc<dyn Transport>` or a concrete adapter), so its async method is erased.
+async-trait = { workspace = true }
+# A small, unit-/tuple-variant error enum. `thiserror` keeps the Display/Error
+# impls terse without inflating the type (clippy `result_large_err` stays quiet).
+thiserror = { workspace = true }
+# One near-free event when the breaker rejects a call — the lightweight facade
+# only (no subscriber, no runtime) until a service installs one.
+tracing = { version = "0.1" }
+
+[dev-dependencies]
+# The tests drive `call` on a current-thread runtime and pause the clock to prove
+# the per-attempt timeout; the library brings no runtime of its own (the caller's
+# does, via `seiva-resilience`).
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }

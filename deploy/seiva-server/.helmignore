@@ -1,0 +1,9 @@
+.DS_Store
+.git/
+.gitignore
+*.tmp
+*.orig
+*.swp
+ci/
+Dockerfile
+README.md

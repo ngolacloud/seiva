@@ -331,19 +331,13 @@ async fn audit_sink_persists_a_redacted_entry() {
         .expect("clean");
 
     let sink = SqlxAuditSink::new(pool.clone());
-    let entry = AuditEntry {
-        actor: "alice".to_owned(),
-        tenant: Some("acme".to_owned()),
-        operation: "POST /v1/accounts/create_user".to_owned(),
-        object: Some("user-1".to_owned()),
-        outcome: "201".to_owned(),
-        request_id: Some("req-xyz".to_owned()),
-        details: vec![
-            ("username".to_owned(), "alice".to_owned()),
-            ("password".to_owned(), "secret".to_owned()),
-        ],
-    }
-    .redacted();
+    let entry = AuditEntry::new("alice", "POST /v1/accounts/create_user", "201")
+        .in_tenant(Some("acme"))
+        .on_object(Some("user-1"))
+        .with_request_id(Some("req-xyz"))
+        .with_detail("username", "alice")
+        .with_detail("password", "secret")
+        .redacted();
     sink.record(&entry).await.expect("audit record persists");
 
     let row = sqlx::query(

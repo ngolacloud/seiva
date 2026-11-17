@@ -44,10 +44,14 @@ pub mod request_id;
 pub mod security;
 pub mod valid;
 
+use axum::body::Bytes;
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{from_fn, from_fn_with_state};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::Router;
+use sha2::{Digest, Sha256};
 
 pub use audit::audit;
 pub use authn::{authn, AuthConfig, Authn};
@@ -108,8 +112,56 @@ pub fn openapi_document() -> serde_json::Value {
 }
 
 /// `GET /openapi.json` — serves the generated [`openapi_document`].
-async fn openapi_handler() -> Json<serde_json::Value> {
-    Json(openapi_document())
+///
+/// The document is derived entirely from the link-time facade inventory, so it is
+/// immutable for the life of the process. It is therefore generated and serialized
+/// **once** (behind a [`OnceLock`](std::sync::OnceLock)) and every request serves
+/// the cached bytes — an `O(1)` [`Bytes`] clone, with no regeneration and no
+/// re-serialization. The response carries a strong `ETag` (SHA-256 of the body)
+/// and `Cache-Control`, and a conditional request whose `If-None-Match` matches is
+/// answered `304 Not Modified`. This keeps an unauthenticated route from being a
+/// cheap regenerate-per-request DoS vector (OWASP API4).
+async fn openapi_handler(headers: HeaderMap) -> Response {
+    let cached = cached_openapi();
+    if let Some(inm) = headers.get(header::IF_NONE_MATCH) {
+        if inm.as_bytes() == cached.etag.as_bytes() {
+            return StatusCode::NOT_MODIFIED.into_response();
+        }
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::ETAG, cached.etag.as_str()),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+        ],
+        cached.body.clone(),
+    )
+        .into_response()
+}
+
+/// The generated OpenAPI document, serialized once per process.
+struct CachedOpenApi {
+    /// The serialized `application/json` body. Cloning it per request is an `O(1)`
+    /// reference-count bump, not a copy of the bytes.
+    body: Bytes,
+    /// A strong validator: the quoted SHA-256 hex of `body` (RFC 9110 §8.8.3).
+    /// Deterministic across replicas running the same binary.
+    etag: String,
+}
+
+/// Builds (once) and returns the cached `/openapi.json` payload. The document is
+/// immutable after link time, so the initializer runs exactly once per process.
+fn cached_openapi() -> &'static CachedOpenApi {
+    static CACHE: std::sync::OnceLock<CachedOpenApi> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let body = serde_json::to_vec(&openapi_document())
+            .expect("the generated OpenAPI document always serializes");
+        let etag = format!("\"{}\"", idempotency::hex(Sha256::digest(&body).as_slice()));
+        CachedOpenApi {
+            body: Bytes::from(body),
+            etag,
+        }
+    })
 }
 
 /// The `(version, resource)` route-prefix collisions among **every facade linked

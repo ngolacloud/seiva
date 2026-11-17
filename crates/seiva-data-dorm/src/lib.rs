@@ -21,6 +21,7 @@
 
 use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
+use seiva_observability::trace_context;
 use seiva_ports::{
     AuditEntry, AuditSink, BoxError, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
     IdempotencyStore, PortResult, Scope, UnitOfWork,
@@ -109,6 +110,10 @@ where
     match scope {
         Scope::Tenant(tenant) => dorm_core::db::with_tenant(tenant.into_string(), fut).await,
         Scope::Global => dorm_core::db::with_system_scope(fut).await,
+        // A future `Scope` kind must be mapped onto DORM enforcement explicitly
+        // before it ships; until then refuse (fail-closed) rather than silently
+        // run a query with no tenant constraint.
+        _ => panic!("unmapped Scope variant reached the DORM gateway (fail-closed)"),
     }
 }
 
@@ -239,12 +244,25 @@ impl EventPublisher for DormOutboxPublisher {
         // the framework data layer; the CloudEvents `type` is the topic.
         let data: serde_json::Value =
             serde_json::from_slice(payload).map_err(|e| Box::new(e) as BoxError)?;
-        let event = CloudEvent::new(
+        let mut event = CloudEvent::new(
             uuid::Uuid::new_v4().to_string(),
             "urn:delonix-seiva:data-layer",
             topic,
             data,
         );
+        // Inject the current trace context onto the envelope as it is written to the
+        // outbox (ADR 0027, Fase 2), so the relay consumer can parent its handling
+        // span to the emitting use case — symmetric to `InMemoryOutboxPublisher` on
+        // the in-process path. A no-op (empty context) until a service opts into
+        // `seiva-observability/tracing` at its root, so the default build carries no
+        // trace attributes and pays nothing.
+        let tc = trace_context::inject_current();
+        if let Some(traceparent) = tc.traceparent {
+            event = event.with_traceparent(traceparent);
+        }
+        if let Some(tracestate) = tc.tracestate {
+            event = event.with_tracestate(tracestate);
+        }
         dorm_outbox::publish(topic, &event.to_json())
             .await
             .map(|_| ())
@@ -974,19 +992,13 @@ mod tests {
         .expect("audit setup succeeds");
 
         // Record an entry whose sensitive detail was redacted by the caller.
-        let entry = AuditEntry {
-            actor: "alice".to_owned(),
-            tenant: Some("acme".to_owned()),
-            operation: "POST /v1/accounts/create_user".to_owned(),
-            object: Some("user-1".to_owned()),
-            outcome: "201".to_owned(),
-            request_id: Some("req-xyz".to_owned()),
-            details: vec![
-                ("username".to_owned(), "alice".to_owned()),
-                ("password".to_owned(), "secret".to_owned()),
-            ],
-        }
-        .redacted();
+        let entry = AuditEntry::new("alice", "POST /v1/accounts/create_user", "201")
+            .in_tenant(Some("acme"))
+            .on_object(Some("user-1"))
+            .with_request_id(Some("req-xyz"))
+            .with_detail("username", "alice")
+            .with_detail("password", "secret")
+            .redacted();
         sink.record(&entry).await.expect("audit record persists");
 
         // Read it back and assert the row + that the secret never landed.

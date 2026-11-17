@@ -7,27 +7,30 @@
 //! with a typed result (the "CLI as a library" rule, mirrored from DORM).
 
 use clap::{Parser, Subcommand};
-use delonix_seiva::contract::{Facade, FacadeDescriptor};
 use delonix_seiva::scaffold::{self, GeneratedFile};
-use notes_facade::NotesFacade;
-use seiva_grpc::proto_document;
-use seiva_openapi::{openapi_document, ApiInfo};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+/// The self-contained demonstration facade and user-create, compiled only when
+/// the `demo` feature is on (default off). A publishable binary cannot link the
+/// `examples/` crates — see [`demo`].
+#[cfg(feature = "demo")]
+mod demo;
 
 /// The facades this `seiva` binary can render, discovered through the link-time
 /// inventory ([`delonix_seiva::contract::registered_facades`]) rather than a
 /// hard-coded list.
 ///
-/// A standalone CLI only links the demonstration facade the framework ships
-/// (`notes-facade`'s `NotesFacade`), so that is what `seiva openapi`/`seiva proto`
-/// document here — the CLI is not compiled against a user's project crates. The
-/// *runtime* binary that mounts a project's modules links their facades, so its
-/// `/openapi.json` is the complete, discovered document. Referencing
-/// `NotesFacade` below anchors the demo crate into this binary so its
-/// `#[seiva::facade]` registration runs.
-fn cli_facades() -> Vec<FacadeDescriptor> {
-    let _anchor = NotesFacade::DESCRIPTOR;
+/// A standalone CLI only links the built-in demonstration facade ([`demo::Notes`]),
+/// so that is what `seiva openapi` documents here — the CLI is not compiled
+/// against a user's project crates. The *runtime* binary that mounts a project's
+/// modules links their facades, so its `/openapi.json` is the complete, discovered
+/// document. Referencing the descriptor below anchors the demo facade into this
+/// binary so its `#[seiva::facade]` registration runs.
+#[cfg(feature = "demo")]
+fn cli_facades() -> Vec<delonix_seiva::contract::FacadeDescriptor> {
+    use delonix_seiva::contract::Facade;
+    let _anchor = demo::NotesFacade::DESCRIPTOR;
     delonix_seiva::contract::registered_facades()
 }
 
@@ -706,7 +709,7 @@ fn lint() -> ExitCode {
     // project root; module manifests live at `modules/<name>/module.toml`.
     let root = std::path::Path::new(".");
     match delonix_seiva::lint::lint_project(root) {
-        Ok(report) if report.modules_checked == 0 => {
+        Ok(report) if report.modules_checked == 0 && report.is_clean() => {
             println!("seiva lint: no modules found under ./modules (nothing to check).");
             ExitCode::SUCCESS
         }
@@ -738,14 +741,17 @@ fn lint() -> ExitCode {
     }
 }
 
-/// Builds the OpenAPI 3.1 document for the built-in facades as a JSON string.
+/// Builds the OpenAPI 3.1 document for the built-in demonstration facade as a
+/// JSON string.
 ///
 /// `compact` chooses the single-line form; otherwise the JSON is pretty-printed.
 /// The document's `info.version` is the framework version, so the served
 /// contract tracks the installed `seiva`.
+#[cfg(feature = "demo")]
 fn builtin_openapi_json(compact: bool) -> String {
+    use seiva_openapi::{openapi_document, ApiInfo};
     let info = ApiInfo {
-        title: "Seiva API (built-in facades)".to_string(),
+        title: "Seiva API (built-in demonstration facade)".to_string(),
         version: delonix_seiva::VERSION.to_string(),
     };
     let document = openapi_document(info, &cli_facades());
@@ -756,124 +762,8 @@ fn builtin_openapi_json(compact: bool) -> String {
     }
 }
 
-/// Renders the proto3 service document(s) for the built-in facades.
-///
-/// One document per facade, separated by a blank line. Today there is a single
-/// built-in facade, so this is `proto_document` of `NotesFacade::DESCRIPTOR`.
-fn builtin_proto() -> String {
-    cli_facades()
-        .iter()
-        .map(proto_document)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// In-process ports that let the CLI — the application/composition layer — drive
-/// the real `accounts` module use case without the DORM data layer.
-///
-/// Persistence is in-memory and lives only for the command's duration; a
-/// DORM-backed repository and the transactional ports arrive through the
-/// framework's `dorm` feature. The point today is that `seiva user create` runs
-/// the SAME `Accounts::create_user` use case a server would — validation, Argon2id
-/// hashing and the `accounts.user_created` event — not an ad-hoc hash.
-mod app_ports {
-    use async_trait::async_trait;
-    use seiva_ports::{EventPublisher, Id, IdGenerator, PortResult, Scope, UnitOfWork};
-    use std::future::Future;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    /// A time-seeded [`IdGenerator`]: the 16 id bytes are the current time in
-    /// nanoseconds, big-endian. Unique enough for a single-shot CLI create; the
-    /// DORM gateway supplies a UUID generator for the persistent path.
-    pub struct SystemIds;
-
-    impl IdGenerator for SystemIds {
-        fn new_id(&self) -> Id {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            Id(nanos.to_be_bytes())
-        }
-    }
-
-    /// A pass-through [`UnitOfWork`]: it runs the use-case body directly, with no
-    /// real transaction. The DORM gateway's unit of work wraps the body in a real
-    /// database transaction and the transactional outbox.
-    pub struct DirectUnitOfWork;
-
-    impl UnitOfWork for DirectUnitOfWork {
-        fn transaction<'a, T, F, Fut>(
-            &'a self,
-            _scope: Scope,
-            work: F,
-        ) -> std::pin::Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'a>>
-        where
-            F: FnOnce() -> Fut + Send + 'a,
-            Fut: Future<Output = PortResult<T>> + Send + 'a,
-            T: Send + 'a,
-        {
-            Box::pin(async move { work().await })
-        }
-    }
-
-    /// An [`EventPublisher`] that reports the emitted event on stderr so the CLI
-    /// run shows the use case fired it. The DORM gateway writes it to the
-    /// transactional outbox instead.
-    pub struct StderrEventPublisher;
-
-    #[async_trait]
-    impl EventPublisher for StderrEventPublisher {
-        async fn publish(&self, topic: &str, _payload: &[u8]) -> PortResult<()> {
-            eprintln!("seiva: event emitted — {topic}");
-            Ok(())
-        }
-    }
-}
-
-/// Runs the `accounts` module's `create_user` use case over an in-memory
-/// repository and the in-process [`app_ports`], returning the created user as
-/// JSON (`{ "id", "username" }` — never the password or its hash, by the
-/// facade's contract).
-///
-/// # Errors
-///
-/// Returns the module's error message (e.g. a rejected username or a duplicate)
-/// or a runtime-construction failure, as a `String`.
-fn create_user_via_module(username: &str, password: &str) -> Result<serde_json::Value, String> {
-    use accounts_application::AccountsService;
-    use accounts_infrastructure::InMemoryCredentialRepository;
-    use accounts_interface::AccountsApi;
-
-    let service = AccountsService {
-        repository: InMemoryCredentialRepository::new(),
-        ids: app_ports::SystemIds,
-        uow: app_ports::DirectUnitOfWork,
-        events: app_ports::StderrEventPublisher,
-    };
-    let api = AccountsApi::new(service);
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .map_err(|err| format!("failed to start a runtime: {err}"))?;
-    // `seiva user create` is local single-tenant admin with no request context, so
-    // it drives the use case under the audited `Scope::Global` (the behaviour it had
-    // before the `accounts` facade became tenant-aware — SG1). A per-tenant create
-    // goes through the HTTP transport, where `Ctx` supplies the tenant.
-    let dto = runtime.block_on(api.create_user(
-        seiva_ports::Scope::Global,
-        username.to_string(),
-        password.to_string(),
-    ))?;
-
-    Ok(serde_json::json!({
-        // `id` is a u128; render it as a string so it survives any JSON consumer.
-        "id": dto.id.to_string(),
-        "username": dto.username,
-    }))
-}
-
 /// Reads a single line from STDIN, stripping the trailing newline (CR/LF).
+#[cfg(feature = "demo")]
 fn read_password_line() -> std::io::Result<String> {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
@@ -884,7 +774,8 @@ fn read_password_line() -> std::io::Result<String> {
 /// `seiva.toml` is present) it documents **that project's** facades by building
 /// and running the composition root with `SEIVA_EMIT=openapi` — which emits the
 /// document from the modules linked into the binary, then exits. Outside a
-/// project it falls back to the built-in demonstration facade(s).
+/// project it falls back to the built-in demonstration facade (only in a build
+/// with the `demo` feature; a published binary has no demonstration facade).
 fn openapi(compact: bool) -> ExitCode {
     match std::fs::read_to_string("seiva.toml") {
         Ok(manifest) => match scaffold::project_name(&manifest) {
@@ -895,12 +786,25 @@ fn openapi(compact: bool) -> ExitCode {
             }
         },
         Err(_) => {
-            eprintln!(
-                "seiva: no project here — documenting the built-in demonstration facade(s). \
-                 Run inside a project (see `seiva project new`) to document your own."
-            );
-            println!("{}", builtin_openapi_json(compact));
-            ExitCode::SUCCESS
+            #[cfg(feature = "demo")]
+            {
+                eprintln!(
+                    "seiva: no project here — documenting the built-in demonstration facade. \
+                     Run inside a project (see `seiva project new`) to document your own."
+                );
+                println!("{}", builtin_openapi_json(compact));
+                ExitCode::SUCCESS
+            }
+            #[cfg(not(feature = "demo"))]
+            {
+                let _ = compact;
+                eprintln!(
+                    "seiva: no project here. Run `seiva openapi` inside a project to document \
+                     its facades (see `seiva project new`). This build has no demonstration \
+                     facade; build with `--features demo` for one."
+                );
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -1630,8 +1534,9 @@ fn db_migrate() -> ExitCode {
 
 /// `seiva proto`: prints the proto3 service document. Inside a project it
 /// documents THAT project's facades by building and running the composition root
-/// with `SEIVA_EMIT=proto` (from the modules linked into the binary); outside a
-/// project it falls back to the built-in demonstration facade(s). Mirrors
+/// with `SEIVA_EMIT=proto` (from the modules linked into the binary). Outside a
+/// project there is nothing to document: the proto renderer (`seiva-grpc`) is not
+/// linked into the standalone CLI, so it points the user at a project. Mirrors
 /// [`openapi`].
 fn proto() -> ExitCode {
     match std::fs::read_to_string("seiva.toml") {
@@ -1644,11 +1549,10 @@ fn proto() -> ExitCode {
         },
         Err(_) => {
             eprintln!(
-                "seiva: no project here — documenting the built-in demonstration facade(s). \
-                 Run inside a project (see `seiva project new`) to document your own."
+                "seiva: no project here. Run `seiva proto` inside a project to document its \
+                 facades (see `seiva project new`)."
             );
-            println!("{}", builtin_proto());
-            ExitCode::SUCCESS
+            ExitCode::FAILURE
         }
     }
 }
@@ -1679,8 +1583,11 @@ fn emit_project_proto(name: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `seiva user create`: reads a stdin password and creates the user through the
-/// `accounts` module's use case, printing the created user as JSON.
+/// `seiva user create`: reads a stdin password and creates a user through the
+/// built-in demonstration (same domain rules + Argon2id as the `accounts`
+/// module), printing the created user as JSON. Demonstration-only, so it is
+/// present only in a build with the `demo` feature.
+#[cfg(feature = "demo")]
 fn user_create(username: &str) -> ExitCode {
     let password = match read_password_line() {
         Ok(password) => password,
@@ -1689,11 +1596,12 @@ fn user_create(username: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match create_user_via_module(username, &password) {
+    match demo::create_user(username, &password) {
         Ok(json) => {
             eprintln!(
-                "seiva: note — created through the accounts module (Argon2id + domain rules); \
-                 persistence is in-memory until the `dorm` feature wires a real repository."
+                "seiva: note — a built-in demonstration (Argon2id + the accounts domain rules); \
+                 nothing is persisted. Generate a project (`seiva project new`) for the real \
+                 accounts module over a repository."
             );
             println!(
                 "{}",
@@ -1708,6 +1616,19 @@ fn user_create(username: &str) -> ExitCode {
     }
 }
 
+/// Without the `demo` feature the standalone CLI ships no demonstration
+/// accounts module, so `seiva user create` points the user at a real project.
+#[cfg(not(feature = "demo"))]
+fn user_create(username: &str) -> ExitCode {
+    let _ = username;
+    eprintln!(
+        "seiva: `user create` is a built-in demonstration and is not in this build. \
+         Create users through your project's accounts module and HTTP transport \
+         (see `seiva project new`), or build the CLI with `--features demo` to try it."
+    );
+    ExitCode::FAILURE
+}
+
 fn doctor() -> ExitCode {
     println!("Delonix Seiva");
     println!("  framework version : {}", delonix_seiva::VERSION);
@@ -1717,6 +1638,14 @@ fn doctor() -> ExitCode {
             "DORM (feature `dorm` on)"
         } else {
             "external (feature `dorm` off)"
+        }
+    );
+    println!(
+        "  demo commands     : {}",
+        if cfg!(feature = "demo") {
+            "on (built-in openapi facade + user create)"
+        } else {
+            "off (feature `demo`)"
         }
     );
     ExitCode::SUCCESS
@@ -1762,14 +1691,15 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "demo")]
     #[test]
-    fn openapi_json_is_valid_and_documents_the_notes_facade() {
+    fn openapi_json_is_valid_and_documents_the_demo_facade() {
         let json = builtin_openapi_json(false);
         let doc: serde_json::Value =
             serde_json::from_str(&json).expect("openapi must be valid JSON");
         assert_eq!(doc["openapi"], "3.1.0");
         assert_eq!(doc["info"]["version"], delonix_seiva::VERSION);
-        // The built-in Notes facade's `create` operation is present.
+        // The built-in demonstration facade's `create` operation is present.
         assert!(
             doc["paths"]["/v1/notes"]["post"].is_object(),
             "notes create operation must be documented"
@@ -1780,6 +1710,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "demo")]
     #[test]
     fn openapi_compact_and_pretty_carry_the_same_document() {
         let compact = builtin_openapi_json(true);
@@ -1789,20 +1720,6 @@ mod tests {
         let a: serde_json::Value = serde_json::from_str(&compact).unwrap();
         let b: serde_json::Value = serde_json::from_str(&pretty).unwrap();
         assert_eq!(a, b, "the two styles must encode the same document");
-    }
-
-    #[test]
-    fn proto_document_renders_the_notes_service() {
-        let proto = builtin_proto();
-        assert!(
-            proto.contains("syntax = \"proto3\";"),
-            "proto was:\n{proto}"
-        );
-        assert!(proto.contains("service Notes {"), "proto was:\n{proto}");
-        assert!(
-            proto.contains("rpc Create(CreateRequest) returns (CreateResponse);"),
-            "proto was:\n{proto}"
-        );
     }
 
     #[test]
@@ -1958,26 +1875,6 @@ mod tests {
         assert!(resolve_reload(true, false, false).is_err());
     }
 
-    #[test]
-    fn user_create_goes_through_the_accounts_module_and_hides_the_secret() {
-        let user = create_user_via_module("alice", "hunter2").expect("create must succeed");
-        assert_eq!(user["username"], "alice");
-        assert!(user["id"].is_string(), "the created user carries an id");
-        // The facade's DTO carries no secret: neither the password nor its hash
-        // ever reaches the CLI output.
-        assert!(user.get("password").is_none());
-        assert!(user.get("password_hash").is_none());
-        let rendered = user.to_string();
-        assert!(
-            !rendered.contains("hunter2") && !rendered.contains("$argon2id$"),
-            "no secret must appear in the output: {rendered}"
-        );
-    }
-
-    #[test]
-    fn user_create_rejects_a_blank_username() {
-        // The domain rule runs inside the module's use case, not the CLI.
-        let err = create_user_via_module("   ", "hunter2").expect_err("blank username is rejected");
-        assert!(!err.is_empty(), "the module returns an error message");
-    }
+    // `user create` behaviour is covered by the `demo` module's own tests
+    // (`src/demo.rs`), compiled only when the `demo` feature is on.
 }

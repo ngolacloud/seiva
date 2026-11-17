@@ -125,6 +125,7 @@ where
     pub async fn place(&self, cmd: PlaceOrder) -> Result<OrderDto, OrdersError> {
         let (order, event) = self.prepare(cmd)?;
         self.uow
+            // seiva:allow-global — demo module, single-tenant illustration; per-module tenant-scoping tracked separately (ADR 0029)
             .transaction(Scope::Global, || async {
                 self.repository.save_order(&order).await?;
                 self.events.publish("orders.placed", &event).await

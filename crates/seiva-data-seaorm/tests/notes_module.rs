@@ -10,12 +10,12 @@
 
 use notes_application::{NotesService, RepositoryError};
 use notes_domain::{Note, NoteRepository};
-use notes_facade::{CreateNote, Notes};
+use notes_facade::CreateNote;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
 use seiva_data_seaorm::{
     connect, with_current_tx, SeaOrmConfig, SeaOrmOutboxPublisher, SeaOrmUnitOfWork,
 };
-use seiva_ports::BoxError;
+use seiva_ports::{BoxError, Scope};
 use seiva_testing::SequenceIdGenerator;
 use std::future::Future;
 
@@ -83,10 +83,16 @@ async fn notes_create_persists_and_reads_back_through_the_seaorm_adapter() {
         events: SeaOrmOutboxPublisher,
     };
 
+    // Runs under the caller's tenant `Scope` (SG1 / ADR 0029), derived server-side
+    // by the interface; the SeaORM unit of work carries it through, so the use case
+    // no longer hard-codes `Scope::Global`.
     let dto = service
-        .create(CreateNote {
-            title: "hello from seaorm".into(),
-        })
+        .create(
+            Scope::tenant("acme").expect("a non-empty tenant"),
+            CreateNote {
+                title: "hello from seaorm".into(),
+            },
+        )
         .await
         .expect("create_note succeeds");
     assert_eq!(dto.id, 1);

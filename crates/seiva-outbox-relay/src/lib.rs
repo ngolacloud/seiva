@@ -20,10 +20,12 @@ use async_trait::async_trait;
 use delonix_seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 use dorm_core::value::Value;
 use dorm_core::{db, Error, Result};
-use dorm_outbox::{RelayConfig, CURSOR, OUTBOX};
-use seiva_events::{OutboxReader, OutboxRecord};
+use dorm_outbox::{RelayConfig, CURSOR, DEAD, OUTBOX};
+use seiva_events::{DeadLetterSink, OutboxReader, OutboxRecord, RelayPolicy};
 use seiva_messaging::{CloudEvent, Publisher};
+use seiva_observability::trace_context::{self, TraceContext};
 use seiva_ports::{BoxError, PortResult};
+use tracing::Instrument;
 
 /// Parse a [`CloudEvent`] from an outbox payload, mapping the messaging error to
 /// a DORM error so the `dorm-outbox` relay can carry it.
@@ -89,6 +91,81 @@ where
     .await
 }
 
+/// Derive the broker [`RelayConfig`] from the DORM-free [`RelayPolicy`] the
+/// in-process driver uses — the one place the two failure policies meet, so a
+/// deployment configures **one** `RelayPolicy` and both the in-process
+/// [`drain_in_process_with`](seiva_events::drain_in_process_with) and this crate's
+/// broker [`forward`]/[`run_relay_worker`] apply the same max-attempts + backoff
+/// (ADR 0028, D-2). `seiva-events` cannot name `dorm_outbox` (it is DORM-free), so
+/// the conversion lives here at the boundary, as a free function rather than a
+/// `From` impl (both types are foreign to this crate — the orphan rule forbids the
+/// trait impl).
+#[must_use]
+pub fn relay_config(policy: RelayPolicy) -> RelayConfig {
+    // Derive the retry budget/backoff from the policy's `seiva_resilience::RetryPolicy`
+    // — the one crate that owns the exponential-backoff schedule — so the broker relay
+    // paces a transient failure on the SAME schedule as the in-process drain and any
+    // `seiva-client` inter-service call (ADR 0028, D-2). The `batch` knob is the drain's
+    // alone (an i64 cursor count on the broker side), so it stays on `RelayPolicy`.
+    let retry = policy.retry_policy();
+    RelayConfig {
+        // The broker batch is an i64 cursor count; the in-process batch is a usize.
+        batch: policy.batch as i64,
+        max_attempts: retry.max_attempts,
+        backoff_base_ms: retry.backoff_base_ms,
+    }
+}
+
+/// The DORM adapter of [`seiva_events::DeadLetterSink`]: it buries a poison pill in
+/// the **real** `dorm_outbox_dead` table, so the in-process driver dead-letters
+/// exactly where `dorm_outbox::relay` does on the broker path — the durable half of
+/// the D-2 parity that [`TracingDeadLetters`](seiva_events::TracingDeadLetters)
+/// (log-only) stands in for offline.
+///
+/// Like every `dorm_core::db` call it runs in the caller's ambient DORM session
+/// (`with_session`), the same one the driver and the [`DormOutboxReader`] share, so
+/// the dead-letter insert and the cursor advance commit against one connection.
+pub struct DormDeadLetters {
+    consumer: String,
+}
+
+impl DormDeadLetters {
+    /// A dead-letter sink writing under `consumer` — the same consumer id whose
+    /// cursor the paired [`DormOutboxReader`] advances, so a buried event is
+    /// attributed to the consumer that could not deliver it.
+    pub fn new(consumer: impl Into<String>) -> Self {
+        Self {
+            consumer: consumer.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl DeadLetterSink for DormDeadLetters {
+    async fn dead_letter(&self, record: &OutboxRecord, error: &str) -> PortResult<()> {
+        // The same columns `dorm_outbox::dead_letter` writes, so a poison pill buried
+        // by the in-process driver is indistinguishable from one the broker relay
+        // buried: consumer, the outbox row id, topic, the CloudEvents payload, error.
+        db::run(
+            &format!(
+                "INSERT INTO {DEAD} (consumer, outbox_id, topic, payload, error) \
+                 VALUES ($1, $2, $3, $4, $5)"
+            ),
+            &[
+                Value::Text(self.consumer.clone()),
+                // Outbox row ids are positive, so the u64 cursor token fits i64.
+                Value::I64(record.position as i64),
+                Value::Text(record.event.ty.clone()),
+                Value::Json(record.event.to_json()),
+                Value::Text(error.to_owned()),
+            ],
+        )
+        .await
+        .map_err(boxed)?;
+        Ok(())
+    }
+}
+
 /// Drain the outbox for `consumer`/`topic`, calling `handler` for each event
 /// **exactly-once in effect**: the handler's database work and the inbox record
 /// commit in one transaction, so a redelivery (at-least-once) is a no-op. One
@@ -104,6 +181,25 @@ where
         let consumer = consumer_owned.clone();
         async move {
             let event = cloud_event(&ev.payload)?;
+            // Open a handling span and parent it to the trace context the publisher
+            // injected onto the envelope (ADR 0027, Fase 2), so the emitting use
+            // case's span is the parent of this one — the trace survives the
+            // outbox→broker→subscriber hop. Symmetric to `seiva_events::dispatch` on
+            // the in-process path; a no-op until a service enables
+            // `seiva-observability/tracing` at its root, so the default build pays
+            // nothing (`set_parent` does not even touch the span).
+            let span = tracing::info_span!(
+                "seiva.outbox.drain",
+                event_type = %event.ty,
+                event_id = %event.id
+            );
+            trace_context::set_parent(
+                &span,
+                &TraceContext {
+                    traceparent: event.traceparent.clone(),
+                    tracestate: event.tracestate.clone(),
+                },
+            );
             // The inbox guard and the handler's effect share one transaction:
             // record-once returns false on a redelivery, so the handler is
             // skipped — exactly-once effect under at-least-once delivery.
@@ -114,6 +210,7 @@ where
                     Ok(())
                 }
             })
+            .instrument(span)
             .await
         }
     })

@@ -30,7 +30,7 @@ use seiva_cqrs::{Command, CommandHandler, Mediator, Transactional, Validate, Val
 use seiva_http::bus::{Authorize, Idempotent};
 use seiva_http::{Ctx, IdempotencyKey, Problem, RequiredPermission};
 use seiva_identity::Principal;
-use seiva_ports::PortResult;
+use seiva_ports::{PortResult, Scope};
 use seiva_testing::{InMemoryIdempotencyStore, InMemoryUnitOfWork, TxOutcome};
 
 // ----- The use case under test ---------------------------------------------
@@ -154,7 +154,7 @@ async fn an_unauthorized_caller_is_denied_and_the_handler_never_runs() {
     let idem = Idempotent::from_ctx(handler, store, &ctx, &a_body(), Duration::from_secs(60))
         .expect("ctx carries an idempotency key");
     let chain = Authorize::from_ctx(
-        Validate::new(Transactional::new(idem, uow.clone())),
+        Validate::new(Transactional::new(idem, uow.clone(), Scope::Global)),
         &ctx,
         PLACE,
     );
@@ -186,7 +186,7 @@ async fn an_invalid_command_is_rejected_before_the_handler() {
     let idem = Idempotent::from_ctx(handler, store, &ctx, &a_body(), Duration::from_secs(60))
         .expect("ctx carries an idempotency key");
     let chain = Authorize::from_ctx(
-        Validate::new(Transactional::new(idem, uow.clone())),
+        Validate::new(Transactional::new(idem, uow.clone(), Scope::Global)),
         &ctx,
         PLACE,
     );
@@ -232,7 +232,7 @@ async fn a_retry_with_the_same_key_produces_one_effect() {
         )
         .expect("ctx carries an idempotency key");
         let chain = Authorize::from_ctx(
-            Validate::new(Transactional::new(idem, uow.clone())),
+            Validate::new(Transactional::new(idem, uow.clone(), Scope::Global)),
             ctx,
             PLACE,
         );
@@ -268,7 +268,7 @@ async fn the_same_key_with_different_content_is_a_status_bearing_conflict() {
     )
     .expect("ctx carries an idempotency key");
     let chain = Authorize::from_ctx(
-        Validate::new(Transactional::new(idem, uow.clone())),
+        Validate::new(Transactional::new(idem, uow.clone(), Scope::Global)),
         &ctx,
         PLACE,
     );
@@ -286,7 +286,7 @@ async fn the_same_key_with_different_content_is_a_status_bearing_conflict() {
     )
     .expect("ctx carries an idempotency key");
     let chain2 = Authorize::from_ctx(
-        Validate::new(Transactional::new(idem2, uow.clone())),
+        Validate::new(Transactional::new(idem2, uow.clone(), Scope::Global)),
         &ctx,
         PLACE,
     );
@@ -318,7 +318,7 @@ async fn a_failing_handler_rolls_the_transaction_back() {
     let idem = Idempotent::from_ctx(handler, store, &ctx, &a_body(), Duration::from_secs(60))
         .expect("ctx carries an idempotency key");
     let chain = Authorize::from_ctx(
-        Validate::new(Transactional::new(idem, uow.clone())),
+        Validate::new(Transactional::new(idem, uow.clone(), Scope::Global)),
         &ctx,
         PLACE,
     );

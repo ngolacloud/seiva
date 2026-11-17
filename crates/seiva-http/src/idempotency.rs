@@ -169,7 +169,7 @@ pub fn in_progress_problem() -> Problem {
 }
 
 /// Lowercase hex of a byte slice.
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push(char::from_digit((b >> 4) as u32, 16).unwrap());

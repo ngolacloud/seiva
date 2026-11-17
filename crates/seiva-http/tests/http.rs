@@ -7,7 +7,7 @@
 //! shape a generated controller produces, without depending on an example crate.
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{header, Request, StatusCode};
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -73,7 +73,7 @@ async fn guarded_route_happy_path_is_201_with_a_request_id() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-1", ["demo.create"]))
+        .extension(Arc::new(Principal::new("user-1", ["demo.create"])))
         .body(Body::from(r#"{"title":"first"}"#))
         .unwrap();
 
@@ -91,7 +91,7 @@ async fn guarded_route_without_permission_is_a_403_problem() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-2", ["demo.read"]))
+        .extension(Arc::new(Principal::new("user-2", ["demo.read"])))
         .body(Body::from(r#"{"title":"blocked"}"#))
         .unwrap();
 
@@ -123,7 +123,7 @@ async fn invalid_body_is_a_422_problem() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-1", ["demo.create"]))
+        .extension(Arc::new(Principal::new("user-1", ["demo.create"])))
         .body(Body::from(r#"{"title":"   "}"#))
         .unwrap();
 
@@ -141,7 +141,7 @@ async fn malformed_json_is_a_422() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-1", ["demo.create"]))
+        .extension(Arc::new(Principal::new("user-1", ["demo.create"])))
         .body(Body::from("not json"))
         .unwrap();
     let response = guarded_app().oneshot(request).await.unwrap();
@@ -254,6 +254,73 @@ async fn openapi_document_is_served() {
     assert_eq!(body["openapi"], "3.1.0");
     assert!(body["info"]["version"].is_string());
     assert!(body["paths"].is_object());
+}
+
+#[tokio::test]
+async fn openapi_response_is_cacheable_with_a_strong_etag() {
+    let response = router(Health::starting())
+        .oneshot(
+            Request::builder()
+                .uri("/openapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/json");
+    let etag = headers.get(header::ETAG).unwrap().to_str().unwrap().to_owned();
+    assert!(
+        etag.starts_with('"') && etag.ends_with('"'),
+        "a strong ETag is a quoted validator: {etag}"
+    );
+    assert!(
+        headers.get(header::CACHE_CONTROL).is_some(),
+        "the document is cacheable"
+    );
+    // The cached bytes are exactly what the generator produces: the wire JSON is
+    // unchanged by caching.
+    let body = json_body(response.into_body()).await;
+    assert_eq!(body, seiva_http::openapi_document());
+}
+
+#[tokio::test]
+async fn openapi_matching_if_none_match_is_304_not_modified() {
+    // One request to learn the current ETag.
+    let first = router(Health::starting())
+        .oneshot(
+            Request::builder()
+                .uri("/openapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let etag = first
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    // A conditional request carrying the matching validator is a 304 with no body.
+    let second = router(Health::starting())
+        .oneshot(
+            Request::builder()
+                .uri("/openapi.json")
+                .header(header::IF_NONE_MATCH, &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let bytes = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(bytes.is_empty(), "a 304 carries no body");
 }
 
 // --- The authn middleware (ADR 0006): deny-by-default, ahead of the guard ------

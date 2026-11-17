@@ -20,6 +20,8 @@ repository = "https://github.com/ngolacloud/seiva"
 homepage = "https://github.com/ngolacloud/seiva"
 rust-version = "1.75"
 description = "Delonix Seiva — HTTP transport (axum/tower): RFC 9457 problems, typed/validated bodies, descriptor-driven permission guard, health endpoints. DORM-free."
+keywords = ["http", "axum", "web", "openapi", "framework"]
+categories = ["web-programming::http-server"]
 
 [dependencies]
 # The contract crate, data-layer OFF: we read `FacadeDescriptor` to drive routing

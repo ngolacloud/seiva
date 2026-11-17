@@ -1,0 +1,130 @@
+# Default values for the seiva-server chart.
+# Every value here is production-safe out of the box; override per environment.
+
+# -- Replicas when autoscaling is disabled. With autoscaling on, the HPA owns the
+# count and this is only the initial value (left unset on the Deployment).
+replicaCount: 2
+
+image:
+  # The distroless, non-root seiva-server image (see deploy/seiva-server/Dockerfile).
+  repository: ghcr.io/ngolacloud/seiva-server
+  pullPolicy: IfNotPresent
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Create a dedicated ServiceAccount; a service should not run as `default`.
+  create: true
+  name: ""
+  # The pod needs no Kubernetes API access, so do not mount a token.
+  automount: false
+  annotations: {}
+
+# The port the seiva-server process binds inside the container. The chart sets
+# SEIVA_HTTP_ADDR to 0.0.0.0:<this> so the pod is reachable; the default
+# 127.0.0.1:8080 would only serve localhost.
+containerPort: 8080
+
+service:
+  type: ClusterIP
+  port: 80
+
+# Extra plain (non-secret) environment variables, rendered into a ConfigMap and
+# injected via envFrom. SEIVA_HTTP_ADDR and APP_ENV are set by the chart.
+env:
+  APP_ENV: production
+
+# Secret environment variables (e.g. SEIVA_OIDC_*). Reference existing Secrets by
+# name; the chart does NOT template secret VALUES (never commit secrets to a chart).
+# Each entry: { name: ENV_VAR, secretName: k8s-secret, secretKey: key }
+secretEnv: []
+
+# Prometheus /metrics (ADR 0027). Only effective if the image was built with the
+# `metrics` feature; the chart wires the separate metrics bind and port.
+metrics:
+  enabled: false
+  port: 9090
+  # A ServiceMonitor for the Prometheus Operator. Off by default because it needs
+  # the monitoring.coreos.com CRD installed.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+
+# Horizontal Pod Autoscaler.
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# PodDisruptionBudget so a voluntary drain never takes every replica at once.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    # No CPU limit by default (avoids throttling latency); memory is capped.
+    memory: 256Mi
+
+# Probes hit the seiva-http health endpoints:
+#   /health/live  — 200 in every state (a draining pod is not killed mid-shutdown)
+#   /health/ready — 200 only while Ready AND the dependency check passes
+probes:
+  liveness:
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+  startup:
+    periodSeconds: 3
+    failureThreshold: 20
+
+# How long Kubernetes waits for the process to drain on SIGTERM. seiva-server
+# flips readiness to Draining and finishes in-flight requests; give it room.
+terminationGracePeriodSeconds: 30
+
+# Pod- and container-level hardening. The image is distroless and non-root, so
+# these are enforceable without surprises.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop:
+      - ALL
+
+# Spread replicas across nodes so one node loss does not take the service down.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector: {}  # filled in by the template with the release selector
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
