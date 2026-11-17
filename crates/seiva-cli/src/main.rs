@@ -143,10 +143,14 @@ enum ProjectAction {
 
 #[derive(Subcommand)]
 enum ModuleAction {
-    /// Scaffold a new module: `seiva module new <name> [--data external] [--admin]`.
+    /// Scaffold a new module: `seiva module new <name> [--data <layer>] [--admin]`.
     New {
         name: String,
-        /// Use an external data layer instead of DORM for this module.
+        /// The data layer this module binds to (ADR 0030): `dorm` (default,
+        /// batteries-included), `sqlx`, `seaorm`, or `external` (you own
+        /// persistence). The choice is recorded in seiva.toml and steers which
+        /// native tool `seiva db` delegates to; the pure layers stay ORM-free
+        /// either way.
         #[arg(long)]
         data: Option<String>,
         /// Register the module with the admin console (ADR 0009): the generated
@@ -364,23 +368,24 @@ fn append_patch_section(manifest: &Path, framework_root: &str) -> std::io::Resul
     std::fs::write(manifest, cargo)
 }
 
-fn module_new(name: &str, external: bool, admin: bool) -> ExitCode {
+fn module_new(name: &str, data: &str, admin: bool) -> ExitCode {
     if let Err(err) = scaffold::validate_name(name) {
         eprintln!("seiva: {err}");
         return ExitCode::FAILURE;
     }
+    let data = match scaffold::DataLayer::parse(data) {
+        Ok(layer) => layer,
+        Err(err) => {
+            eprintln!("seiva: {err}");
+            return ExitCode::from(64);
+        }
+    };
     let root = Path::new(".");
     if !root.join("seiva.toml").is_file() {
         eprintln!(
             "seiva: no seiva.toml here — run this inside a project (see `seiva project new`)."
         );
         return ExitCode::FAILURE;
-    }
-    if external {
-        eprintln!(
-            "seiva: `--data external` is not implemented yet (planned for the data-layer phase)."
-        );
-        return ExitCode::from(64);
     }
 
     let files = match scaffold::module_files(name, admin) {
@@ -397,7 +402,7 @@ fn module_new(name: &str, external: bool, admin: bool) -> ExitCode {
 
     // Registration edits: workspace members, seiva.toml, project schema. Each
     // is a pure transform; read, transform, write back.
-    if let Err(err) = register_module(root, name) {
+    if let Err(err) = register_module(root, name, data) {
         eprintln!("seiva: module files written, but registration failed: {err}");
         return ExitCode::FAILURE;
     }
@@ -406,12 +411,29 @@ fn module_new(name: &str, external: bool, admin: bool) -> ExitCode {
     } else {
         ""
     };
-    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema, and wired into the composition root.{admin_note}");
+    // Non-DORM adapters need no `data/` DORM project; point at the native tool.
+    let data_note = match data {
+        scaffold::DataLayer::Dorm => {
+            " Data layer: DORM (run `seiva db init` to scaffold migrations).".to_owned()
+        }
+        scaffold::DataLayer::External => {
+            " Data layer: external — the project owns persistence; `seiva db` ships no \
+             migration tooling for it."
+                .to_owned()
+        }
+        other => format!(
+            " Data layer: {} — migrate with its native tool (`seiva db migrate` delegates to it).",
+            other.as_str()
+        ),
+    };
+    println!("Created module `{name}` (facade v1, 5 layers). Registered in the workspace, seiva.toml and schema, and wired into the composition root.{admin_note}{data_note}");
     ExitCode::SUCCESS
 }
 
-/// Applies the three registration edits for a new module.
-fn register_module(root: &Path, name: &str) -> Result<(), String> {
+/// Applies the registration edits for a new module, recording its data layer
+/// (ADR 0030) both on the module's `[modules.<name>]` section and, so `seiva db`
+/// follows it, on the project-level `[data] layer`.
+fn register_module(root: &Path, name: &str, data: scaffold::DataLayer) -> Result<(), String> {
     let edit = |path: PathBuf,
                 transform: &dyn Fn(&str) -> Result<String, scaffold::ScaffoldError>|
      -> Result<(), String> {
@@ -425,7 +447,10 @@ fn register_module(root: &Path, name: &str) -> Result<(), String> {
         scaffold::add_members_to_workspace(s, name)
     })?;
     edit(root.join("seiva.toml"), &|s| {
-        scaffold::register_module_in_seiva_toml(s, name)
+        let s = scaffold::register_module_in_seiva_toml(s, name, data)?;
+        // Keep the project-level data layer in step so `seiva db` picks the right
+        // native tool (last module's choice wins — a project uses one adapter).
+        Ok(scaffold::set_project_data_layer(&s, data))
     })?;
 
     // The schema file is named after the project; read its name from seiva.toml.
@@ -1116,6 +1141,12 @@ fn db_pull(out: Option<String>, dsn: Option<String>) -> ExitCode {
     };
     let out = out.unwrap_or_else(|| format!("schema/{name}.pulled.schema"));
 
+    // Non-DORM adapters introspect with their own tool (or not at all), never dorm.
+    let layer = project_layer();
+    if layer != scaffold::DataLayer::Dorm {
+        return run_db_plan(pull_plan(layer, &out, dsn.as_deref()), "pull");
+    }
+
     let dorm = dorm_bin();
     let (program, args) = db_pull_plan(&dorm, &out, dsn.as_deref());
     eprintln!("seiva: introspecting via `{dorm} db pull` → {out} ...");
@@ -1164,6 +1195,10 @@ fn dorm_studio_args(port: Option<u16>, write: bool, dsn: Option<&str>) -> Vec<St
 /// the live schema and needs no project build, so it runs anywhere with a DSN
 /// (`--dsn` or `DELONIX_ORM_DSN`). Serves on 127.0.0.1 until interrupted.
 fn db_studio(port: Option<u16>, write: bool, dsn: Option<String>) -> ExitCode {
+    let layer = project_layer();
+    if layer != scaffold::DataLayer::Dorm {
+        return run_db_plan(studio_plan(layer), "studio");
+    }
     let dorm = dorm_bin();
     let args = dorm_studio_args(port, write, dsn.as_deref());
     eprintln!(
@@ -1420,6 +1455,125 @@ fn dorm_migrate_args(action: &str, name: Option<&str>) -> Vec<String> {
     args
 }
 
+/// The data layer the current project binds to (ADR 0030), read from
+/// `seiva.toml`'s `[data] layer`. Outside a project (or on an unreadable manifest)
+/// it defaults to DORM, so the DORM code path — which then reports "not in a
+/// project" itself — stays the fallback.
+fn project_layer() -> scaffold::DataLayer {
+    std::fs::read_to_string("seiva.toml")
+        .map(|manifest| scaffold::project_data_layer(&manifest))
+        .unwrap_or_default()
+}
+
+/// What `seiva db <action>` does for a non-DORM adapter: spawn the adapter's
+/// native tool, or advise when it has no equivalent. Pure, so the mapping is
+/// unit-tested — and so the DORM binary is provably never shelled out to for a
+/// sqlx/SeaORM/external project (ADR 0030).
+#[derive(Debug, PartialEq, Eq)]
+enum DbPlan {
+    /// Run `program args...` in the project root (the native migration/ORM tool).
+    Spawn { program: String, args: Vec<String> },
+    /// No native equivalent — print this guidance and take no action.
+    Advise(String),
+}
+
+/// `seiva db migrate` for a non-DORM adapter: `sqlx migrate run` / `sea-orm-cli
+/// migrate up`; `external` has no managed migration. (The `Dorm` arm is handled by
+/// the caller's existing DORM path and never planned here.)
+fn migrate_plan(layer: scaffold::DataLayer) -> DbPlan {
+    use scaffold::DataLayer::{Dorm, External, SeaOrm, Sqlx};
+    match layer {
+        Sqlx => DbPlan::Spawn {
+            program: "sqlx".to_owned(),
+            args: vec!["migrate".to_owned(), "run".to_owned()],
+        },
+        SeaOrm => DbPlan::Spawn {
+            program: "sea-orm-cli".to_owned(),
+            args: vec!["migrate".to_owned(), "up".to_owned()],
+        },
+        External => DbPlan::Advise(
+            "the project owns persistence (`--data external`) — run your own migration tool; \
+             `seiva db migrate` ships none for it."
+                .to_owned(),
+        ),
+        Dorm => DbPlan::Advise("DORM migrations run through `seiva db` directly.".to_owned()),
+    }
+}
+
+/// `seiva db pull` for a non-DORM adapter: SeaORM reverse-engineers entities with
+/// `sea-orm-cli generate entity`; sqlx has no introspection, so advise the native
+/// database tooling instead of pretending.
+fn pull_plan(layer: scaffold::DataLayer, out: &str, dsn: Option<&str>) -> DbPlan {
+    use scaffold::DataLayer::{Dorm, External, SeaOrm, Sqlx};
+    match layer {
+        SeaOrm => {
+            let mut args = vec!["generate".to_owned(), "entity".to_owned()];
+            if let Some(dsn) = dsn {
+                args.push("-u".to_owned());
+                args.push(dsn.to_owned());
+            }
+            args.push("-o".to_owned());
+            args.push(out.to_owned());
+            DbPlan::Spawn {
+                program: "sea-orm-cli".to_owned(),
+                args,
+            }
+        }
+        Sqlx => DbPlan::Advise(
+            "sqlx has no schema introspection — pull your schema with your database tooling \
+             (e.g. `pg_dump --schema-only`); `sqlx migrate` manages migrations, not reverse \
+             engineering."
+                .to_owned(),
+        ),
+        External => DbPlan::Advise(
+            "introspection is the job of your own data tooling for an `external` data layer."
+                .to_owned(),
+        ),
+        Dorm => DbPlan::Advise("DORM introspection runs through `seiva db` directly.".to_owned()),
+    }
+}
+
+/// `seiva db studio` for a non-DORM adapter: a data studio is a DORM battery;
+/// neither sqlx nor SeaORM ships one, so advise the user's own DB client.
+fn studio_plan(layer: scaffold::DataLayer) -> DbPlan {
+    use scaffold::DataLayer::Dorm;
+    if layer == Dorm {
+        return DbPlan::Advise("DORM studio runs through `seiva db` directly.".to_owned());
+    }
+    DbPlan::Advise(
+        "a data studio is a DORM feature; sqlx and SeaORM ship none — browse your database \
+         with its own client (psql, TablePlus, DBeaver, …)."
+            .to_owned(),
+    )
+}
+
+/// Executes a [`DbPlan`]: spawns the native tool in the project root, or prints the
+/// advice. A spawn failure or non-zero exit maps to a matching `ExitCode`; advice
+/// returns `64` (nothing done — the user must act), never the DORM path.
+fn run_db_plan(plan: DbPlan, action: &str) -> ExitCode {
+    match plan {
+        DbPlan::Spawn { program, args } => {
+            eprintln!("seiva: {action} via `{program} {}` ...", args.join(" "));
+            match std::process::Command::new(&program).args(&args).status() {
+                Ok(status) if status.success() => ExitCode::SUCCESS,
+                Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)),
+                Err(error) => {
+                    eprintln!(
+                        "seiva: could not run `{program}`: {error}\n\
+                         seiva db {action} needs `{program}` on PATH for this adapter \
+                         (install the adapter's native tool)."
+                    );
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        DbPlan::Advise(message) => {
+            eprintln!("seiva: {message}");
+            ExitCode::from(64)
+        }
+    }
+}
+
 /// Guards that the project's DORM data layer exists, returning the project name
 /// and the data dir, or an error `ExitCode` (with a `seiva db init` hint).
 fn require_data_layer() -> Result<(String, String), ExitCode> {
@@ -1460,6 +1614,10 @@ fn db_dev(name: &str) -> ExitCode {
 /// `seiva db migrate`: apply the recorded migration chain (deploy). No schema
 /// sync — it runs exactly the migrations already authored.
 fn db_migrate() -> ExitCode {
+    let layer = project_layer();
+    if layer != scaffold::DataLayer::Dorm {
+        return run_db_plan(migrate_plan(layer), "migrate");
+    }
     let (_project, dir) = match require_data_layer() {
         Ok(ok) => ok,
         Err(code) => return code,
@@ -1573,7 +1731,7 @@ fn main() -> ExitCode {
         },
         Command::Module { action } => match action {
             ModuleAction::New { name, data, admin } => {
-                module_new(&name, data.as_deref() == Some("external"), admin)
+                module_new(&name, data.as_deref().unwrap_or("dorm"), admin)
             }
             ModuleAction::Split { name } => module_split(&name),
             ModuleAction::Merge { name } => module_merge(&name),
@@ -1711,6 +1869,80 @@ mod tests {
         );
         // deploy → apply the chain (DORM's default `migrate` subcommand).
         assert_eq!(dorm_migrate_args("deploy", None), vec!["migrate"]);
+    }
+
+    /// Asserts a `DbPlan` either spawns a program that is NOT `dorm`, or advises —
+    /// the core ADR 0030 guarantee for a non-DORM adapter.
+    fn assert_not_dorm(plan: &DbPlan) {
+        if let DbPlan::Spawn { program, args } = plan {
+            assert_ne!(
+                program, "dorm",
+                "a non-DORM adapter must not shell out to dorm"
+            );
+            assert!(
+                !args.iter().any(|a| a == "dorm"),
+                "no dorm in args: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn migrate_plan_points_at_the_native_tool_never_dorm() {
+        use scaffold::DataLayer::{External, SeaOrm, Sqlx};
+        assert_eq!(
+            migrate_plan(Sqlx),
+            DbPlan::Spawn {
+                program: "sqlx".to_owned(),
+                args: vec!["migrate".to_owned(), "run".to_owned()],
+            }
+        );
+        assert_eq!(
+            migrate_plan(SeaOrm),
+            DbPlan::Spawn {
+                program: "sea-orm-cli".to_owned(),
+                args: vec!["migrate".to_owned(), "up".to_owned()],
+            }
+        );
+        assert!(matches!(migrate_plan(External), DbPlan::Advise(_)));
+        for layer in [Sqlx, SeaOrm, External] {
+            assert_not_dorm(&migrate_plan(layer));
+        }
+    }
+
+    #[test]
+    fn pull_plan_uses_sea_orm_cli_and_advises_for_sqlx() {
+        use scaffold::DataLayer::{External, SeaOrm, Sqlx};
+        // SeaORM reverse-engineers entities to the out dir, threading the DSN.
+        assert_eq!(
+            pull_plan(SeaOrm, "src/entity", Some("postgres://x/y")),
+            DbPlan::Spawn {
+                program: "sea-orm-cli".to_owned(),
+                args: vec![
+                    "generate".to_owned(),
+                    "entity".to_owned(),
+                    "-u".to_owned(),
+                    "postgres://x/y".to_owned(),
+                    "-o".to_owned(),
+                    "src/entity".to_owned(),
+                ],
+            }
+        );
+        // sqlx has no introspection; external is the user's own tooling.
+        assert!(matches!(pull_plan(Sqlx, "x", None), DbPlan::Advise(_)));
+        assert!(matches!(pull_plan(External, "x", None), DbPlan::Advise(_)));
+        for layer in [Sqlx, SeaOrm, External] {
+            assert_not_dorm(&pull_plan(layer, "out", None));
+        }
+    }
+
+    #[test]
+    fn studio_plan_advises_for_non_dorm_adapters() {
+        use scaffold::DataLayer::{External, SeaOrm, Sqlx};
+        for layer in [Sqlx, SeaOrm, External] {
+            let plan = studio_plan(layer);
+            assert!(matches!(plan, DbPlan::Advise(_)));
+            assert_not_dorm(&plan);
+        }
     }
 
     #[test]

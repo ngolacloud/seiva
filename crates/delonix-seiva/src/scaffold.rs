@@ -193,6 +193,91 @@ impl ProjectKind {
     }
 }
 
+/// The data layer a module (and, by default, its project) binds to (ADR 0030).
+/// DORM is the batteries-included default; `sqlx` and `seaorm` are first-class
+/// reference adapters; `external` means the project owns its persistence and the
+/// framework ships no migration tooling for it. The CLI never scaffolds an ORM
+/// type into `application`/`domain` — the choice only steers the composition root
+/// and which native tool `seiva db` delegates to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DataLayer {
+    /// The Delonix ORM (feature `dorm`): migrations, outbox, studio, admin.
+    #[default]
+    Dorm,
+    /// A bare `sqlx` query layer (feature `sqlx`); migrate with `sqlx-cli`.
+    Sqlx,
+    /// SeaORM (feature `seaorm`); migrate with `sea-orm-cli`.
+    SeaOrm,
+    /// The project owns persistence itself — no framework migration tooling.
+    External,
+}
+
+impl DataLayer {
+    /// Parses a `--data` value (case-insensitive; empty or `dorm` is the default).
+    /// Returns a human-readable message listing the valid layers on error.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "dorm" => Ok(Self::Dorm),
+            "sqlx" => Ok(Self::Sqlx),
+            "seaorm" | "sea-orm" | "sea_orm" => Ok(Self::SeaOrm),
+            "external" => Ok(Self::External),
+            other => Err(format!(
+                "unknown data layer `{other}` — expected one of: dorm, sqlx, seaorm, external"
+            )),
+        }
+    }
+
+    /// The manifest token written to `seiva.toml` (`[data] layer`, `[modules.x] data`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dorm => "dorm",
+            Self::Sqlx => "sqlx",
+            Self::SeaOrm => "seaorm",
+            Self::External => "external",
+        }
+    }
+}
+
+/// The data layer recorded in a `seiva.toml` manifest's `[data].layer`, defaulting
+/// to [`DataLayer::Dorm`] when the manifest is unparseable, lacks the field, or
+/// names an unknown layer. Pure, so the CLI can resolve which native tool
+/// `seiva db` delegates to deterministically.
+#[must_use]
+pub fn project_data_layer(manifest: &str) -> DataLayer {
+    toml::from_str::<toml::Value>(manifest)
+        .ok()
+        .and_then(|v| v.get("data")?.get("layer")?.as_str().map(ToOwned::to_owned))
+        .and_then(|s| DataLayer::parse(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Rewrites the `[data] layer = "..."` line in a `seiva.toml` manifest to `layer`.
+/// Pure. If no `layer =` line is present (a hand-edited manifest), the manifest is
+/// returned unchanged — the reader defaults to DORM, so the result stays coherent.
+#[must_use]
+pub fn set_project_data_layer(seiva: &str, layer: DataLayer) -> String {
+    let mut in_data = false;
+    let mut out = String::with_capacity(seiva.len());
+    for line in seiva.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            in_data = trimmed.starts_with("[data]");
+        }
+        if in_data && trimmed.starts_with("layer") && trimmed.contains('=') {
+            out.push_str(&format!("layer = \"{}\"\n", layer.as_str()));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    // Preserve the absence of a trailing newline only if the input lacked one.
+    if !seiva.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
 /// Files for a new project `name` of the given [`ProjectKind`]. Paths are relative
 /// to the new `name/` dir.
 pub fn project_files(name: &str, kind: ProjectKind) -> Result<Vec<GeneratedFile>, ScaffoldError> {
@@ -840,15 +925,20 @@ pub fn mount_extension_in_main(
     Ok(main_rs.replacen(anchor_line, &format!("{addition}{anchor_line}"), 1))
 }
 
-/// Registers a module in `seiva.toml` by appending a `[modules.<name>]` section.
-/// Pure.
-pub fn register_module_in_seiva_toml(seiva: &str, module: &str) -> Result<String, ScaffoldError> {
+/// Registers a module in `seiva.toml` by appending a `[modules.<name>]` section
+/// that records the module's chosen data layer (ADR 0030). Pure.
+pub fn register_module_in_seiva_toml(
+    seiva: &str,
+    module: &str,
+    data: DataLayer,
+) -> Result<String, ScaffoldError> {
     if seiva.contains(&format!("[modules.{module}]")) {
         return Err(ScaffoldError::AlreadyPresent(format!("module `{module}`")));
     }
     let sep = if seiva.ends_with('\n') { "" } else { "\n" };
     Ok(format!(
-        "{seiva}{sep}\n[modules.{module}]\ndata = \"dorm\"\n"
+        "{seiva}{sep}\n[modules.{module}]\ndata = \"{}\"\n",
+        data.as_str()
     ))
 }
 
@@ -2844,9 +2934,41 @@ mod tests {
     #[test]
     fn seiva_toml_registration_appends_section() {
         let seiva = seiva_toml("shop", ProjectKind::Api);
-        let out = register_module_in_seiva_toml(&seiva, "notes").unwrap();
+        let out = register_module_in_seiva_toml(&seiva, "notes", DataLayer::Dorm).unwrap();
         assert!(out.contains("[modules.notes]"));
-        assert!(register_module_in_seiva_toml(&out, "notes").is_err());
+        assert!(out.contains("data = \"dorm\""));
+        assert!(register_module_in_seiva_toml(&out, "notes", DataLayer::Dorm).is_err());
+        // A non-DORM module records its own adapter.
+        let sqlx = register_module_in_seiva_toml(&seiva, "orders", DataLayer::Sqlx).unwrap();
+        assert!(sqlx.contains("[modules.orders]") && sqlx.contains("data = \"sqlx\""));
+    }
+
+    #[test]
+    fn data_layer_parses_and_round_trips() {
+        assert_eq!(DataLayer::parse("").unwrap(), DataLayer::Dorm);
+        assert_eq!(DataLayer::parse("DORM").unwrap(), DataLayer::Dorm);
+        assert_eq!(DataLayer::parse("sqlx").unwrap(), DataLayer::Sqlx);
+        assert_eq!(DataLayer::parse("sea-orm").unwrap(), DataLayer::SeaOrm);
+        assert_eq!(DataLayer::parse("seaorm").unwrap(), DataLayer::SeaOrm);
+        assert_eq!(DataLayer::parse("external").unwrap(), DataLayer::External);
+        assert!(DataLayer::parse("mongo").is_err());
+    }
+
+    #[test]
+    fn project_data_layer_reads_and_set_rewrites() {
+        // The scaffold default is DORM.
+        let seiva = seiva_toml("shop", ProjectKind::Api);
+        assert_eq!(project_data_layer(&seiva), DataLayer::Dorm);
+        // Setting it rewrites the `[data] layer` line, and the reader follows.
+        let switched = set_project_data_layer(&seiva, DataLayer::Sqlx);
+        assert!(switched.contains("layer = \"sqlx\""));
+        assert!(!switched.contains("layer = \"dorm\""));
+        assert_eq!(project_data_layer(&switched), DataLayer::Sqlx);
+        // An unknown/absent layer falls back to DORM, never panics.
+        assert_eq!(
+            project_data_layer("[project]\nname = \"x\"\n"),
+            DataLayer::Dorm
+        );
     }
 
     #[test]

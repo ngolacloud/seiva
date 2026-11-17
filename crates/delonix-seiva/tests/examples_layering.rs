@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use delonix_seiva::lint::{check_layers, scan_module_layers};
+use delonix_seiva::lint::{check_data_layer_neutrality, check_layers, scan_module_layers};
 
 #[test]
 fn examples_obey_the_layer_dependency_rule() {
@@ -34,5 +34,14 @@ fn examples_obey_the_layer_dependency_rule() {
     assert!(
         violations.is_empty(),
         "layer-rule violations in examples/ (a forbidden inter-layer dependency):\n{violations:#?}"
+    );
+
+    // Data-layer neutrality (ADR 0030): no `application`/`domain` of a reference
+    // module may name an ORM or adapter crate. Proves the gate does not
+    // false-positive on the canonical modules it is meant to protect.
+    let neutrality = check_data_layer_neutrality(&modules);
+    assert!(
+        neutrality.is_empty(),
+        "data-layer-neutrality violations in examples/ (an ORM/adapter named by a pure layer):\n{neutrality:#?}"
     );
 }

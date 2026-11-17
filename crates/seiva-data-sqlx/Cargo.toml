@@ -1,0 +1,53 @@
+# seiva-data-sqlx — the sqlx reference data-layer adapter (ADR 0030, Fatia 2).
+#
+# One of the three reference adapters that implement `seiva-ports` (DORM is the
+# default; this one and `seiva-data-seaorm` are first-class references). It is the
+# proof that Seiva is agnostic *even of an ORM*: the ports run over a bare query
+# layer (`sqlx::Transaction`), with the user bringing their own schema and
+# migrating with `sqlx-cli`.
+#
+# The whole adapter sits behind the `sqlx` cargo feature (on by default so the
+# crate's own `cargo test` builds it), exactly as the ADR requires — a composition
+# root turns it on; nothing in the Seiva core links it.
+#
+# Deliberately NOT a member of the Seiva workspace (ADR 0030: "none in the default
+# workspace members"): the DORM-free core build must not pull sqlx or a Postgres
+# client. CI builds it in the dedicated `adapters` matrix job.
+[package]
+name = "seiva-data-sqlx"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = ["sqlx"]
+# The adapter proper. Off → the crate is empty (the ports are not implemented),
+# which is how a build that does not want sqlx leaves it unlinked.
+sqlx = ["dep:sqlx"]
+
+[dependencies]
+seiva-ports = { path = "../seiva-ports" }
+async-trait = "0.1"
+# task_local! for the ambient transaction + an async Mutex to hold it across the
+# repository awaits (a std Mutex guard held across `.await` would make the future
+# non-Send).
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+serde_json = "1"
+# The query layer. JSON for the audit `details` column; no compile-time `query!`
+# macros (so no DATABASE_URL at build time) — the runtime query API only.
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "postgres",
+    "json",
+], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# The end-to-end proof drives a real `examples/notes` use case through this
+# adapter (write inside UnitOfWork::transaction + read-back). Path deps to the
+# workspace members work regardless of this crate's own exclusion.
+notes-domain = { path = "../../examples/notes/domain" }
+notes-facade = { path = "../../examples/notes/facade" }
+notes-application = { path = "../../examples/notes/application" }
+seiva-testing = { path = "../seiva-testing" }

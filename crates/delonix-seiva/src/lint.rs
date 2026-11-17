@@ -164,6 +164,44 @@ fn is_dorm(dep: &str) -> bool {
     dep == "dorm" || dep.starts_with("dorm-")
 }
 
+/// Whether a dependency is a Seiva data-adapter crate (`seiva-data-dorm`,
+/// `seiva-data-sqlx`, `seiva-data-seaorm`, …). These bind the ports to a concrete
+/// backend and belong in `infrastructure`, never in `application`/`domain`.
+fn is_data_adapter(dep: &str) -> bool {
+    dep.starts_with("seiva-data-")
+}
+
+/// Whether a dependency is a known ORM or raw SQL-driver crate — a data-layer
+/// concern the pure layers must never name (ADR 0030). Matched by crate name so it
+/// works even when the adapter crate is excluded from the workspace (the reference
+/// adapters are): the lint reads dependency *names*, not the resolved graph.
+fn is_orm_crate(dep: &str) -> bool {
+    // Exact ORM/driver crates plus their sub-crates (`sqlx-postgres`,
+    // `sea-orm-migration`, `diesel_migrations`, …) via a prefix on the family.
+    const ORM_FAMILIES: [&str; 11] = [
+        "sqlx",
+        "sea-orm",
+        "sea_orm",
+        "diesel",
+        "tokio-postgres",
+        "postgres",
+        "rusqlite",
+        "mysql",
+        "mysql_async",
+        "rbatis",
+        "rbdc",
+    ];
+    ORM_FAMILIES.iter().any(|fam| {
+        dep == *fam || dep.starts_with(&format!("{fam}-")) || dep.starts_with(&format!("{fam}_"))
+    })
+}
+
+/// Whether a dependency is any data-layer crate the pure layers must not name:
+/// DORM, a Seiva data adapter, or a third-party ORM/driver.
+fn is_data_layer_dep(dep: &str) -> bool {
+    is_dorm(dep) || is_data_adapter(dep) || is_orm_crate(dep)
+}
+
 /// The reason, if any, that `layer` of `module` may not depend on `dep`
 /// (Clean-Architecture dependency rule; ADR 0003 of the Seiva repo).
 fn forbidden_layer_dep(module: &str, layer: &str, dep: &str) -> Option<String> {
@@ -238,6 +276,38 @@ pub fn check_layers(modules: &[ModuleLayers]) -> Vec<Violation> {
     violations
 }
 
+/// Checks the data-layer neutrality rule (ADR 0030): an `application` or `domain`
+/// crate must name no data-layer crate — not a Seiva data adapter (`seiva-data-*`)
+/// and not an ORM/driver (`sqlx`, `sea-orm`, `diesel`, `tokio-postgres`, …). The
+/// pure layers code against the ports in `seiva-ports` and their own repository
+/// port, never a concrete backend. Pure; deterministic. The DORM-specific edge is
+/// also caught by [`check_layers`]; this check is the broader neutrality gate that
+/// turns "don't name an ORM" from a convention into a fitness function.
+pub fn check_data_layer_neutrality(modules: &[ModuleLayers]) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for m in modules {
+        for layer in ["application", "domain"] {
+            let Some(deps) = m.layers.get(layer) else {
+                continue;
+            };
+            for dep in deps {
+                if is_data_layer_dep(dep) {
+                    violations.push(Violation {
+                        rule: "data-layer-neutrality",
+                        module: format!("{}::{layer}", m.module),
+                        message: format!(
+                            "`{layer}` must stay ORM-free and name no data-layer crate, not `{dep}` \
+                             (ADR 0030): code against `seiva-ports` and the module's repository port, \
+                             and bind the backend in `infrastructure`"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// Failure while scanning a project for module manifests.
 #[derive(Debug, thiserror::Error)]
 pub enum LintError {
@@ -294,27 +364,16 @@ pub fn lint_project(root: &Path) -> Result<Report, LintError> {
     // five layer-crate Cargo.toml files.
     let mut module_layers = Vec::new();
     for dir in &module_dirs {
-        let module = dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_owned();
-        let mut layers = BTreeMap::new();
-        for layer in LAYERS {
-            let cargo = dir.join(layer).join("Cargo.toml");
-            if cargo.is_file() {
-                let text = std::fs::read_to_string(&cargo).map_err(|source| LintError::Io {
-                    path: cargo.display().to_string(),
-                    source,
-                })?;
-                layers.insert(layer.to_owned(), cargo_dependency_names(&text));
-            }
-        }
-        if !layers.is_empty() {
-            module_layers.push(ModuleLayers { module, layers });
+        if let Some(scanned) = scan_one_module(dir)? {
+            module_layers.push(scanned);
         }
     }
     report.violations.extend(check_layers(&module_layers));
+    // Fitness function 3: data-layer neutrality (ADR 0030) — no ORM/adapter crate
+    // named by `application`/`domain`.
+    report
+        .violations
+        .extend(check_data_layer_neutrality(&module_layers));
 
     Ok(report)
 }
@@ -347,24 +406,65 @@ pub fn scan_module_layers(modules_root: &Path) -> Result<Vec<ModuleLayers>, Lint
 
     let mut out = Vec::new();
     for dir in &dirs {
-        let module = dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_owned();
-        let mut layers = BTreeMap::new();
-        for layer in LAYERS {
-            let cargo = dir.join(layer).join("Cargo.toml");
-            if cargo.is_file() {
-                let text = std::fs::read_to_string(&cargo).map_err(read_err(&cargo))?;
-                layers.insert(layer.to_owned(), cargo_dependency_names(&text));
-            }
-        }
-        if !layers.is_empty() {
-            out.push(ModuleLayers { module, layers });
+        if let Some(scanned) = scan_one_module(dir)? {
+            out.push(scanned);
         }
     }
     Ok(out)
+}
+
+/// Scans one module directory (`<dir>/<layer>/Cargo.toml` for the five layers) into
+/// a [`ModuleLayers`], or `None` when the directory holds no layer crate (a
+/// grouping dir like `shop/`, scanned one level down by the caller).
+///
+/// The module's identity is taken from its crate PACKAGE NAMES, not the directory:
+/// a grouped module in `examples/shop/orders/` has crates `shop-orders-<layer>`, so
+/// keying off the directory (`orders`) would make the layer rule read its own
+/// `shop-orders-domain` as "another module's" and false-positive. The identity is
+/// the shared `<prefix>` of `<prefix>-<layer>`; the directory name is the fallback.
+fn scan_one_module(dir: &Path) -> Result<Option<ModuleLayers>, LintError> {
+    let read_err = |path: &Path| {
+        let path = path.display().to_string();
+        move |source| LintError::Io { path, source }
+    };
+    let mut layers = BTreeMap::new();
+    let mut identity: Option<String> = None;
+    for layer in LAYERS {
+        let cargo = dir.join(layer).join("Cargo.toml");
+        if cargo.is_file() {
+            let text = std::fs::read_to_string(&cargo).map_err(read_err(&cargo))?;
+            // The first layer that names itself `<prefix>-<layer>` fixes the module
+            // identity for all five (they share the prefix).
+            if identity.is_none() {
+                identity = crate_name_prefix(&text, layer);
+            }
+            layers.insert(layer.to_owned(), cargo_dependency_names(&text));
+        }
+    }
+    if layers.is_empty() {
+        return Ok(None);
+    }
+    let module = identity.unwrap_or_else(|| {
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned()
+    });
+    Ok(Some(ModuleLayers { module, layers }))
+}
+
+/// The `<prefix>` of a layer crate whose `package.name` is `<prefix>-<layer>` (e.g.
+/// `shop-orders-domain` at layer `domain` → `shop-orders`). `None` if the manifest
+/// is unparseable, has no `package.name`, or the name does not end in `-<layer>`.
+fn crate_name_prefix(cargo_text: &str, layer: &str) -> Option<String> {
+    let name = toml::from_str::<toml::Table>(cargo_text)
+        .ok()?
+        .get("package")?
+        .get("name")?
+        .as_str()?
+        .to_owned();
+    name.strip_suffix(&format!("-{layer}"))
+        .map(ToOwned::to_owned)
 }
 
 /// The dependency crate names declared in a `Cargo.toml`'s `[dependencies]`
@@ -372,7 +472,12 @@ pub fn scan_module_layers(modules_root: &Path) -> Result<Vec<ModuleLayers>, Lint
 /// an unparseable manifest yields no names rather than failing the whole lint —
 /// the build would reject it anyway.
 fn cargo_dependency_names(text: &str) -> Vec<String> {
-    let Ok(toml::Value::Table(root)) = text.parse::<toml::Value>() else {
+    // Parse with serde (`toml::from_str`), NOT `str::parse::<toml::Value>()`:
+    // in toml 0.9 `Value`'s `FromStr` no longer parses a document, so `.parse()`
+    // silently yielded `Err` here and this scan returned no names at all — making
+    // the layer rule and the data-layer-neutrality gate vacuous no-ops over real
+    // files (the toml-0.9 trap recorded for `check_layers`). `from_str` parses.
+    let Ok(root) = toml::from_str::<toml::Table>(text) else {
         return Vec::new();
     };
     match root.get("dependencies") {
@@ -435,6 +540,70 @@ mod tests {
             ],
         );
         assert!(check_layers(&[m]).is_empty());
+    }
+
+    #[test]
+    fn neutrality_passes_for_a_pure_module() {
+        // A well-layered module names only ports + its own repository port in the
+        // pure layers; the ORM lives in infrastructure. No neutrality violation.
+        let m = layers(
+            "notes",
+            &[
+                ("domain", &["kernel"]),
+                (
+                    "application",
+                    &["notes-domain", "notes-facade", "seiva-ports"],
+                ),
+                (
+                    "infrastructure",
+                    &["notes-application", "sqlx", "seiva-data-sqlx"],
+                ),
+            ],
+        );
+        assert!(
+            check_data_layer_neutrality(&[m]).is_empty(),
+            "an ORM in `infrastructure` is allowed"
+        );
+    }
+
+    #[test]
+    fn neutrality_flags_an_orm_or_adapter_in_the_pure_layers() {
+        // The infractor: application names sqlx AND a Seiva adapter; domain names
+        // tokio-postgres. Each is a data-layer crate forbidden in a pure layer.
+        let m = layers(
+            "orders",
+            &[
+                ("domain", &["kernel", "tokio-postgres"]),
+                (
+                    "application",
+                    &[
+                        "orders-domain",
+                        "orders-facade",
+                        "sqlx",
+                        "seiva-data-seaorm",
+                    ],
+                ),
+            ],
+        );
+        let v = check_data_layer_neutrality(&[m]);
+        assert_eq!(v.len(), 3, "{v:?}");
+        assert!(v.iter().all(|x| x.rule == "data-layer-neutrality"));
+        assert!(v.iter().any(|x| x.module == "orders::domain"));
+        assert!(v.iter().any(|x| x.module == "orders::application"));
+    }
+
+    #[test]
+    fn is_orm_crate_matches_families_and_subcrates_only() {
+        assert!(super::is_orm_crate("sqlx"));
+        assert!(super::is_orm_crate("sqlx-postgres"));
+        assert!(super::is_orm_crate("sea-orm"));
+        assert!(super::is_orm_crate("sea-orm-migration"));
+        assert!(super::is_orm_crate("diesel_migrations"));
+        assert!(super::is_data_adapter("seiva-data-dorm"));
+        // Not ORMs: a lookalike name that is not part of a known family.
+        assert!(!super::is_orm_crate("my-sql-builder")); // not the `mysql` family
+        assert!(!super::is_orm_crate("seiva-ports"));
+        assert!(!super::is_orm_crate("serde"));
     }
 
     #[test]

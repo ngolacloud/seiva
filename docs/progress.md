@@ -4,6 +4,37 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-15) — camada de dados plugável (ADR 0030)
+
+Reposicionamento: a fronteira de dados já é neutra (`seiva-ports` sem tipos de ORM;
+duas implementações provam-no — `seiva-data-dorm` e os duplos in-memory de
+`seiva-testing`), mas a história de produto empurrava o DORM como único caminho.
+
+- **[ADR 0030](adr/0030-pluggable-data-layer.md) — A camada de dados é plugável:**
+  o DORM é o adaptador por omissão, não um requisito; sqlx e SeaORM passam a
+  adaptadores de referência de primeira classe (`seiva-data-sqlx`, `seiva-data-seaorm`),
+  cada um atrás da sua feature, nenhum ligado pelo núcleo. A neutralidade torna-se
+  fitness function (`seiva lint` recusa um ORM em `application`/`domain`).
+- **Fatia 1 (esta): política + posicionamento** — ADR 0030 (EN+pt) e README
+  reposicionado ("bring your own data layer"). **Feito.**
+- **Fatia 2 (esta): adaptadores de referência sqlx + SeaORM. Feito.** `seiva-data-sqlx`
+  (sqlx 0.9) e `seiva-data-seaorm` (sea-orm 2.0) implementam os quatro ports de
+  serviço (`UnitOfWork`, `EventPublisher` sobre outbox transaccional, `IdempotencyStore`
+  com CAS `INSERT … ON CONFLICT`, `AuditSink`), cada um atrás da sua feature e
+  **fora** dos `members` (como o DORM), para o núcleo continuar sem ORM. A transacção
+  é **ambiente**: `transaction(scope, closure)` abre a tx, guarda-a num `task_local`
+  e os repositórios do módulo encontram-na via `with_current_tx` (o `closure` não
+  recebe handle). Provado por efeito contra PostgreSQL real: 5 provas de ports por
+  adaptador (commit/rollback com erro tipado preservado, outbox no mesmo tx, 1 efeito
+  sob corrida de N, audit redigido, scope exposto) **+** um teste ponta-a-ponta que
+  corre o módulo `examples/notes` por cada adaptador (write dentro de `UnitOfWork::transaction`
+  + read-back). CI: novo job `adapters` (matriz dorm/sqlx/seaorm, serviço Postgres,
+  fmt+clippy+test), tokenless (o gateway DORM resolve `dorm-core`/`dorm-outbox`
+  publicados). Os testes vivos são gated por DSN e saltam offline.
+- **Fatia 3 (por fazer):** destravar a CLI — `seiva module new --data sqlx|seaorm|external`
+  e tornar `seiva db *` honesto fora do DORM (delegar na ferramenta nativa); e a
+  fitness function `seiva lint` que recusa um ORM em `application`/`domain`.
+
 ## Estado (2026-11-08) — bus de comandos + eventos in-process (ADR 0020/0021)
 
 Dois padrões nativos a seguir ao CQRS, em `feat/cqrs-bus-and-inprocess-events`

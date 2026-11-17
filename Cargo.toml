@@ -15,6 +15,12 @@ resolver = "2"
 # the `dorm` feature wires it in (owner decision: CI token + build coupling).
 exclude = [
     "crates/seiva-data-dorm",
+    # The sqlx and SeaORM reference adapters (ADR 0030, Fatia 2). DORM-free, but
+    # kept OUT of the default members so the core build pulls neither sqlx nor
+    # SeaORM nor a Postgres client (ADR 0030: "none in the default workspace
+    # members"). They are built in the dedicated `adapters` CI matrix job.
+    "crates/seiva-data-sqlx",
+    "crates/seiva-data-seaorm",
     "crates/seiva-outbox-relay",
     # RAG worker and the MCP-over-HTTP endpoint are DORM-git-coupled too.
     "crates/seiva-rag-worker",
@@ -83,6 +89,11 @@ members = [
     # Standalone proof that `#[seiva::controller]` generates a facade-driven axum
     # router end to end (guards, versioned paths, RFC 9457). Data-layer-free.
     "crates/seiva-controller-test",
+    # Native observability (ADR 0027): the opt-in Prometheus `/metrics` exporter
+    # and OTLP tracing, installed at the composition root. The library crates
+    # record against the lightweight `metrics` facade; the heavy exporters live
+    # here behind features. DORM-free.
+    "crates/seiva-observability",
     # The runtime that boots a Seiva service (the `dorm-api` replacement): the
     # HTTP app (controllers + /openapi.json + /health), a worker host and
     # 12-factor config with graceful shutdown. Data-layer-free (the DORM outbox

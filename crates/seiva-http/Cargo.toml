@@ -44,6 +44,11 @@ seiva-identity = { version = "0.1.0", path = "../seiva-identity" }
 seiva-openapi = { version = "0.1.0", path = "../seiva-openapi" }
 
 axum = "0.8"
+# The metrics FACADE only (ADR 0027): the request middleware records a counter,
+# a latency histogram and an in-flight gauge against it. It is a no-op until the
+# root installs a recorder (`seiva-observability`), so this stays DORM-free and
+# zero-cost-when-unused — no exporter, no runtime is linked here.
+metrics = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Reports the keys a DTO ignored during deserialization so `Valid<T>` can reject
