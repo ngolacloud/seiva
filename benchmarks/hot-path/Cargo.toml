@@ -1,0 +1,37 @@
+# Hot-path micro-benchmark — the Seiva framework's per-request overhead vs plain
+# axum, measured in-process with `tower::ServiceExt::oneshot` (no socket, no DB:
+# it isolates the framework, not I/O). This is the "before/after" harness for the
+# panel's E2/E4/E5 findings (Principal clone, metrics labels, rate-limiter lock).
+#
+# It is a STANDALONE workspace (note the empty `[workspace]` below): it is NOT a
+# member of the main Seiva workspace, so `criterion` never enters the framework's
+# `check` / `clippy --all-targets` / `cargo deny` gates. It depends on the LOCAL
+# framework by path, so it measures the working tree (incl. E1 and later fixes),
+# not the published 0.1.0 — unlike `notesbench`, which pins the registry version.
+[workspace]
+
+[package]
+name = "seiva-hot-path-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The framework under measurement, by PATH (the working tree, not crates.io).
+seiva-http = { path = "../../crates/seiva-http" }
+# Same axum major as seiva-http (0.8), so the Router/middleware types line up.
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+# `rt` drives the light/guarded groups on a current-thread runtime; the
+# concurrent rate-limiter group needs `rt-multi-thread` to spread spawned
+# requests across worker threads and actually contend the limiter's lock.
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+
+[[bench]]
+name = "hot_path"
+harness = false
