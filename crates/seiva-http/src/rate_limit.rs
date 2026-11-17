@@ -138,6 +138,14 @@ pub const MAX_TRACKED_CLIENTS: usize = 100_000;
 
 /// A shareable fixed-window rate limiter. Cloning shares the same underlying
 /// counters and clock, so the middleware layer and its state stay one limiter.
+///
+/// The counters live under a single `Mutex`. Sharding the lock was tried and
+/// measured (panel finding E5, `benchmarks/hot-path`): under 64 concurrent
+/// distinct-client requests across the full HTTP stack it showed **no** gain —
+/// the critical section (one `HashMap` probe) is too short to contend, and a
+/// per-request shard hash only added cost. A deployment that genuinely needs
+/// cross-replica rate limiting at scale uses the distributed store
+/// (`rate_limit_with_store`, ADR 0015), not a sharded in-process lock.
 #[derive(Clone)]
 pub struct RateLimiter {
     limit: RateLimit,
@@ -282,7 +290,7 @@ fn client_key(request: &Request, trust_forwarded_for: bool) -> ClientKey {
 
     match request
         .extensions()
-        .get::<Principal>()
+        .get::<Arc<Principal>>()
         .and_then(|p| p.tenant.clone())
     {
         Some(tenant) => ClientKey::Tenant { tenant, ip },

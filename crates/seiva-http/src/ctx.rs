@@ -14,6 +14,7 @@
 //! the controller macro having to grow a new parameter.
 
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -27,7 +28,7 @@ use crate::idempotency::IdempotencyKey;
 /// an optional idempotency key.
 #[derive(Debug, Clone)]
 pub struct Ctx {
-    principal: Principal,
+    principal: Arc<Principal>,
     method: String,
     path: String,
     idempotency_key: Option<IdempotencyKey>,
@@ -39,6 +40,15 @@ impl Ctx {
     /// constructor is what a direct caller or a test uses).
     #[must_use]
     pub fn new(principal: Principal) -> Self {
+        Self::from_shared(Arc::new(principal))
+    }
+
+    /// Builds a context around an **already-shared** principal — the extractor's
+    /// path. It reuses the `Arc<Principal>` the `authn` layer put in the request
+    /// extensions instead of deep-cloning the subject, tenant and permission set:
+    /// one refcount bump, no allocation (panel finding E2).
+    #[must_use]
+    pub(crate) fn from_shared(principal: Arc<Principal>) -> Self {
         Self {
             principal,
             method: String::new(),
@@ -65,7 +75,7 @@ impl Ctx {
     /// The authenticated caller.
     #[must_use]
     pub fn principal(&self) -> &Principal {
-        &self.principal
+        self.principal.as_ref()
     }
 
     /// The caller's tenant, if any — the value a handler scopes its queries by.
@@ -135,9 +145,9 @@ impl<S: Sync> FromRequestParts<S> for Ctx {
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let principal = parts
             .extensions
-            .get::<Principal>()
+            .get::<Arc<Principal>>()
             .cloned()
-            .unwrap_or_else(Principal::anonymous);
+            .unwrap_or_else(|| Arc::new(Principal::anonymous()));
         // Best-effort key: a present-but-malformed key is treated as absent (a
         // plain create), never stored — the validation still guards the storage
         // key. A handler that wants a hard `400` on a bad key uses the
@@ -147,7 +157,7 @@ impl<S: Sync> FromRequestParts<S> for Ctx {
             .get(crate::idempotency::IDEMPOTENCY_HEADER)
             .and_then(|v| v.to_str().ok())
             .and_then(|raw| IdempotencyKey::parse(raw).ok());
-        Ok(Ctx::new(principal).with_request(
+        Ok(Ctx::from_shared(principal).with_request(
             parts.method.as_str().to_owned(),
             parts.uri.path().to_owned(),
             idempotency_key,

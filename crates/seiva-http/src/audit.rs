@@ -45,22 +45,23 @@ pub async fn audit(
     }
 
     // Capture what we need before the request is consumed by the inner service.
-    let principal = request
-        .extensions()
-        .get::<Principal>()
-        .cloned()
-        .unwrap_or_else(Principal::anonymous);
+    // Read the shared principal by reference and copy only the two fields the
+    // entry needs (subject + tenant), not the whole permission set (E2).
+    let principal = request.extensions().get::<Arc<Principal>>().cloned();
+    let (subject, tenant) = match principal {
+        Some(principal) => (principal.subject.clone(), principal.tenant.clone()),
+        None => {
+            let anon = Principal::anonymous();
+            (anon.subject, anon.tenant)
+        }
+    };
     let operation = format!("{} {}", request.method(), request.uri().path());
     let request_id = request.extensions().request_id();
 
     let response = next.run(request).await;
 
-    let entry = AuditEntry::new(
-        principal.subject,
-        operation,
-        response.status().as_u16().to_string(),
-    )
-    .in_tenant(principal.tenant)
+    let entry = AuditEntry::new(subject, operation, response.status().as_u16().to_string())
+        .in_tenant(tenant)
     .with_request_id(request_id)
     .redacted();
 
@@ -98,7 +99,7 @@ mod tests {
         let request = HttpRequest::builder()
             .method("POST")
             .uri("/things")
-            .extension(Principal::in_tenant("alice", "acme", ["things.create"]))
+            .extension(Arc::new(Principal::in_tenant("alice", "acme", ["things.create"])))
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(request).await.unwrap();

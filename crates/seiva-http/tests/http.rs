@@ -73,7 +73,7 @@ async fn guarded_route_happy_path_is_201_with_a_request_id() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-1", ["demo.create"]))
+        .extension(Arc::new(Principal::new("user-1", ["demo.create"])))
         .body(Body::from(r#"{"title":"first"}"#))
         .unwrap();
 
@@ -91,7 +91,7 @@ async fn guarded_route_without_permission_is_a_403_problem() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-2", ["demo.read"]))
+        .extension(Arc::new(Principal::new("user-2", ["demo.read"])))
         .body(Body::from(r#"{"title":"blocked"}"#))
         .unwrap();
 
@@ -123,7 +123,7 @@ async fn invalid_body_is_a_422_problem() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-1", ["demo.create"]))
+        .extension(Arc::new(Principal::new("user-1", ["demo.create"])))
         .body(Body::from(r#"{"title":"   "}"#))
         .unwrap();
 
@@ -141,7 +141,7 @@ async fn malformed_json_is_a_422() {
         .method("POST")
         .uri("/demo")
         .header("content-type", "application/json")
-        .extension(Principal::new("user-1", ["demo.create"]))
+        .extension(Arc::new(Principal::new("user-1", ["demo.create"])))
         .body(Body::from("not json"))
         .unwrap();
     let response = guarded_app().oneshot(request).await.unwrap();
