@@ -65,6 +65,7 @@ where
         // publish run inside it, so with the DORM gateway the event lands in the
         // transactional outbox in the SAME transaction as the business change.
         self.uow
+            // seiva:allow-global — demo module, single-tenant illustration; per-module tenant-scoping tracked separately (ADR 0029)
             .transaction(Scope::Global, || async {
                 self.repository.save_question(&question).await?;
                 self.events.publish("polls.question_asked", &event).await
@@ -99,6 +100,7 @@ where
         .map_err(BoxError::from)?;
 
         self.uow
+            // seiva:allow-global — demo module, single-tenant illustration; per-module tenant-scoping tracked separately (ADR 0029)
             .transaction(Scope::Global, || async {
                 self.repository.save_choice(&choice).await?;
                 self.events.publish("polls.choice_added", &event).await
@@ -129,6 +131,7 @@ where
     async fn cast_a_vote(&self, cmd: Vote) -> PortResult<ChoiceDto> {
         let choice = self
             .uow
+            // seiva:allow-global — demo module, single-tenant illustration; per-module tenant-scoping tracked separately (ADR 0029)
             .transaction(Scope::Global, || async {
                 let choice = self
                     .repository

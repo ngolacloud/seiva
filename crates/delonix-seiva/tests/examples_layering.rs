@@ -10,7 +10,10 @@
 
 use std::path::Path;
 
-use delonix_seiva::lint::{check_data_layer_neutrality, check_layers, scan_module_layers};
+use delonix_seiva::lint::{
+    check_data_layer_neutrality, check_layers, check_scope_policy, scan_module_layers,
+    scan_scope_sources,
+};
 
 #[test]
 fn examples_obey_the_layer_dependency_rule() {
@@ -43,5 +46,34 @@ fn examples_obey_the_layer_dependency_rule() {
     assert!(
         neutrality.is_empty(),
         "data-layer-neutrality violations in examples/ (an ORM/adapter named by a pure layer):\n{neutrality:#?}"
+    );
+}
+
+/// CI gate for the tenant-scope policy (ADR 0029 BOLA): no `application`/`domain`
+/// layer of a reference module may pass a literal `Scope::Global` without the
+/// audited `seiva:allow-global` opt-out. The tenant-scoped modules (`notes`,
+/// `accounts`) name no `Scope::Global` at all; the single-tenant demos (`polls`,
+/// `shop/*`) carry a marker, so the scan must come back clean — proving the gate
+/// does not false-positive on the canonical modules it protects.
+#[test]
+fn examples_obey_the_tenant_scope_policy() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+
+    let mut sources = scan_scope_sources(&examples).expect("scan examples/");
+    sources.extend(scan_scope_sources(&examples.join("shop")).expect("scan examples/shop/"));
+
+    // Guard against a silently-empty scan (a moved directory, a path typo) that
+    // would make this gate vacuously pass.
+    assert!(
+        sources.len() >= 3,
+        "expected to read the example modules' application/domain sources, found {}",
+        sources.len()
+    );
+
+    let violations = check_scope_policy(&sources);
+    assert!(
+        violations.is_empty(),
+        "scope-policy violations in examples/ (an unmarked literal `Scope::Global` \
+         bypassing tenant isolation):\n{violations:#?}"
     );
 }

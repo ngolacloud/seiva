@@ -9,3 +9,9 @@ publish = false
 
 [dependencies]
 delonix-seiva = { workspace = true }
+# The contract carries the framework request context `&Ctx` on its write methods
+# (the macro skips it from the wire, ADR 0006): the interface derives the tenant
+# `Scope` from it server-side (SG1 / ADR 0029), never from the request body. The
+# layer rule (`seiva lint`) allows this — it forbids only DORM and the lower
+# layers, never the HTTP kernel; `examples/accounts/facade` depends on it the same way.
+seiva-http = { path = "../../../crates/seiva-http" }

@@ -277,6 +277,93 @@ pub fn accounts_service(db: dorm_core::db::Database) -> DormAccountsService {
 }
 
 // ---------------------------------------------------------------------------
+// 2c. A notes-shaped tenant-scoped model + repository (ADR 0029 live proof).
+// ---------------------------------------------------------------------------
+
+/// The table [`DormNoteRepository`] reads and writes.
+pub const NOTES_TABLE: &str = "notes_notes";
+
+/// A notes-shaped, **tenant-scoped** DORM model (SG1 / ADR 0029 BOLA). It uses the
+/// exact mechanism as [`AccountRow`]: `dorm_core`'s `scope.rs` injects a
+/// `tenant = <current>` predicate on every read and forces the `tenant` column on
+/// every insert, taking the value from the task's ambient `with_tenant` scope. So a
+/// read under tenant A can never return tenant B's note — the live counterpart of
+/// the `scope-policy` lint, which stops a `notes`-type module ever running its use
+/// case under a fixed `Scope::Global`. `unique_together` makes a title unique
+/// *within* a tenant, so two tenants can hold the same title.
+#[derive(dorm_derive::Model, Debug, Clone)]
+#[model(
+    table = "notes_notes",
+    tenant_scoped,
+    unique_together = "tenant, title"
+)]
+struct NoteRow {
+    #[field(primary_key, max_length = 48)]
+    id: String,
+    /// The tenant column DORM scopes by — set by the ambient scope on insert, used
+    /// as the auto-injected predicate on reads, never touched by the repository.
+    #[field(max_length = 63)]
+    tenant: String,
+    #[field(max_length = 200)]
+    title: String,
+}
+
+/// The DDL that creates the tenant-scoped notes table, idempotently. The
+/// live-Postgres test applies it before driving [`DormNoteRepository`]; the offline
+/// gates do not run it.
+#[must_use]
+pub fn notes_table_ddl() -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {NOTES_TABLE} (\
+           id TEXT PRIMARY KEY, \
+           tenant TEXT NOT NULL, \
+           title TEXT NOT NULL, \
+           UNIQUE (tenant, title))"
+    )
+}
+
+/// A notes repository over the tenant-scoped [`NoteRow`], mirroring
+/// [`DormCredentialRepository`]: it holds no handle (it runs against the current
+/// session + tenant scope) and **never names the tenant** — `save` inserts without a
+/// tenant column (the scope forces it on) and `find_id_by_title` filters only by
+/// title (the scope appends `tenant = <current>`). An untenanted scope is refused by
+/// DORM (`TenantScopeMissing`), so a forgotten scope fails closed rather than leaking.
+pub struct DormNoteRepository;
+
+impl DormNoteRepository {
+    /// Saves a note under the ambient tenant scope. The `tenant` passed here is a
+    /// placeholder — `scope.rs::scoped_rows` overwrites it with the task's ambient
+    /// tenant before the INSERT is built (and refuses the insert if no tenant is in
+    /// scope), so the repository cannot land a row under the wrong tenant or none.
+    pub async fn save(&self, id: u128, title: &str) -> Result<(), String> {
+        NoteRow::objects()
+            .create(NewNoteRow {
+                id: id.to_string(),
+                tenant: String::new(),
+                title: title.to_owned(),
+            })
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Finds a note by title under the ambient tenant scope, returning its id. Only
+    /// `title` is named; the `tenant = <current>` predicate is appended by `scope.rs`
+    /// from the ambient scope, so this can never return another tenant's note.
+    pub async fn find_id_by_title(&self, title: &str) -> Result<Option<u128>, String> {
+        let found = NoteRow::objects()
+            .filter(note_row::title.eq(title))
+            .first()
+            .await
+            .map_err(|e| e.to_string())?;
+        match found {
+            None => Ok(None),
+            Some(row) => row.id.parse::<u128>().map(Some).map_err(|e| e.to_string()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 1 + 3. Relay settings and the composed runnable service.
 // ---------------------------------------------------------------------------
 

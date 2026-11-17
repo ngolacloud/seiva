@@ -2022,6 +2022,7 @@ name = "notes-facade"
 version = "0.1.0"
 dependencies = [
  "delonix-seiva",
+ "seiva-http",
 ]
 
 [[package]]
@@ -2037,7 +2038,10 @@ dependencies = [
 name = "notes-interface"
 version = "0.1.0"
 dependencies = [
+ "notes-application",
  "notes-facade",
+ "seiva-http",
+ "seiva-ports",
 ]
 
 [[package]]

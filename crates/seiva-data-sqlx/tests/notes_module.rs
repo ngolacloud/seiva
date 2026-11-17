@@ -10,9 +10,9 @@
 
 use notes_application::{NotesService, RepositoryError};
 use notes_domain::{Note, NoteRepository};
-use notes_facade::{CreateNote, Notes};
+use notes_facade::CreateNote;
 use seiva_data_sqlx::{connect, with_current_tx, SqlxConfig, SqlxOutboxPublisher, SqlxUnitOfWork};
-use seiva_ports::BoxError;
+use seiva_ports::{BoxError, Scope};
 use seiva_testing::SequenceIdGenerator;
 use sqlx::Row;
 use std::future::Future;
@@ -86,11 +86,16 @@ async fn notes_create_persists_and_reads_back_through_the_sqlx_adapter() {
     };
 
     // The use case opens one transaction, saves the note AND writes the event into
-    // the outbox inside it — commit together.
+    // the outbox inside it — commit together. It runs under the caller's tenant
+    // `Scope` (SG1 / ADR 0029), derived server-side by the interface; the sqlx unit
+    // of work carries it through, so the use case no longer hard-codes `Scope::Global`.
     let dto = service
-        .create(CreateNote {
-            title: "hello from sqlx".into(),
-        })
+        .create(
+            Scope::tenant("acme").expect("a non-empty tenant"),
+            CreateNote {
+                title: "hello from sqlx".into(),
+            },
+        )
         .await
         .expect("create_note succeeds");
     assert_eq!(dto.id, 1, "SequenceIdGenerator hands out id 1 first");

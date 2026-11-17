@@ -308,6 +308,89 @@ pub fn check_data_layer_neutrality(modules: &[ModuleLayers]) -> Vec<Violation> {
     violations
 }
 
+// --- fitness function 4: the tenant-scope policy (ADR 0029 BOLA) -----------
+
+/// The audited opt-out marker that turns a deliberate, cross-tenant
+/// `Scope::Global` from a lint error into a reviewable exception. A `Scope::Global`
+/// on a line carrying this marker (or on the line directly below it) passes; the
+/// set of marked sites **is** the maintenance allowlist, greppable with
+/// `grep -rn 'seiva:allow-global'`.
+pub const ALLOW_GLOBAL_MARKER: &str = "seiva:allow-global";
+
+/// The literal a module's `application`/`domain` code must not pass unmarked — the
+/// audited cross-tenant escape (SG1). Writing it into a tenant-owning use case is
+/// the tenant-scope bypass BOLA is about.
+const SCOPE_GLOBAL: &str = "Scope::Global";
+
+/// The layers the scope-policy rule reads: `application` chooses the `Scope` it
+/// hands `UnitOfWork::transaction`, and `domain` must never name a scope at all.
+/// The outer layers are exempt — `interface` derives the scope from `&Ctx` (and may
+/// reference `Scope::Global` in docs), `infrastructure` only maps it.
+const SCOPE_SCANNED_LAYERS: [&str; 2] = ["application", "domain"];
+
+/// One scanned source file of a module layer, kept separate from I/O so
+/// [`check_scope_policy`] is testable with fixtures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeSource {
+    /// The owning module's identity (its crate-name prefix).
+    pub module: String,
+    /// The layer the file belongs to (`"application"` / `"domain"`).
+    pub layer: String,
+    /// A path shown in the diagnostic.
+    pub file: String,
+    /// The file's text.
+    pub text: String,
+}
+
+/// Whether `line` uses the `Scope::Global` literal in CODE, not in a comment or
+/// doc-string. Only the slice before the first `//` is considered, so a `///` doc
+/// reference to `` [`Scope::Global`] `` or a trailing `// … Scope::Global` comment
+/// does not count — the deliberate heuristic ADR 0029 records.
+fn line_uses_scope_global(line: &str) -> bool {
+    let code = match line.find("//") {
+        Some(i) => &line[..i],
+        None => line,
+    };
+    code.contains(SCOPE_GLOBAL)
+}
+
+/// Whether the audited opt-out marker is present on `lines[idx]` or the line
+/// directly above it, making a deliberate cross-tenant `Scope::Global` a reviewable
+/// exception rather than a build error.
+fn allowed_by_marker(lines: &[&str], idx: usize) -> bool {
+    lines[idx].contains(ALLOW_GLOBAL_MARKER)
+        || (idx > 0 && lines[idx - 1].contains(ALLOW_GLOBAL_MARKER))
+}
+
+/// Checks the tenant-scope policy (ADR 0029): a literal `Scope::Global` in a
+/// module's `application`/`domain` layer is a violation unless it carries an
+/// [`ALLOW_GLOBAL_MARKER`] opt-out. Pure; deterministic. **Fail-closed**: the
+/// default for an unmarked `Scope::Global` is an error, not a pass, so a use case
+/// that bypasses tenant isolation cannot sail past the gate on the honour system.
+pub fn check_scope_policy(sources: &[ScopeSource]) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for src in sources {
+        let lines: Vec<&str> = src.text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line_uses_scope_global(line) && !allowed_by_marker(&lines, i) {
+                violations.push(Violation {
+                    rule: "scope-policy",
+                    module: format!("{}::{}", src.module, src.layer),
+                    message: format!(
+                        "{}:{}: a literal `Scope::Global` bypasses tenant isolation (ADR 0029 \
+                         BOLA); derive the tenant `Scope` from `&Ctx` server-side (the `accounts` \
+                         pattern), or, for a deliberate cross-tenant read, mark it with a \
+                         `{ALLOW_GLOBAL_MARKER}` comment stating the reason",
+                        src.file,
+                        i + 1,
+                    ),
+                });
+            }
+        }
+    }
+    violations
+}
+
 /// Failure while scanning a project for module manifests.
 #[derive(Debug, thiserror::Error)]
 pub enum LintError {
@@ -374,6 +457,10 @@ pub fn lint_project(root: &Path) -> Result<Report, LintError> {
     report
         .violations
         .extend(check_data_layer_neutrality(&module_layers));
+    // Fitness function 4: the tenant-scope policy (ADR 0029) — no unmarked literal
+    // `Scope::Global` in a module's `application`/`domain` layer.
+    let scope_sources = scan_scope_sources(&modules_dir)?;
+    report.violations.extend(check_scope_policy(&scope_sources));
 
     Ok(report)
 }
@@ -484,6 +571,104 @@ fn cargo_dependency_names(text: &str) -> Vec<String> {
         Some(toml::Value::Table(deps)) => deps.keys().cloned().collect(),
         _ => Vec::new(),
     }
+}
+
+/// Scans a directory whose immediate children are modules for the tenant-scope
+/// policy (ADR 0029): reads the `application` and `domain` layer sources of each
+/// module under `modules_root` into [`ScopeSource`]s. Mirrors [`scan_module_layers`]
+/// (same traversal, same crate-name-prefix identity rule), so the caller scans
+/// `examples/` and `examples/shop/` the same way it does for the layer rule. A
+/// child directory with no scanned layer is skipped (a grouping dir like `shop/`).
+///
+/// # Errors
+/// Returns [`LintError::Io`] if `modules_root` or a layer source cannot be read.
+pub fn scan_scope_sources(modules_root: &Path) -> Result<Vec<ScopeSource>, LintError> {
+    let read_err = |path: &Path| {
+        let path = path.display().to_string();
+        move |source| LintError::Io { path, source }
+    };
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(modules_root).map_err(read_err(modules_root))? {
+        let entry = entry.map_err(read_err(modules_root))?;
+        if entry.path().is_dir() {
+            dirs.push(entry.path());
+        }
+    }
+    dirs.sort(); // deterministic regardless of filesystem order
+
+    let mut out = Vec::new();
+    for dir in &dirs {
+        out.extend(scan_one_module_scope(dir)?);
+    }
+    Ok(out)
+}
+
+/// Reads the `application`/`domain` sources of one module directory into
+/// [`ScopeSource`]s. The module identity is its crate-name prefix (the same rule as
+/// [`scan_one_module`], so a grouped `shop-orders` module is attributed to itself,
+/// not to another module). A directory with no scanned layer yields no sources.
+fn scan_one_module_scope(dir: &Path) -> Result<Vec<ScopeSource>, LintError> {
+    let read_err = |path: &Path| {
+        let path = path.display().to_string();
+        move |source| LintError::Io { path, source }
+    };
+    // Module identity from the first layer manifest that names itself `<prefix>-<layer>`.
+    let mut identity: Option<String> = None;
+    for layer in LAYERS {
+        let cargo = dir.join(layer).join("Cargo.toml");
+        if cargo.is_file() && identity.is_none() {
+            let text = std::fs::read_to_string(&cargo).map_err(read_err(&cargo))?;
+            identity = crate_name_prefix(&text, layer);
+        }
+    }
+    let module = identity.unwrap_or_else(|| {
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned()
+    });
+
+    let mut out = Vec::new();
+    for layer in SCOPE_SCANNED_LAYERS {
+        let src = dir.join(layer).join("src");
+        if src.is_dir() {
+            collect_rust_sources(&src, &module, layer, &mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+/// Recursively collects every `.rs` file under `dir` into `out` as a [`ScopeSource`]
+/// for the given module/layer. Deterministic order (entries sorted).
+fn collect_rust_sources(
+    dir: &Path,
+    module: &str,
+    layer: &str,
+    out: &mut Vec<ScopeSource>,
+) -> Result<(), LintError> {
+    let read_err = |path: &Path| {
+        let path = path.display().to_string();
+        move |source| LintError::Io { path, source }
+    };
+    let mut entries: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(read_err(dir))? {
+        entries.push(entry.map_err(read_err(dir))?.path());
+    }
+    entries.sort();
+    for path in &entries {
+        if path.is_dir() {
+            collect_rust_sources(path, module, layer, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            let text = std::fs::read_to_string(path).map_err(read_err(path))?;
+            out.push(ScopeSource {
+                module: module.to_owned(),
+                layer: layer.to_owned(),
+                file: path.display().to_string(),
+                text,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -757,5 +942,83 @@ mod tests {
             .violations
             .iter()
             .any(|v| v.rule == "duplicate-module-name"));
+    }
+
+    // --- fitness function 4: the tenant-scope policy (ADR 0029) --------------
+
+    fn scope_source(layer: &str, text: &str) -> ScopeSource {
+        ScopeSource {
+            module: "notes".to_owned(),
+            layer: layer.to_owned(),
+            file: format!("examples/notes/{layer}/src/lib.rs"),
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_unmarked_scope_global_in_application_is_a_violation() {
+        let src = scope_source(
+            "application",
+            "async fn create(&self) {\n    self.uow.transaction(Scope::Global, || async {}).await\n}\n",
+        );
+        let v = check_scope_policy(&[src]);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].rule, "scope-policy");
+        assert_eq!(v[0].module, "notes::application");
+        assert!(
+            v[0].message.contains(":2:"),
+            "names the line: {}",
+            v[0].message
+        );
+    }
+
+    #[test]
+    fn a_tenant_scoped_use_case_passes() {
+        // The `accounts` shape: the application takes a `Scope` parameter and names
+        // no `Scope::Global` literal at all.
+        let src = scope_source(
+            "application",
+            "async fn create(&self, scope: Scope) {\n    self.uow.transaction(scope, || async {}).await\n}\n",
+        );
+        assert!(check_scope_policy(&[src]).is_empty());
+    }
+
+    #[test]
+    fn a_marked_scope_global_is_an_audited_exception() {
+        // Marker on the line above, and marker on the same line — both pass.
+        let above = scope_source(
+            "application",
+            "// seiva:allow-global — cross-tenant reporting read, admin only\n    .transaction(Scope::Global, || async {})\n",
+        );
+        let same = scope_source(
+            "application",
+            "    .transaction(Scope::Global, || async {}) // seiva:allow-global — admin seed\n",
+        );
+        assert!(
+            check_scope_policy(&[above]).is_empty(),
+            "marker above passes"
+        );
+        assert!(
+            check_scope_policy(&[same]).is_empty(),
+            "marker same-line passes"
+        );
+    }
+
+    #[test]
+    fn scope_global_in_a_comment_or_docstring_is_ignored() {
+        // A doc reference and a trailing comment are documentation, not a bypass.
+        let doc = scope_source(
+            "application",
+            "/// The rare cross-tenant case is [`Scope::Global`], audited at the gateway.\n    let scope = ctx.scope();\n",
+        );
+        let trailing = scope_source(
+            "application",
+            "    let scope = ctx.scope(); // never a fixed Scope::Global here\n",
+        );
+        assert!(check_scope_policy(&[doc]).is_empty(), "doc mention ignored");
+        assert!(
+            check_scope_policy(&[trailing]).is_empty(),
+            "trailing comment ignored"
+        );
     }
 }

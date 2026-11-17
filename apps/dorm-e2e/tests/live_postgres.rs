@@ -51,8 +51,8 @@ use accounts_facade::{CreateUser, UserDto};
 use dorm_core::db::{self, with_session};
 use dorm_core::value::Value;
 use dorm_e2e::{
-    accounts_service, run_relay, users_table_ddl, DormCredentialRepository, LoggingPublisher,
-    RelaySettings, USERS_TABLE,
+    accounts_service, notes_table_ddl, run_relay, users_table_ddl, DormCredentialRepository,
+    DormNoteRepository, LoggingPublisher, RelaySettings, NOTES_TABLE, USERS_TABLE,
 };
 use seiva_auth::{hash_password, verify_password};
 use seiva_data_dorm::{connect, scoped_session, DormConfig, UuidIdGenerator};
@@ -532,6 +532,96 @@ async fn create_user_use_case_persists_and_outboxes_against_real_postgres() {
         )
         .await?;
         Ok::<(), dorm_core::Error>(())
+    })
+    .await;
+}
+
+/// ADR 0029 (BOLA) — the live counterpart of the `scope-policy` lint, on a
+/// **notes-type module**: two tenants holding the **same note title** are isolated
+/// **by construction**, so tenant A never reads tenant B's row. This is what the
+/// migration of `examples/notes` off a fixed `Scope::Global` buys at run time — the
+/// use case now runs under the caller's tenant `Scope`, and `dorm_core::scope`
+/// injects the `tenant = <current>` predicate from the ambient `with_tenant` scope
+/// (reads) / forces the column (inserts). The `NoteRow` model is `tenant_scoped`
+/// and `unique_together(tenant, title)`, so the same title coexists under both
+/// tenants (a global-unique title would reject the second save) and each tenant's
+/// scoped read resolves to its own row. Skips cleanly when `DORM_TEST_DSN` is unset.
+#[tokio::test]
+async fn notes_two_tenants_with_the_same_title_are_isolated_against_real_postgres() {
+    let Some(dsn) = test_dsn() else {
+        return;
+    };
+    let cfg = test_config(&dsn);
+    let db = Arc::new(connect(&cfg).expect("the DORM handle builds from the test DSN"));
+
+    with_session(db.clone(), async { ensure_ddl(&notes_table_ddl()).await })
+        .await
+        .expect("the notes table is created");
+
+    let repo = DormNoteRepository;
+    // Per-run-unique tenants + one shared title, so concurrent runs never collide
+    // and the SAME title lands under two different tenants.
+    let suffix = unique_suffix();
+    let acme = format!("acme-{suffix}");
+    let globex = format!("globex-{suffix}");
+    let title = format!("shared-note-{suffix}");
+
+    // Save the same title under two tenants — both succeed only because the table is
+    // unique on (tenant, title), not on title alone. The repository never names the
+    // tenant; the ambient `with_tenant` scope forces the column.
+    for (tenant, id) in [(&acme, 1u128), (&globex, 2u128)] {
+        with_session(
+            db.clone(),
+            db::with_tenant(tenant.clone(), async {
+                db::atomic(|_tx| async {
+                    repo.save(id, &title)
+                        .await
+                        .map_err(dorm_core::Error::Config)
+                })
+                .await
+            }),
+        )
+        .await
+        .expect("the save under the tenant commits");
+    }
+
+    // Read the title under acme: must resolve to acme's row (id 1), never globex's.
+    let from_acme = with_session(
+        db.clone(),
+        db::with_tenant(acme.clone(), async { repo.find_id_by_title(&title).await }),
+    )
+    .await
+    .expect("the acme read runs")
+    .expect("acme has its note");
+    assert_eq!(from_acme, 1, "acme must see ITS note, not globex's");
+
+    // Read the title under globex: must resolve to globex's row (id 2).
+    let from_globex = with_session(
+        db.clone(),
+        db::with_tenant(globex.clone(), async {
+            repo.find_id_by_title(&title).await
+        }),
+    )
+    .await
+    .expect("the globex read runs")
+    .expect("globex has its note");
+    assert_eq!(from_globex, 2, "globex must see ITS note, not acme's");
+
+    // The decisive cross-tenant assertion: the SAME title resolved to DIFFERENT rows
+    // per tenant — tenant A does not read tenant B's row. Isolation is injected by
+    // `scope.rs`, not by the repository (which filtered only by title).
+    assert_ne!(
+        from_acme, from_globex,
+        "the same title is a different row per tenant — tenant A never reads tenant B's note"
+    );
+
+    // Best-effort cleanup: both rows share the title.
+    let _ = with_session(db.clone(), async {
+        db::run(
+            &format!("DELETE FROM {NOTES_TABLE} WHERE title = $1"),
+            &[Value::Text(title.clone())],
+        )
+        .await
     })
     .await;
 }

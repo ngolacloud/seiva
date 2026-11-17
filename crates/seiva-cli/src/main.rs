@@ -709,7 +709,7 @@ fn lint() -> ExitCode {
     // project root; module manifests live at `modules/<name>/module.toml`.
     let root = std::path::Path::new(".");
     match delonix_seiva::lint::lint_project(root) {
-        Ok(report) if report.modules_checked == 0 => {
+        Ok(report) if report.modules_checked == 0 && report.is_clean() => {
             println!("seiva lint: no modules found under ./modules (nothing to check).");
             ExitCode::SUCCESS
         }
