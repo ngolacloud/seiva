@@ -8,16 +8,18 @@
 //!
 //! ## The ambient transaction (the non-trivial part)
 //!
-//! [`UnitOfWork::transaction`] is **scope-based, not handle-based** (ADR 0030): the
+//! [`UnitOfWork::transaction`](seiva_ports::UnitOfWork::transaction) is
+//! **scope-based, not handle-based** (ADR 0030): the
 //! body receives no transaction handle, so a module's repositories find the current
-//! one through a task-local this crate owns. [`SeaOrmUnitOfWork::transaction`] opens
+//! one through a task-local this crate owns. [`SeaOrmUnitOfWork`]'s `transaction` opens
 //! `conn.begin()`, stashes the owned [`DatabaseTransaction`](sea_orm::DatabaseTransaction)
-//! in the [`CURRENT`] task-local for the body's duration, commits on `Ok` and rolls
+//! in the `CURRENT` task-local for the body's duration, commits on `Ok` and rolls
 //! back on `Err`. A repository (or the outbox / idempotency port) reaches the live
-//! transaction with [`with_current_tx`]; [`current_scope`] exposes the [`Scope`].
+//! transaction with [`with_current_tx`]; [`current_scope`] exposes the
+//! [`Scope`](seiva_ports::Scope).
 //!
 //! Like the sqlx adapter and unlike the DORM gateway, this adapter does **not**
-//! auto-enforce tenant scoping — it surfaces the [`Scope`] so a tenant-aware
+//! auto-enforce tenant scoping — it surfaces the [`Scope`](seiva_ports::Scope) so a tenant-aware
 //! repository can constrain its own query; the SQL is the user's.
 
 #![forbid(unsafe_code)]

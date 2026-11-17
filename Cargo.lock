@@ -3212,6 +3212,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-sql-ambient-tx"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "tokio",
+]
+
+[[package]]
 name = "seiva-testing"
 version = "0.1.0"
 dependencies = [
