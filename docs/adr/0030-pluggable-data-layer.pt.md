@@ -1,6 +1,6 @@
 # ADR 0030 — A camada de dados é plugável: o DORM é o adaptador por omissão, não um requisito; sqlx e SeaORM são de primeira classe
 
-- Estado: Proposto
+- Estado: Aceite
 - Data: 2026-11-15
 - Decisores: NgolaCloud
 - Segue: ADR 0002 (ports do núcleo e duplos in-memory), ADR 0004 (o gateway de dados DORM), ADR 0011 (idempotência como port, reutilizando o DORM), ADR 0017 (hashers de palavra-passe plugáveis + um fluxo de referência)
@@ -103,8 +103,11 @@ aponta para a ferramenta nativa (`sqlx migrate`, `sea-orm-cli`) em vez de fingir
 mecânica da CLI é uma fatia à parte; esta ADR fixa a **política**, não a canalização.
 
 **A neutralidade torna-se uma fitness function.** O `seiva lint` ganha uma
-verificação que falha se um crate `application` ou `domain` nomear um crate de
-adaptador de dados (`seiva-data-*`) ou um tipo de ORM. A fronteira unidireccional e
+verificação que falha se um crate `application`, `domain` ou `facade` nomear um crate
+de adaptador de dados (`seiva-data-*`) ou um tipo de ORM. As camadas puras programam
+contra os ports; a `facade` também é coberta por ser o contrato publicado (a fonte
+única de OpenAPI + proto + rotas) — defesa-em-profundidade sobre a fronteira do
+`WireSchema`, que já mantém os DTOs do fio livres de ORM. A fronteira unidireccional e
 livre de ORM deixa de ser uma convenção e torna-se um gate de CI; a CI constrói os
 três adaptadores de referência contra os ports.
 
@@ -151,7 +154,9 @@ três adaptadores de referência contra os ports.
   cedo pelo adaptador sqlx.
 - **Imposição, não confiança:** a neutralidade é verificada pelo `seiva lint` e a
   fronteira é um gate de CI, pelo que não pode apodrecer em silêncio.
-- **Fora desta ADR:** a CLI de migração para adaptadores não-DORM (`seiva db *`,
-  `module new --data external`) é uma fatia à parte; até aterrar, os utilizadores de
-  sqlx/SeaORM correm a sua própria ferramenta de migração fora do `seiva db`. Esta ADR
-  assume a política que torna essa fatia digna de ser feita.
+- **Fora desta ADR:** a CLI de migração específica do DORM para adaptadores não-DORM
+  (`seiva db migrate/pull/studio`) é uma fatia à parte; até aterrar, os utilizadores de
+  sqlx/SeaORM correm a sua própria ferramenta de migração fora do `seiva db`. (O
+  `module new --data sqlx|seaorm|external` em si aterrou sob a fatia de adaptadores
+  desta ADR, scaffolding por adaptador e apontando para a ferramenta nativa.) Esta ADR
+  assume a política que torna a fatia restante digna de ser feita.

@@ -76,6 +76,41 @@ fn lint_fails_when_application_names_an_orm() {
 }
 
 #[test]
+fn lint_fails_when_facade_names_an_orm() {
+    let scratch = Scratch::new("facade-orm");
+    // The published contract (facade) is the single source of OpenAPI + proto +
+    // routes; it must stay ORM-free too (ADR 0030, defence-in-depth). Write a module
+    // whose `facade` — not its application — names `sqlx`.
+    scratch.write(
+        "modules/billing/module.toml",
+        "[module]\nname = \"billing\"\nfacade = \"v1\"\nowners = []\n",
+    );
+    let cargo = |layer: &str, deps: &str| {
+        format!("[package]\nname = \"billing-{layer}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\n{deps}")
+    };
+    scratch.write("modules/billing/domain/Cargo.toml", &cargo("domain", ""));
+    scratch.write(
+        "modules/billing/application/Cargo.toml",
+        &cargo("application", "seiva-ports = \"1\"\n"),
+    );
+    scratch.write(
+        "modules/billing/facade/Cargo.toml",
+        &cargo("facade", "sqlx = \"0.9\"\n"),
+    );
+
+    let report = lint_project(Path::new(&scratch.0)).expect("lint scan must not error");
+    assert!(
+        !report.is_clean()
+            && report
+                .violations
+                .iter()
+                .any(|v| v.rule == "data-layer-neutrality" && v.module == "billing::facade"),
+        "an ORM in `facade` (the published contract) must fail the lint: {:#?}",
+        report.violations
+    );
+}
+
+#[test]
 fn lint_fails_when_application_names_a_seiva_data_adapter() {
     let scratch = Scratch::new("adapter");
     // Naming the adapter crate directly is just as forbidden as naming the ORM.

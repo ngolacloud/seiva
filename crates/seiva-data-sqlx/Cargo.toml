@@ -24,14 +24,17 @@ publish = false
 default = ["sqlx"]
 # The adapter proper. Off → the crate is empty (the ports are not implemented),
 # which is how a build that does not want sqlx leaves it unlinked.
-sqlx = ["dep:sqlx"]
+sqlx = ["dep:sqlx", "dep:seiva-sql-ambient-tx"]
 
 [dependencies]
 seiva-ports = { path = "../seiva-ports" }
+# The ambient-transaction read-seam shared with the SeaORM adapter (ADR 0030): the
+# generic `TxState<T>`, the task-local lookup and `current_scope`. Gated with the
+# adapter so a feature-off build links neither it nor sqlx.
+seiva-sql-ambient-tx = { path = "../seiva-sql-ambient-tx", optional = true }
 async-trait = "0.1"
-# task_local! for the ambient transaction + an async Mutex to hold it across the
-# repository awaits (a std Mutex guard held across `.await` would make the future
-# non-Send).
+# task_local! for the ambient transaction (the key stays per adapter; a `static`
+# cannot be generic).
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 serde_json = "1"
 # The query layer. JSON for the audit `details` column; no compile-time `query!`
