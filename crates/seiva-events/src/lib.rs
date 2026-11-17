@@ -233,23 +233,44 @@ async fn dispatch_to_subscribers<S: IdempotencyStore>(
         match inbox.begin(&key, &event.id, INBOX_TTL).await? {
             IdempotencyOutcome::Fresh => {
                 // Order mirrors the broker consume path (claim → effect → mark).
-                // The store here is not transactional, so a failed effect is
-                // compensated by releasing the claim (`abort`): the redelivery is
-                // `Fresh` again and re-runs the effect, instead of seeing an
-                // orphaned `InProgress` and skipping it until the TTL — the
-                // silent-loss path this closes (ADR 0028, at-least-once). Where a
-                // transactional store wraps claim+effect+mark, its rollback is the
-                // compensation and `abort` is a documented no-op.
+                // The store here is not transactional, so the claim must be
+                // released on BOTH ways the window between the claim and `finish`
+                // can end without recording it, else it stays an orphaned
+                // `InProgress` that makes every redelivery skip the effect until
+                // the TTL — the silent-loss path this closes (ADR 0028,
+                // at-least-once):
+                //   * an ERROR (a failing effect or a failing `finish`) releases
+                //     the claim with the async `abort` below — we are still in the
+                //     running future and can await it;
+                //   * a CANCELLATION (this future dropped between the effect and
+                //     `finish`) cannot await, so a drop guard releases the claim
+                //     synchronously via `abort_blocking`. The guard stays armed
+                //     across `handle` and `finish` and is disarmed only once the
+                //     claim is settled (finished, or already async-aborted).
+                // Where a transactional store wraps claim+effect+mark, its rollback
+                // is the compensation and both `abort` and `abort_blocking` are
+                // documented no-ops.
+                let mut guard = ClaimGuard::arm(inbox, &key);
                 if let Err(err) = subscriber.handle(event).await {
                     inbox.abort(&key).await?;
+                    guard.disarm();
                     return Err(err);
                 }
-                inbox.finish(&key, &[]).await?;
+                // A failure to mark it consumed is the same leak one await later:
+                // the effect ran but a redelivery would skip it until the TTL, so
+                // release the claim here too (pre-C1 this `?`-returned un-aborted).
+                if let Err(err) = inbox.finish(&key, &[]).await {
+                    inbox.abort(&key).await?;
+                    guard.disarm();
+                    return Err(err);
+                }
+                guard.disarm();
             }
             // Already consumed by this subscriber — a redelivery, no effect. A
             // durable `InProgress` is only reached here when a concurrent claim is
             // genuinely in flight (a transactional store); the non-transactional
-            // in-process path compensates on failure above, so it never strands one.
+            // in-process path compensates on failure AND on cancellation above, so
+            // it never strands one.
             IdempotencyOutcome::Replay(_) | IdempotencyOutcome::InProgress => {}
             IdempotencyOutcome::Mismatch => {
                 return Err(Box::new(InboxMismatch {
@@ -269,6 +290,50 @@ async fn dispatch_to_subscribers<S: IdempotencyStore>(
         }
     }
     Ok(())
+}
+
+/// A cancel-safety guard over the `Fresh` effect→mark window in
+/// [`dispatch_to_subscribers`]. While **armed**, dropping it — which happens when
+/// the dispatch future is cancelled between the subscriber's effect and
+/// [`finish`](IdempotencyStore::finish) — synchronously releases the in-flight
+/// inbox claim through [`IdempotencyStore::abort_blocking`], so a redelivery is
+/// [`Fresh`](IdempotencyOutcome::Fresh) again instead of an
+/// [`InProgress`](IdempotencyOutcome::InProgress) stranded until [`INBOX_TTL`]
+/// (ADR 0028). A `Drop` cannot `.await`, which is why the compensation is the
+/// store's synchronous seam and not the async [`abort`](IdempotencyStore::abort);
+/// the happy path and the async error paths [`disarm`](ClaimGuard::disarm) it once
+/// they have settled the claim themselves.
+struct ClaimGuard<'a, S: IdempotencyStore> {
+    inbox: &'a S,
+    key: &'a str,
+    armed: bool,
+}
+
+impl<'a, S: IdempotencyStore> ClaimGuard<'a, S> {
+    /// Arm a guard over the claim `key` just taken from `inbox`.
+    fn arm(inbox: &'a S, key: &'a str) -> Self {
+        Self {
+            inbox,
+            key,
+            armed: true,
+        }
+    }
+
+    /// Disarm the guard: the claim has been settled (finished, or already
+    /// async-aborted), so a later drop must do nothing.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl<S: IdempotencyStore> Drop for ClaimGuard<'_, S> {
+    fn drop(&mut self) {
+        if self.armed {
+            // The future was dropped mid-window: release the in-flight claim
+            // synchronously (a `Drop` cannot await the async `abort`).
+            self.inbox.abort_blocking(self.key);
+        }
+    }
 }
 
 /// The inbox key for a `(subscriber, event)` was reused with a different
@@ -923,6 +988,52 @@ mod tests {
         }
     }
 
+    /// An [`IdempotencyStore`] whose `finish` **never completes**, so a test can
+    /// drive a dispatch to exactly the window between the effect running and the
+    /// claim being recorded, then drop it there. `begin`/`abort`/`abort_blocking`
+    /// delegate to a real [`InMemoryIdempotencyStore`], so the claim it takes is a
+    /// genuine in-flight record the cancel-safety guard must release.
+    struct BlockingFinishStore {
+        inner: InMemoryIdempotencyStore,
+    }
+
+    impl BlockingFinishStore {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryIdempotencyStore::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl IdempotencyStore for BlockingFinishStore {
+        async fn begin(
+            &self,
+            scoped_key: &str,
+            fingerprint: &str,
+            ttl: Duration,
+        ) -> PortResult<IdempotencyOutcome> {
+            self.inner.begin(scoped_key, fingerprint, ttl).await
+        }
+
+        async fn finish(&self, _scoped_key: &str, _response: &[u8]) -> PortResult<()> {
+            // Park forever: hold the dispatch future open in the cancellation
+            // window (effect done, claim not yet recorded) so the test drops it
+            // precisely there. A no-op waker is enough — it is only ever polled
+            // once before being dropped.
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+
+        async fn abort(&self, scoped_key: &str) -> PortResult<()> {
+            self.inner.abort(scoped_key).await
+        }
+
+        fn abort_blocking(&self, scoped_key: &str) {
+            self.inner.abort_blocking(scoped_key);
+        }
+    }
+
     fn event(ty: &str, id: &str) -> CloudEvent {
         CloudEvent::new(id, "/shop/orders", ty, serde_json::Value::Null)
     }
@@ -985,6 +1096,49 @@ mod tests {
             inventory.runs(),
             1,
             "at-least-once delivery, exactly-one effect per (subscriber, event)"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_between_effect_and_finish_releases_the_claim() {
+        // C1 (ADR 0028): a dispatch future dropped AFTER the effect ran but BEFORE
+        // `finish` recorded the claim must not strand it as `InProgress` until the
+        // 24h TTL — else that subscriber skips every redelivery of this event and
+        // the effect is silently lost. The cancel-safety guard compensates it.
+        let inventory = CountingSubscriber::new("inventory");
+        let mut registry = SubscriberRegistry::new();
+        registry.register("orders.placed", Arc::new(inventory.clone()));
+
+        let store = BlockingFinishStore::new();
+        let ev = event("orders.placed", "evt-1");
+        let key = inbox_key("inventory", &ev.id);
+
+        {
+            // Drive the dispatch to the point it parks inside `finish` (the store's
+            // `finish` never completes), then DROP it — modelling a cancellation in
+            // the window where the claim is in-flight.
+            let mut fut = Box::pin(dispatch(&ev, &registry, &store));
+            let waker = std::task::Waker::noop();
+            let mut cx = std::task::Context::from_waker(waker);
+            assert!(
+                fut.as_mut().poll(&mut cx).is_pending(),
+                "the dispatch must park inside finish, after the effect has run"
+            );
+            assert_eq!(
+                inventory.runs(),
+                1,
+                "the effect ran before the cancellation window"
+            );
+            // `fut` dropped at the end of this scope → the guard fires.
+        }
+
+        // The claim is NOT orphaned: a redelivery claims the key `Fresh` again,
+        // so the effect will re-run (at-least-once), instead of being skipped as
+        // `InProgress` until the TTL.
+        assert_eq!(
+            store.begin(&key, &ev.id, INBOX_TTL).await.unwrap(),
+            IdempotencyOutcome::Fresh,
+            "a cancellation between the effect and finish must release the claim"
         );
     }
 

@@ -303,6 +303,31 @@ pub trait IdempotencyStore: Send + Sync {
         Ok(())
     }
 
+    /// Best-effort **synchronous** release of an in-flight claim — the
+    /// compensation seam for a caller that must release the claim from a context
+    /// where the async [`abort`](Self::abort) cannot be awaited: a `Drop` guard
+    /// running because the in-process dispatch future was **cancelled** between
+    /// the effect and [`finish`](Self::finish).
+    ///
+    /// It closes the *cancellation* leg of the same leak [`abort`](Self::abort)
+    /// closes on the *error* leg: without it, a claim taken by `begin` and then
+    /// abandoned by a dropped future stays [`InProgress`](IdempotencyOutcome::InProgress)
+    /// until the TTL, so every redelivery skips the effect — a transient
+    /// cancellation turned into a lost effect (ADR 0028, the at-least-once
+    /// direction).
+    ///
+    /// Releasing a key that is already finished, already absent, or never claimed
+    /// is a no-op. The default is a no-op: a store whose claim is released some
+    /// other way — a transactional store whose rollback compensates, or an
+    /// append-only store that expires by TTL — needs nothing here; the
+    /// non-transactional in-process store overrides it to drop the in-flight
+    /// record. It is synchronous on purpose (a `Drop` cannot await), so an
+    /// override **must not block**: it releases already-held in-memory/handle
+    /// state and never performs IO.
+    fn abort_blocking(&self, scoped_key: &str) {
+        let _ = scoped_key;
+    }
+
     /// Deletes records whose TTL has elapsed; returns how many. A scheduled
     /// worker calls this so the store does not grow without bound. The default is
     /// a no-op (returns `0`) for stores that expire records some other way.
