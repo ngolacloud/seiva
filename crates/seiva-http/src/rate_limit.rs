@@ -348,6 +348,28 @@ fn rate_limited_response(
     response
 }
 
+/// What [`rate_limit_with_store`] does when the shared store itself **errors**
+/// (e.g. a Redis outage) — distinct from the store *returning* a decision.
+///
+/// This is a call-site choice (the [`RateLimitStore`](seiva_ports::RateLimitStore)
+/// port documents the default as fail-open); pick [`FailClosed`](Self::FailClosed)
+/// for a deployment where losing the ceiling is worse than shedding load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum StoreErrorPolicy {
+    /// Serve the request when the store errors. Abuse-dampening must not drop
+    /// legitimate traffic on a limiter outage — the historical default and the
+    /// port's documented contract. The trade-off: while the store is down, every
+    /// replica has lost its ceiling at once, so an auth/OTP endpoint runs
+    /// unthrottled. The fail-open path is logged at **ERROR** (alertable), never
+    /// hidden at WARN, so an operator sees the window it is exercised in.
+    #[default]
+    FailOpen,
+    /// Refuse with `503 Service Unavailable` while the store is unavailable, so
+    /// the ceiling is never silently lifted. Correct for a service that fronts
+    /// authentication/OTP and would rather shed load than brute-force-expose it.
+    FailClosed,
+}
+
 /// A **distributed** rate limiter: the same window + proxy-trust policy as the
 /// in-process [`RateLimiter`], but the budget lives in a shared
 /// [`RateLimitStore`](seiva_ports::RateLimitStore) (e.g. Redis) so it holds
@@ -357,16 +379,21 @@ pub struct DistributedRateLimit {
     store: std::sync::Arc<dyn seiva_ports::RateLimitStore>,
     limit: RateLimit,
     trust_forwarded_for: bool,
+    on_store_error: StoreErrorPolicy,
 }
 
 impl DistributedRateLimit {
     /// A distributed limiter over `store`, enforcing `limit` per client.
+    ///
+    /// On a store error it defaults to [`StoreErrorPolicy::FailOpen`]; call
+    /// [`on_store_error`](Self::on_store_error) to shed load instead.
     #[must_use]
     pub fn new(store: std::sync::Arc<dyn seiva_ports::RateLimitStore>, limit: RateLimit) -> Self {
         Self {
             store,
             limit,
             trust_forwarded_for: false,
+            on_store_error: StoreErrorPolicy::default(),
         }
     }
 
@@ -375,6 +402,14 @@ impl DistributedRateLimit {
     #[must_use]
     pub fn trusting_forwarded_for(mut self, trust: bool) -> Self {
         self.trust_forwarded_for = trust;
+        self
+    }
+
+    /// What to do when the shared store errors (default
+    /// [`StoreErrorPolicy::FailOpen`]).
+    #[must_use]
+    pub fn on_store_error(mut self, policy: StoreErrorPolicy) -> Self {
+        self.on_store_error = policy;
         self
     }
 }
@@ -402,18 +437,62 @@ pub async fn rate_limit_with_store(
             let request_id = request.extensions().request_id();
             rate_limited_response(retry_after, request.uri().path(), request_id)
         }
-        Err(error) => {
-            tracing::warn!(target: "seiva::rate_limit", %error, "rate-limit store failed; failing open");
-            next.run(request).await
-        }
-        // A future decision kind this middleware does not yet understand: serve the
-        // request (consistent with this limiter's documented fail-open on store
-        // error), but surface it so the gap is visible.
-        Ok(other) => {
-            tracing::warn!(target: "seiva::rate_limit", ?other, "unhandled rate-limit decision; serving");
-            next.run(request).await
-        }
+        Err(error) => match cfg.on_store_error {
+            StoreErrorPolicy::FailOpen => {
+                // ERROR, not WARN: during the outage every replica has lost its
+                // ceiling at once, so this is the alertable window an operator
+                // must see — not a routine condition to bury.
+                tracing::error!(
+                    target: "seiva::rate_limit", %error, policy = "fail_open",
+                    "rate-limit store unavailable; serving UNTHROTTLED across all replicas",
+                );
+                next.run(request).await
+            }
+            StoreErrorPolicy::FailClosed => {
+                tracing::error!(
+                    target: "seiva::rate_limit", %error, policy = "fail_closed",
+                    "rate-limit store unavailable; shedding load (503)",
+                );
+                let request_id = request.extensions().request_id();
+                store_unavailable_response(request.uri().path(), request_id)
+            }
+        },
+        // A future decision kind this middleware does not yet understand. It is
+        // not a store error, so it follows the same configured policy rather than
+        // silently serving: fail-open serves (forward-compatible), fail-closed
+        // sheds (never lift the ceiling on something we cannot interpret).
+        Ok(other) => match cfg.on_store_error {
+            StoreErrorPolicy::FailOpen => {
+                tracing::warn!(target: "seiva::rate_limit", ?other, "unhandled rate-limit decision; serving");
+                next.run(request).await
+            }
+            StoreErrorPolicy::FailClosed => {
+                tracing::warn!(target: "seiva::rate_limit", ?other, "unhandled rate-limit decision; shedding (503)");
+                let request_id = request.extensions().request_id();
+                store_unavailable_response(request.uri().path(), request_id)
+            }
+        },
     }
+}
+
+/// The `503` a request gets when the shared rate-limit store is unavailable and
+/// the configured policy is [`StoreErrorPolicy::FailClosed`]. Carries a short
+/// `Retry-After` so a load balancer backs off while the store recovers.
+fn store_unavailable_response(path: &str, request_id: Option<String>) -> Response {
+    let mut response = ProblemResponse(
+        Problem::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "rate limiter unavailable",
+        )
+        .with_detail("the shared rate-limit store is unavailable; retry shortly")
+        .with_instance(path.to_owned())
+        .with_request_id_opt(request_id),
+    )
+    .into_response();
+    response
+        .headers_mut()
+        .insert("retry-after", HeaderValue::from_static("1"));
+    response
 }
 
 #[cfg(test)]
@@ -696,6 +775,71 @@ mod tests {
         assert!(
             tracked <= MAX_TRACKED_CLIENTS,
             "table must stay bounded, got {tracked}"
+        );
+    }
+
+    /// A `RateLimitStore` that always errors — stands in for a Redis outage.
+    struct FailingStore;
+    #[async_trait::async_trait]
+    impl seiva_ports::RateLimitStore for FailingStore {
+        async fn check(
+            &self,
+            _key: &str,
+            _limit: u32,
+            _window: Duration,
+        ) -> seiva_ports::PortResult<seiva_ports::RateLimitDecision> {
+            Err("rate-limit store unreachable".into())
+        }
+    }
+
+    fn store_app(cfg: DistributedRateLimit) -> Router {
+        Router::new()
+            .route("/", get(|| async { "ok" }))
+            .layer(from_fn_with_state(cfg, rate_limit_with_store))
+    }
+
+    async fn status_of(app: &Router) -> Response {
+        app.clone()
+            .oneshot(HttpRequest::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn store_error_fails_open_by_default() {
+        // RL-FAILOPEN-1: the historical contract — a limiter outage must not drop
+        // legitimate traffic. Default policy, so the request is still served.
+        let cfg = DistributedRateLimit::new(
+            Arc::new(FailingStore),
+            RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(60),
+            },
+        );
+        assert_eq!(status_of(&store_app(cfg)).await.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn store_error_fails_closed_with_503_when_configured() {
+        // RL-FAILOPEN-1: a deployment fronting auth/OTP opts into shedding load so
+        // the brute-force ceiling is never silently lifted during a Redis outage.
+        let cfg = DistributedRateLimit::new(
+            Arc::new(FailingStore),
+            RateLimit {
+                max_requests: 1,
+                window: Duration::from_secs(60),
+            },
+        )
+        .on_store_error(StoreErrorPolicy::FailClosed);
+
+        let res = status_of(&store_app(cfg)).await;
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            res.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok()),
+            Some("1"),
+            "a shed 503 must tell the load balancer when to retry"
         );
     }
 }

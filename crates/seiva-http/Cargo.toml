@@ -78,3 +78,6 @@ tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 # A controllable `Clock` so the rate-limiter's window is tested without sleeping.
 seiva-testing = { version = "0.1.0", path = "../seiva-testing" }
+# A test double of `RateLimitStore` that errors, to exercise the fail-open /
+# fail-closed policy on a store outage.
+async-trait = { workspace = true }

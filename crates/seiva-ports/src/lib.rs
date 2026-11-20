@@ -483,7 +483,10 @@ pub enum RateLimitDecision {
 /// check must be **atomic** in the backend (a single round trip that increments
 /// and expires), not a read-modify-write, so concurrent replicas cannot race past
 /// the limit. Rate limiting is abuse-dampening, not a durable business guarantee,
-/// so a store that is briefly unavailable should fail **open** at the call site.
+/// so a store that is briefly unavailable fails **open** at the call site by
+/// default. The call site may override this — a deployment fronting auth/OTP, for
+/// which an unthrottled window is worse than shedding load, can choose to fail
+/// **closed** (e.g. `seiva-http`'s `DistributedRateLimit::on_store_error`).
 #[async_trait]
 pub trait RateLimitStore: Send + Sync {
     /// Records one hit for `key` and reports whether it is within `limit` per
