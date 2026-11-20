@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use seiva::lint::{
+use cargo_seiva::{
     check_data_layer_neutrality, check_layers, check_scope_policy, scan_module_layers,
     scan_scope_sources,
 };

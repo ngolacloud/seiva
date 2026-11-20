@@ -1,0 +1,38 @@
+# cargo-seiva — the architecture fitness-function lint, as a cargo subcommand.
+#
+# The Clean-Architecture layer rule, the zero-trust contract check, the
+# data-layer-neutrality gate and the tenant-scope policy (ADR 0003 / 0030) — the
+# fitness functions that keep a Seiva project's modules honest. Extracted out of
+# the `seiva` umbrella so the publishable framework carries no lint tooling. The
+# binary `cargo-seiva` makes it a cargo subcommand (`cargo seiva lint`); the
+# `seiva` CLI (`seiva lint`) calls the same library.
+[package]
+name = "cargo-seiva"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Delonix Seiva — architecture fitness functions (Clean-Architecture layer rule, zero-trust contracts, data-layer neutrality) as a `cargo seiva` subcommand."
+keywords = ["cargo-subcommand", "lint", "architecture", "clean-architecture", "ddd"]
+categories = ["development-tools::cargo-plugins"]
+
+[lib]
+# The pure lint engine, shared by the `cargo-seiva` binary and the `seiva` CLI.
+name = "cargo_seiva"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cargo-seiva"
+path = "src/main.rs"
+
+[dependencies]
+# Only for the module-manifest types (`seiva::manifest`); default features off so
+# the lint tool pulls no runtime/data-layer surface.
+seiva = { workspace = true, default-features = false }
+# The lint error type (`#[derive(thiserror::Error)]`) and the Cargo.toml/manifest
+# scanning (`toml::from_str`).
+thiserror = { workspace = true }
+toml = { workspace = true }

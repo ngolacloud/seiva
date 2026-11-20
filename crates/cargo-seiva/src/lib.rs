@@ -6,8 +6,15 @@
 //! set of [`ModuleManifest`]s so `seiva lint` can enforce it before anything
 //! else. The check is pure (no I/O), so it is fully testable with fixtures; the
 //! file scanning lives in [`lint_project`].
+//!
+//! This is the library behind the `cargo-seiva` cargo subcommand (`cargo seiva
+//! lint`) and the `seiva lint` CLI command. It depends on the `seiva` umbrella
+//! only for the module-manifest types (`seiva::manifest`); the rules themselves
+//! are pure.
 
-use crate::manifest::{ManifestError, ModuleManifest};
+#![forbid(unsafe_code)]
+
+use seiva::manifest::{ManifestError, ModuleManifest};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -675,7 +682,7 @@ fn collect_rust_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{Allow, ModuleSection, Uses};
+    use seiva::manifest::{Allow, ModuleSection, Uses};
 
     fn module(name: &str, facade: &str) -> ModuleManifest {
         ModuleManifest {

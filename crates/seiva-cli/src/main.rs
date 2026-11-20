@@ -708,7 +708,7 @@ fn lint() -> ExitCode {
     // CLI stays thin: scan the project and let the library decide. Run from the
     // project root; module manifests live at `modules/<name>/module.toml`.
     let root = std::path::Path::new(".");
-    match seiva::lint::lint_project(root) {
+    match cargo_seiva::lint_project(root) {
         Ok(report) if report.modules_checked == 0 && report.is_clean() => {
             println!("seiva lint: no modules found under ./modules (nothing to check).");
             ExitCode::SUCCESS

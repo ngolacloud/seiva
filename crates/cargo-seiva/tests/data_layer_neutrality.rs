@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use seiva::lint::lint_project;
+use cargo_seiva::lint_project;
 
 /// A throwaway project root under the system temp dir, removed on drop.
 struct Scratch(PathBuf);

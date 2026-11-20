@@ -61,6 +61,9 @@ members = [
     # The worker runtime extracted out of the umbrella (the loop half of the
     # data-layer boundary). Data-layer-free; re-exported as `seiva::worker`.
     "crates/seiva-worker",
+    # The architecture fitness-function lint, extracted out of the umbrella. A
+    # library plus the `cargo-seiva` binary (`cargo seiva lint`).
+    "crates/cargo-seiva",
     # The HTTP transport: axum/tower, RFC 9457 errors, facade-driven permission
     # guard, health endpoints. Data-layer-free, so a workspace member.
     "crates/seiva-http",
@@ -193,6 +196,7 @@ seiva-ports = { version = "0.1.0", path = "crates/seiva-ports" }
 # own `dorm` feature.
 seiva = { version = "0.1.0", path = "crates/seiva", default-features = false }
 seiva-worker = { version = "0.1.0", path = "crates/seiva-worker" }
+cargo-seiva = { version = "0.1.0", path = "crates/cargo-seiva" }
 seiva-testing = { version = "0.1.0", path = "crates/seiva-testing" }
 seiva-macros = { version = "0.1.0", path = "crates/seiva-macros" }
 async-trait = "0.1"
