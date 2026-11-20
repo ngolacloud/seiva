@@ -197,7 +197,10 @@ mod tests {
             .method("POST")
             .uri("/v1/catalogs/add_product")
             .header("content-type", "application/json")
-            .extension(Principal::new("mgr", ["catalog.manage"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "mgr",
+                ["catalog.manage"],
+            )))
             .body(Body::from(r#"{"name":"  ","price_cents":1299}"#))
             .unwrap();
 
@@ -215,7 +218,10 @@ mod tests {
             .method("POST")
             .uri("/v1/catalogs/add_product")
             .header("content-type", "application/json")
-            .extension(Principal::new("mgr", ["catalog.manage"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "mgr",
+                ["catalog.manage"],
+            )))
             .body(Body::from(r#"{"name":"Teapot","price_cents":1299}"#))
             .unwrap();
         let response = app.clone().oneshot(add).await.unwrap();
@@ -226,7 +232,10 @@ mod tests {
         let get = Request::builder()
             .method("GET")
             .uri(format!("/v1/catalogs/{id}"))
-            .extension(Principal::new("clerk", ["catalog.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["catalog.read"],
+            )))
             .body(Body::empty())
             .unwrap();
         let response = app.clone().oneshot(get).await.unwrap();
@@ -237,7 +246,10 @@ mod tests {
         let list = Request::builder()
             .method("GET")
             .uri("/v1/catalogs")
-            .extension(Principal::new("clerk", ["catalog.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["catalog.read"],
+            )))
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(list).await.unwrap();
@@ -251,7 +263,10 @@ mod tests {
         let request = Request::builder()
             .method("GET")
             .uri("/v1/catalogs/404")
-            .extension(Principal::new("clerk", ["catalog.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["catalog.read"],
+            )))
             .body(Body::empty())
             .unwrap();
 

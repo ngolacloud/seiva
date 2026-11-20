@@ -150,7 +150,9 @@ register_admin!(AdminResource {
 async fn registry_as(principal: Option<Principal>) -> serde_json::Value {
     let mut builder = Request::builder().uri("/admin/registry.json");
     if let Some(p) = principal {
-        builder = builder.extension(p);
+        // The `Caller` extractor reads `Arc<Principal>`, as the `authn` layer stores
+        // it; inject the same shape here so the direct (unlayered) test matches.
+        builder = builder.extension(std::sync::Arc::new(p));
     }
     let res = admin_router()
         .oneshot(builder.body(Body::empty()).unwrap())

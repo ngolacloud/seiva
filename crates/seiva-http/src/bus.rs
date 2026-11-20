@@ -34,7 +34,7 @@
 //!         Validate::new(
 //!             Transactional::new(
 //!                 Idempotent::new(handler, store, scoped_key, fingerprint, ttl),
-//!                 uow, ctx.scope(),
+//!                 uow, ctx.scope().ok_or(/* refuse: no tenant */)?,
 //!             ),
 //!         ),
 //!         principal, required,

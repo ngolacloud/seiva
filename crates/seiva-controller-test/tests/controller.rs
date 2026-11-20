@@ -53,7 +53,10 @@ async fn create_is_forbidden_with_wrong_permission() {
         .method("POST")
         .uri("/v2/widgets")
         .header("content-type", "application/json")
-        .extension(Principal::new("user", ["widgets.read"]))
+        .extension(std::sync::Arc::new(Principal::new(
+            "user",
+            ["widgets.read"],
+        )))
         .body(Body::from(r#"{"name":"blocked"}"#))
         .unwrap();
 
@@ -73,7 +76,10 @@ async fn create_succeeds_with_permission() {
         .method("POST")
         .uri("/v2/widgets")
         .header("content-type", "application/json")
-        .extension(Principal::new("user", ["widgets.create"]))
+        .extension(std::sync::Arc::new(Principal::new(
+            "user",
+            ["widgets.create"],
+        )))
         .body(Body::from(r#"{"name":"first"}"#))
         .unwrap();
 
@@ -97,7 +103,10 @@ async fn path_version_comes_from_descriptor() {
         .method("POST")
         .uri("/v1/widgets")
         .header("content-type", "application/json")
-        .extension(Principal::new("user", ["widgets.create"]))
+        .extension(std::sync::Arc::new(Principal::new(
+            "user",
+            ["widgets.create"],
+        )))
         .body(Body::from(r#"{"name":"x"}"#))
         .unwrap();
     let response = widgets_router(WidgetService).oneshot(wrong).await.unwrap();
@@ -108,7 +117,10 @@ async fn path_version_comes_from_descriptor() {
         .method("POST")
         .uri("/v2/widgets")
         .header("content-type", "application/json")
-        .extension(Principal::new("user", ["widgets.create"]))
+        .extension(std::sync::Arc::new(Principal::new(
+            "user",
+            ["widgets.create"],
+        )))
         .body(Body::from(r#"{"name":"x"}"#))
         .unwrap();
     let response = widgets_router(WidgetService).oneshot(right).await.unwrap();
@@ -123,7 +135,10 @@ async fn invalid_body_is_422_problem() {
         .method("POST")
         .uri("/v2/widgets")
         .header("content-type", "application/json")
-        .extension(Principal::new("user", ["widgets.create"]))
+        .extension(std::sync::Arc::new(Principal::new(
+            "user",
+            ["widgets.create"],
+        )))
         .body(Body::from(r#"{"name":"   "}"#))
         .unwrap();
 
@@ -146,7 +161,10 @@ async fn get_reads_id_from_path() {
     let request = Request::builder()
         .method("GET")
         .uri("/v2/widgets/42")
-        .extension(Principal::new("user", ["widgets.read"]))
+        .extension(std::sync::Arc::new(Principal::new(
+            "user",
+            ["widgets.read"],
+        )))
         .body(Body::empty())
         .unwrap();
 

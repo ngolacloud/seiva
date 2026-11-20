@@ -94,22 +94,19 @@ impl Ctx {
 
     /// The data [`Scope`] this request runs under, derived **server-side** from the
     /// authenticated caller — never from the request body (OWASP API1). A caller
-    /// bound to a tenant yields [`Scope::Tenant`], so every `tenant_scoped` write in
-    /// the use case is constrained to that tenant automatically.
+    /// bound to a tenant yields `Some(`[`Scope::Tenant`]`)`, so every `tenant_scoped`
+    /// write in the use case is constrained to that tenant automatically.
     ///
-    /// This is what the CQRS pipeline must pass to `UnitOfWork::transaction` instead
-    /// of a fixed [`Scope::Global`]: a tenant's command no longer runs cross-tenant
-    /// by default. The remaining gap — a tenant-less/anonymous caller still maps to
-    /// [`Scope::Global`] here — is closed by the BOLA fitness lint and the
-    /// `#[model(tenant_scoped)]` policy (ADR 0029), which forbid a literal
-    /// `Scope::Global` outside a maintenance allowlist.
+    /// **Fail-closed (SG1, ADR 0029 BOLA):** a tenant-less or anonymous caller yields
+    /// [`None`], *not* [`Scope::Global`]. The handler must treat `None` as a refusal
+    /// (the `accounts`/`notes` `scope_of` shape: `ctx.scope().ok_or(..)?`) so a
+    /// tenant-scoped command can never silently run cross-tenant. [`Scope::Global`] is
+    /// a deliberate, audited cross-tenant choice a caller writes **explicitly** (the
+    /// `seiva:allow-global` fitness-lint allowlist) — never a fallback this method
+    /// hands out.
     #[must_use]
-    pub fn scope(&self) -> Scope {
-        self.principal
-            .tenant
-            .as_deref()
-            .and_then(Scope::tenant)
-            .unwrap_or(Scope::Global)
+    pub fn scope(&self) -> Option<Scope> {
+        self.principal.tenant.as_deref().and_then(Scope::tenant)
     }
 
     /// Whether the caller holds `permission`.
@@ -162,5 +159,31 @@ impl<S: Sync> FromRequestParts<S> for Ctx {
             parts.uri.path().to_owned(),
             idempotency_key,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seiva_ports::Scope;
+
+    #[test]
+    fn a_tenant_bound_caller_scopes_to_its_tenant() {
+        let ctx = Ctx::new(Principal::in_tenant("u1", "acme", ["orders:write"]));
+        match ctx.scope() {
+            Some(Scope::Tenant(t)) => assert_eq!(t.as_str(), "acme"),
+            other => panic!("expected Some(Scope::Tenant(acme)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tenant_less_caller_fails_closed_not_global() {
+        // Audit BOLA-1: an authenticated-but-tenant-less caller must yield `None`,
+        // NEVER `Scope::Global` — the handler is forced to refuse (`.ok_or(..)?`).
+        let authn = Ctx::new(Principal::new("u1", ["orders:write"]));
+        assert_eq!(authn.scope(), None, "tenant-less must not map to a scope");
+
+        let anon = Ctx::new(Principal::anonymous());
+        assert_eq!(anon.scope(), None, "anonymous must not map to a scope");
     }
 }

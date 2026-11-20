@@ -33,7 +33,9 @@
 //!   events (the in-process twin of the broker drain), deduped through the inbox.
 //!
 //! A valid demo bearer is `shop-token` → a principal holding every shop
-//! permission. Bind address from `SHOP_API_ADDR` (default `127.0.0.1:8090`).
+//! permission and bound to the `demo` tenant (orders is tenant-scoped, so the
+//! caller must carry a tenant). Bind address from `SHOP_API_ADDR` (default
+//! `127.0.0.1:8090`).
 
 #![forbid(unsafe_code)]
 
@@ -239,8 +241,13 @@ pub fn build_app() -> BuiltApp {
     // require is listed explicitly.
     let auth: Arc<dyn Authenticator> = Arc::new(TokenAuthenticator::new().with_token(
         "shop-token",
-        Principal::new(
+        // Bound to a tenant: `orders` is tenant-scoped, and the interface derives the
+        // `Scope` from this principal server-side, fail-closed (a tenant-less caller
+        // is refused, never run under a global scope — ADR 0029 BOLA). The demo caller
+        // therefore belongs to a tenant, exactly as a real one would.
+        Principal::in_tenant(
             "shopkeeper",
+            "demo",
             [
                 "catalog.read",
                 "catalog.manage",

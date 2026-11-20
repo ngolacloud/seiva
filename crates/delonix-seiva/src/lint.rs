@@ -323,10 +323,13 @@ pub const ALLOW_GLOBAL_MARKER: &str = "seiva:allow-global";
 const SCOPE_GLOBAL: &str = "Scope::Global";
 
 /// The layers the scope-policy rule reads: `application` chooses the `Scope` it
-/// hands `UnitOfWork::transaction`, and `domain` must never name a scope at all.
-/// The outer layers are exempt — `interface` derives the scope from `&Ctx` (and may
-/// reference `Scope::Global` in docs), `infrastructure` only maps it.
-const SCOPE_SCANNED_LAYERS: [&str; 2] = ["application", "domain"];
+/// hands `UnitOfWork::transaction`, `domain` must never name a scope at all, and
+/// `interface` derives the scope from `&Ctx` — where a hand-written `Scope::Global`
+/// (or a `ctx.scope().unwrap_or(Scope::Global)` fallback) is exactly the BOLA
+/// fail-open the audit found, so it is scanned too. A doc or trailing-comment
+/// mention is still ignored ([`line_uses_scope_global`] reads only the code slice).
+/// `infrastructure` only maps the scope and stays exempt.
+const SCOPE_SCANNED_LAYERS: [&str; 3] = ["application", "domain", "interface"];
 
 /// One scanned source file of a module layer, kept separate from I/O so
 /// [`check_scope_policy`] is testable with fixtures.
@@ -1019,6 +1022,46 @@ mod tests {
         assert!(
             check_scope_policy(&[trailing]).is_empty(),
             "trailing comment ignored"
+        );
+    }
+
+    #[test]
+    fn interface_is_scanned_so_a_global_fallback_cannot_hide_there() {
+        // Regression (audit BOLA-2): the fail-open the audit found lived in the
+        // `interface` layer, which the rule used to exempt. A hand-written
+        // `Scope::Global` fallback there is now a violation like anywhere else.
+        assert!(
+            SCOPE_SCANNED_LAYERS.contains(&"interface"),
+            "the interface layer must be scanned"
+        );
+        let src = ScopeSource {
+            module: "orders".to_owned(),
+            layer: "interface".to_owned(),
+            file: "examples/shop/orders/interface/src/lib.rs".to_owned(),
+            text: "    let scope = ctx.scope().unwrap_or(Scope::Global);\n".to_owned(),
+        };
+        let v = check_scope_policy(&[src]);
+        assert_eq!(
+            v.len(),
+            1,
+            "a Global fallback in interface is flagged: {v:?}"
+        );
+        assert_eq!(v[0].rule, "scope-policy");
+        assert_eq!(v[0].module, "orders::interface");
+
+        // …and the audited `seiva:allow-global` marker still turns a deliberate
+        // cross-tenant read in interface into a reviewable exception.
+        let marked = ScopeSource {
+            module: "orders".to_owned(),
+            layer: "interface".to_owned(),
+            file: "examples/shop/orders/interface/src/lib.rs".to_owned(),
+            text:
+                "    let scope = Scope::Global; // seiva:allow-global — admin cross-tenant list\n"
+                    .to_owned(),
+        };
+        assert!(
+            check_scope_policy(&[marked]).is_empty(),
+            "the marker exempts interface too"
         );
     }
 }

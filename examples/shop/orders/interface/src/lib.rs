@@ -316,9 +316,12 @@ where
         // `Validate → Transactional{ Idempotent → handler }`; without it:
         // `Validate → Transactional{ handler }`. `Transactional` opens its own
         // (in-process) transaction, so `place_work` must not.
-        // The scope is derived server-side from the caller (never the body): a
-        // tenant's order is placed under `Scope::Tenant`, not a fixed `Scope::Global`.
-        let scope = ctx.scope();
+        // The scope is derived server-side from the caller (never the body) and is
+        // fail-closed (SG1): a tenant-less caller is refused here, never run under a
+        // global, cross-tenant scope. A tenant's order is placed under `Scope::Tenant`.
+        let scope = ctx
+            .scope()
+            .ok_or_else(|| OrdersError::Invalid("caller has no tenant".to_owned()))?;
         let result = match idem {
             Some(idem) => {
                 let chain = Validate::new(Transactional::new(idem, DirectUnitOfWork, scope));
@@ -402,10 +405,11 @@ mod tests {
     }
 
     /// A `Ctx` as the transport would build it for `POST /v1/orders/place`: an
-    /// `orders.manage` principal and an optional `Idempotency-Key`.
+    /// `orders.manage` principal **bound to a tenant** (so the server-side scope is
+    /// `Scope::Tenant`, the normal path) and an optional `Idempotency-Key`.
     fn ctx_for(key: Option<&str>) -> Ctx {
         let key = key.map(|raw| IdempotencyKey::parse(raw).expect("valid test key"));
-        Ctx::new(Principal::new("mgr", ["orders.manage"])).with_request(
+        Ctx::new(Principal::in_tenant("mgr", "acme", ["orders.manage"])).with_request(
             "POST",
             "/v1/orders/place",
             key,
@@ -516,6 +520,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn place_without_a_tenant_is_refused_never_run_globally() {
+        // Audit BOLA-1: an authorized but tenant-less caller must be refused — the
+        // scope is fail-closed (`ctx.scope()` is `None`), so the order is NOT placed
+        // under a global, cross-tenant scope. Proven by zero saves.
+        let repo = CountingRepo::default();
+        let probe = repo.clone();
+        let controller = OrdersController::new(repo);
+        let ctx = Ctx::new(Principal::new("mgr", ["orders.manage"])) // authorized, NO tenant
+            .with_request("POST", "/v1/orders/place", None);
+
+        let result = controller
+            .place(
+                &ctx,
+                PlaceOrder {
+                    customer: "Ada".into(),
+                    lines: vec![line(10, 2)],
+                },
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(OrdersError::Invalid(ref m)) if m.contains("tenant")),
+            "a tenant-less caller is refused, got {result:?}"
+        );
+        assert!(
+            probe.orders.lock().unwrap().is_empty(),
+            "the order was never placed — no global-scope write happened"
+        );
+    }
+
+    #[tokio::test]
     async fn place_is_forbidden_without_permission() {
         let request = Request::builder()
             .method("POST")
@@ -538,7 +573,11 @@ mod tests {
             .method("POST")
             .uri("/v1/orders/place")
             .header("content-type", "application/json")
-            .extension(Principal::new("mgr", ["orders.manage"]))
+            .extension(std::sync::Arc::new(Principal::in_tenant(
+                "mgr",
+                "acme",
+                ["orders.manage"],
+            )))
             .body(Body::from(r#"{"customer":"Ada","lines":[]}"#))
             .unwrap();
 
@@ -555,7 +594,11 @@ mod tests {
             .method("POST")
             .uri("/v1/orders/place")
             .header("content-type", "application/json")
-            .extension(Principal::new("mgr", ["orders.manage"]))
+            .extension(std::sync::Arc::new(Principal::in_tenant(
+                "mgr",
+                "acme",
+                ["orders.manage"],
+            )))
             .body(Body::from(
                 r#"{"customer":"Ada","lines":[{"product_id":"10","qty":2}]}"#,
             ))
@@ -568,7 +611,10 @@ mod tests {
         let get = Request::builder()
             .method("GET")
             .uri(format!("/v1/orders/{id}"))
-            .extension(Principal::new("clerk", ["orders.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["orders.read"],
+            )))
             .body(Body::empty())
             .unwrap();
         let response = app.clone().oneshot(get).await.unwrap();
@@ -580,7 +626,10 @@ mod tests {
         let list = Request::builder()
             .method("GET")
             .uri("/v1/orders")
-            .extension(Principal::new("clerk", ["orders.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["orders.read"],
+            )))
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(list).await.unwrap();
@@ -594,7 +643,10 @@ mod tests {
         let request = Request::builder()
             .method("GET")
             .uri("/v1/orders/404")
-            .extension(Principal::new("clerk", ["orders.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["orders.read"],
+            )))
             .body(Body::empty())
             .unwrap();
 

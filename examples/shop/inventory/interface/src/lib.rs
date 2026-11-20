@@ -179,7 +179,10 @@ mod tests {
             .method("POST")
             .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
-            .extension(Principal::new("mgr", ["inventory.manage"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "mgr",
+                ["inventory.manage"],
+            )))
             .body(Body::from(r#"{"product_id":"42","qty":0}"#))
             .unwrap();
 
@@ -196,7 +199,10 @@ mod tests {
             .method("POST")
             .uri("/v1/inventories/receive")
             .header("content-type", "application/json")
-            .extension(Principal::new("mgr", ["inventory.manage"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "mgr",
+                ["inventory.manage"],
+            )))
             .body(Body::from(r#"{"product_id":"42","qty":10}"#))
             .unwrap();
         assert_eq!(
@@ -208,7 +214,10 @@ mod tests {
             .method("POST")
             .uri("/v1/inventories/reserve")
             .header("content-type", "application/json")
-            .extension(Principal::new("mgr", ["inventory.manage"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "mgr",
+                ["inventory.manage"],
+            )))
             .body(Body::from(r#"{"product_id":"42","qty":4}"#))
             .unwrap();
         assert_eq!(
@@ -220,7 +229,10 @@ mod tests {
             .method("POST")
             .uri("/v1/inventories/available")
             .header("content-type", "application/json")
-            .extension(Principal::new("clerk", ["inventory.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["inventory.read"],
+            )))
             .body(Body::from(r#"{"id":42}"#))
             .unwrap();
         let response = app.oneshot(available).await.unwrap();

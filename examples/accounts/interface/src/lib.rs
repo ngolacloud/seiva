@@ -364,7 +364,11 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/create_user")
             .header("content-type", "application/json")
-            .extension(Principal::in_tenant("user", "acme", ["accounts.create"]))
+            .extension(std::sync::Arc::new(Principal::in_tenant(
+                "user",
+                "acme",
+                ["accounts.create"],
+            )))
             .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
             .unwrap();
 
@@ -395,7 +399,10 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/create_user")
             .header("content-type", "application/json")
-            .extension(Principal::new("user", ["accounts.create"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "user",
+                ["accounts.create"],
+            )))
             .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
             .unwrap();
 
@@ -414,7 +421,11 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/create_user")
             .header("content-type", "application/json")
-            .extension(Principal::in_tenant("user", "acme", ["accounts.create"]))
+            .extension(std::sync::Arc::new(Principal::in_tenant(
+                "user",
+                "acme",
+                ["accounts.create"],
+            )))
             .body(Body::from(r#"{"username":"   ","password":"hunter2"}"#))
             .unwrap();
 
@@ -436,7 +447,11 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/create_user")
             .header("content-type", "application/json")
-            .extension(Principal::in_tenant("user", "acme", ["accounts.create"]))
+            .extension(std::sync::Arc::new(Principal::in_tenant(
+                "user",
+                "acme",
+                ["accounts.create"],
+            )))
             .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
             .unwrap();
         let response = app.clone().oneshot(create).await.unwrap();
@@ -446,7 +461,11 @@ mod tests {
             .method("POST")
             .uri("/v1/accounts/get_user")
             .header("content-type", "application/json")
-            .extension(Principal::in_tenant("user", "acme", ["accounts.read"]))
+            .extension(std::sync::Arc::new(Principal::in_tenant(
+                "user",
+                "acme",
+                ["accounts.read"],
+            )))
             .body(Body::from(r#"{"username":"alice"}"#))
             .unwrap();
         let response = app.oneshot(get).await.unwrap();

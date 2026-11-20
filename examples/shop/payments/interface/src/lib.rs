@@ -173,7 +173,10 @@ mod tests {
             .method("POST")
             .uri("/v1/payments/charge")
             .header("content-type", "application/json")
-            .extension(Principal::new("biller", ["payments.charge"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "biller",
+                ["payments.charge"],
+            )))
             .body(Body::from(r#"{"order_id":"7","amount_cents":2500}"#))
             .unwrap();
         let response = app.clone().oneshot(charge).await.unwrap();
@@ -185,7 +188,10 @@ mod tests {
         let get = Request::builder()
             .method("GET")
             .uri(format!("/v1/payments/{id}"))
-            .extension(Principal::new("clerk", ["payments.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["payments.read"],
+            )))
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(get).await.unwrap();
@@ -199,7 +205,10 @@ mod tests {
         let request = Request::builder()
             .method("GET")
             .uri("/v1/payments/404")
-            .extension(Principal::new("clerk", ["payments.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["payments.read"],
+            )))
             .body(Body::empty())
             .unwrap();
 

@@ -179,7 +179,10 @@ mod tests {
             .method("POST")
             .uri("/v1/notifications/send")
             .header("content-type", "application/json")
-            .extension(Principal::new("sender", ["notifications.send"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "sender",
+                ["notifications.send"],
+            )))
             .body(Body::from(r#"{"to":"  ","subject":"Hi","body":"Hello"}"#))
             .unwrap();
 
@@ -196,7 +199,10 @@ mod tests {
             .method("POST")
             .uri("/v1/notifications/send")
             .header("content-type", "application/json")
-            .extension(Principal::new("sender", ["notifications.send"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "sender",
+                ["notifications.send"],
+            )))
             .body(Body::from(
                 r#"{"to":"ada@example.com","subject":"Order placed","body":"Thanks!"}"#,
             ))
@@ -209,7 +215,10 @@ mod tests {
         let list = Request::builder()
             .method("GET")
             .uri("/v1/notifications")
-            .extension(Principal::new("clerk", ["notifications.read"]))
+            .extension(std::sync::Arc::new(Principal::new(
+                "clerk",
+                ["notifications.read"],
+            )))
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(list).await.unwrap();

@@ -1023,11 +1023,11 @@ mod tests {
                     .method("POST")
                     .uri("/v1/accounts/create_user")
                     .header("content-type", "application/json")
-                    .extension(seiva_http::Principal::in_tenant(
+                    .extension(std::sync::Arc::new(seiva_http::Principal::in_tenant(
                         "user",
                         "acme",
                         ["accounts.create"],
-                    ))
+                    )))
                     .body(Body::from(r#"{"username":"alice","password":"hunter2"}"#))
                     .unwrap(),
             )

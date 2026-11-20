@@ -499,11 +499,15 @@ impl<S: Sync> FromRequestParts<S> for Caller {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // The `authn` middleware stores the caller as `Arc<Principal>` (shared, not
+        // deep-cloned — panel finding E2), exactly as `seiva_http::permission_guard`
+        // and the `Ctx` extractor read it. Reading a bare `Principal` here would miss
+        // the authenticated caller entirely and always fail closed to anonymous.
         Ok(Caller(
             parts
                 .extensions
-                .get::<Principal>()
-                .cloned()
+                .get::<std::sync::Arc<Principal>>()
+                .map(|p| p.as_ref().clone())
                 .unwrap_or_else(Principal::anonymous),
         ))
     }
