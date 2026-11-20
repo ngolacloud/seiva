@@ -62,8 +62,8 @@ pub async fn audit(
 
     let entry = AuditEntry::new(subject, operation, response.status().as_u16().to_string())
         .in_tenant(tenant)
-    .with_request_id(request_id)
-    .redacted();
+        .with_request_id(request_id)
+        .redacted();
 
     if let Err(error) = sink.record(&entry).await {
         // Best-effort: the mutation already produced its response, so a failed
@@ -99,7 +99,11 @@ mod tests {
         let request = HttpRequest::builder()
             .method("POST")
             .uri("/things")
-            .extension(Arc::new(Principal::in_tenant("alice", "acme", ["things.create"])))
+            .extension(Arc::new(Principal::in_tenant(
+                "alice",
+                "acme",
+                ["things.create"],
+            )))
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(request).await.unwrap();

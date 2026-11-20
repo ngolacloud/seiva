@@ -269,8 +269,16 @@ async fn openapi_response_is_cacheable_with_a_strong_etag() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let headers = response.headers();
-    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/json");
-    let etag = headers.get(header::ETAG).unwrap().to_str().unwrap().to_owned();
+    assert_eq!(
+        headers.get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
+    let etag = headers
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
     assert!(
         etag.starts_with('"') && etag.ends_with('"'),
         "a strong ETag is a quoted validator: {etag}"
