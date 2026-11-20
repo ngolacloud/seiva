@@ -32,7 +32,11 @@ pub mod manifest;
 pub mod scaffold;
 pub mod schema;
 pub mod seed;
-pub mod worker;
+
+/// The framework worker runtime (the loop half of the data-layer boundary),
+/// re-exported from the standalone [`seiva_worker`] crate so downstream code and
+/// the composition root keep naming it `seiva::worker::{run_worker, WorkerConfig}`.
+pub use seiva_worker as worker;
 
 /// A 128-bit identifier that crosses the wire as a JSON string (ADR 0018), so no
 /// client loses precision above 2^53. Use it for id fields on wire DTOs.

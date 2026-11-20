@@ -31,15 +31,9 @@ thiserror = { workspace = true }
 # inventory the runtime collects, so `/openapi.json` lists every mounted facade
 # with no central registry to keep in sync (closes OWASP API9).
 inventory = "0.3"
-# The worker runtime's loop needs an interval and select; `tracing` is a facade
-# (no subscriber installed = near-zero cost), for the worker's metrics spans.
-tokio = { workspace = true, features = ["time", "macros"] }
-tracing = "0.1"
-
-[dev-dependencies]
-# The worker tests drive the loop on a current-thread runtime and signal
-# shutdown over a oneshot.
-tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+# The worker runtime now lives in its own crate; the umbrella re-exports it as
+# `seiva::worker`. Pulled in unconditionally so the entrypoint keeps exposing it.
+seiva-worker = { workspace = true }
 
 [features]
 # DORM wired in by default, but as a feature so a project whose every module

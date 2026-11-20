@@ -1,0 +1,32 @@
+# seiva-worker — the framework worker runtime.
+#
+# The loop half of the data-layer boundary: a one-pass job (the outbox relay's
+# `drain`, RAG's `run_once`, a lease pass) belongs to the data layer; the loop
+# that repeats it with an interval, graceful shutdown and metrics is the
+# framework's. Data-layer-free (depends only on `seiva-ports`), so a workspace
+# member. Re-exported by the `seiva` umbrella as `seiva::worker`.
+[package]
+name = "seiva-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Delonix Seiva — the framework worker runtime: a data-layer-free one-pass loop with interval, graceful shutdown and metrics."
+keywords = ["framework", "worker", "background-jobs", "tokio"]
+categories = ["asynchronous"]
+
+[dependencies]
+seiva-ports = { workspace = true }
+# The loop needs an interval and a biased select over the shutdown future;
+# `tracing` is a facade (no subscriber installed = near-zero cost) for the
+# worker's metrics spans.
+tokio = { workspace = true, features = ["time", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+# The worker tests drive the loop on a current-thread runtime and signal
+# shutdown over a oneshot.
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }

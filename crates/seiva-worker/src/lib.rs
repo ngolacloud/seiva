@@ -9,6 +9,8 @@
 //! is that loop, generic over any such pass, so it is data-layer-free and
 //! testable with a plain closure.
 
+#![forbid(unsafe_code)]
+
 use std::future::Future;
 use std::time::Duration;
 

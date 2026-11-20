@@ -2964,12 +2964,11 @@ dependencies = [
  "inventory",
  "seiva-macros",
  "seiva-ports",
+ "seiva-worker",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "tokio",
  "toml",
- "tracing",
 ]
 
 [[package]]
@@ -3229,6 +3228,15 @@ dependencies = [
  "hmac",
  "sha2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "seiva-worker"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
