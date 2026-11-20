@@ -2,7 +2,7 @@
 #
 # NO runtime, NO macros, NO framework. Only trait definitions and the value
 # types their signatures need. A module's `application` crate depends on this
-# (never on `delonix-seiva`) to declare the outbound capabilities it needs; the
+# (never on `seiva`) to declare the outbound capabilities it needs; the
 # `infrastructure` crate provides implementations. Kept SemVer-stable by policy:
 # every downstream and every generated in-memory double code against it.
 [package]

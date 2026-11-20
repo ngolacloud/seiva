@@ -5,7 +5,7 @@
 //! on them — even an optional one — blocks `cargo publish`. So the handful of
 //! commands that need something to *show* outside a project carry their own tiny,
 //! self-contained demonstration here, built only from crates that are published
-//! to crates.io (`delonix-seiva`, `seiva-openapi`, `seiva-auth`).
+//! to crates.io (`seiva`, `seiva-openapi`, `seiva-auth`).
 //!
 //! This is a demonstration, not the canonical module shape — `examples/notes`
 //! and `examples/accounts` remain the five-layer references a real project copies.
@@ -21,7 +21,7 @@
 // would be. The contract is the point; silence the false positive here.
 #![allow(dead_code)]
 
-use delonix_seiva::{facade, WireSchema};
+use seiva::{facade, WireSchema};
 
 /// Command DTO: the input to the demo facade's `create`.
 #[derive(Debug, Clone, WireSchema)]

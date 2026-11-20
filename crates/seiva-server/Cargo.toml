@@ -2,7 +2,7 @@
 #
 # Boots a Seiva service: mounts the facade-driven HTTP application (controllers +
 # `/openapi.json` + `/health`) from `seiva-http`, runs a background worker host on
-# the `delonix-seiva` worker runtime, reads 12-factor configuration from the
+# the `seiva` worker runtime, reads 12-factor configuration from the
 # environment with `seiva-config`, and shuts down gracefully on Ctrl-C / SIGTERM.
 # It replaces DORM's old `dorm-api`.
 #
@@ -50,7 +50,7 @@ seiva-observability = { version = "0.1.0", path = "../seiva-observability", defa
 seiva-config = { version = "0.1.0", path = "../seiva-config" }
 # The framework crate: its worker runtime (`worker::run_worker`) drives the host.
 # default-features = false keeps the `dorm` toggle off (the data layer stays out).
-delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
+seiva = { version = "0.1.0", path = "../seiva", default-features = false }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros", "sync"] }

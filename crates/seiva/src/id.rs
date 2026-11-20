@@ -10,7 +10,7 @@
 //! Use it for identifier fields on wire DTOs:
 //!
 //! ```
-//! use delonix_seiva::WireId;
+//! use seiva::WireId;
 //! # use serde::{Serialize, Deserialize};
 //! #[derive(Serialize, Deserialize)]
 //! struct ProductDto { id: WireId, name: String }

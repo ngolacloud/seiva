@@ -16,8 +16,8 @@ publish = false
 [dependencies]
 seiva-messaging = { path = "../seiva-messaging" }
 # The framework's worker runtime (the loop/shutdown/metrics) and the boundary
-# error type. `delonix-seiva` is data-layer-free, so no DORM feature is pulled.
-delonix-seiva = { path = "../delonix-seiva", default-features = false }
+# error type. `seiva` is data-layer-free, so no DORM feature is pulled.
+seiva = { path = "../seiva", default-features = false }
 seiva-ports = { path = "../seiva-ports" }
 # The DORM-free in-process bus: the `OutboxReader` trait + `drain_in_process` driver
 # this crate supplies a DORM adapter for. `default-features = false` drops the

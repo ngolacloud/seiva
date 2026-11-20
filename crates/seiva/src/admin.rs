@@ -2,7 +2,7 @@
 //! optional console (`seiva-console-admin`, ADR 0008/0009) may surface it.
 //!
 //! This lives in the framework crate, **not** in the console extension, on
-//! purpose: a module's interface layer already depends on `delonix-seiva` (for
+//! purpose: a module's interface layer already depends on `seiva` (for
 //! `#[controller]`/`#[facade]`), so it can register admin metadata without taking
 //! a dependency on the admin UI crate. A module that never calls
 //! [`register_admin!`](crate::register_admin) is simply absent from the registry
@@ -16,8 +16,8 @@
 //! console.
 //!
 //! ```
-//! use delonix_seiva::admin::{AdminPermissions, AdminResource};
-//! use delonix_seiva::register_admin;
+//! use seiva::admin::{AdminPermissions, AdminResource};
+//! use seiva::register_admin;
 //!
 //! register_admin!(AdminResource {
 //!     namespace: "accounts",

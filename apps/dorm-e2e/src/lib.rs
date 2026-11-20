@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use accounts_application::{AccountsService, CredentialRepository, RepositoryError};
 use accounts_domain::User;
-use delonix_seiva::worker::{WorkerConfig, WorkerReport};
+use seiva::worker::{WorkerConfig, WorkerReport};
 // The typed ORM surface for the tenant-scoped `AccountRow` model (SG1 P0-2b):
 // `Model` brings `objects()`; `.filter()`/`.first()`/`.create()`/`.eq()` are
 // inherent methods on the generated `Manager`/`QuerySet`/`Field`, so the prelude

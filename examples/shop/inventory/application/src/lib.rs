@@ -2,7 +2,7 @@
 //! implements the public facade) and the `StockRepository` outbound port.
 //!
 //! Depends on `domain`, its own `facade` (DTOs + trait) and `seiva-ports`. It
-//! names no `delonix_seiva::` item (ADR 0003) and consumes the framework's
+//! names no `seiva::` item (ADR 0003) and consumes the framework's
 //! cross-cutting ports (`UnitOfWork`, `EventPublisher`) through `seiva-ports`.
 //! Inventory keeps its stock keyed by `product_id`, so it needs no `IdGenerator`
 //! for its own entities.

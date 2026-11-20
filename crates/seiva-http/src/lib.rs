@@ -94,18 +94,18 @@ pub const DEFAULT_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Builds the service's OpenAPI 3.1 document from **every facade linked into the
-/// binary**, discovered through [`delonix_seiva::contract::registered_facades`]
+/// binary**, discovered through [`seiva::contract::registered_facades`]
 /// (each `#[seiva::facade]` registers itself in a link-time inventory). Nothing
 /// here is hand-written and no central list is kept: a module mounted into the
 /// runtime contributes its operations automatically (OWASP API9). This crate
 /// links no facade of its own, so a plain `seiva-http` binary documents nothing;
 /// the full runtime (see `seiva-server`) documents every mounted module.
 pub fn openapi_document() -> serde_json::Value {
-    let facades = delonix_seiva::contract::registered_facades();
+    let facades = seiva::contract::registered_facades();
     seiva_openapi::openapi_document(
         seiva_openapi::ApiInfo {
             title: "Delonix Seiva service".to_string(),
-            version: delonix_seiva::VERSION.to_string(),
+            version: seiva::VERSION.to_string(),
         },
         &facades,
     )
@@ -169,10 +169,10 @@ fn cached_openapi() -> &'static CachedOpenApi {
 /// prefix and make `Router::merge` panic at startup. Empty when the mounted
 /// facades are collision-free. A composition root calls this at boot to fail fast
 /// with a clear message instead of a bare axum panic (see
-/// [`delonix_seiva::contract::route_collisions`]).
+/// [`seiva::contract::route_collisions`]).
 #[must_use]
 pub fn route_collisions() -> Vec<String> {
-    delonix_seiva::contract::route_collisions(&delonix_seiva::contract::registered_facades())
+    seiva::contract::route_collisions(&seiva::contract::registered_facades())
 }
 
 /// Builds the framework router with the **default** security posture

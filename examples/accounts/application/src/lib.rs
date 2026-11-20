@@ -4,7 +4,7 @@
 //! cases.
 //!
 //! Depends on `domain`, its own `facade` (DTOs + trait), `seiva-ports` and
-//! `seiva-auth`. It names no `delonix_seiva::` item — the framework coupling is
+//! `seiva-auth`. It names no `seiva::` item — the framework coupling is
 //! the facade's concern (ADR 0003). The service consumes the framework's
 //! cross-cutting ports (`UnitOfWork`, `IdGenerator`, `EventPublisher`) through
 //! `seiva-ports`, and hashes the plaintext password with `seiva-auth`

@@ -53,7 +53,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use delonix_seiva::worker::run_worker;
+use seiva::worker::run_worker;
 use seiva_messaging::CloudEvent;
 use seiva_observability::trace_context::{self, TraceContext};
 use seiva_ports::{inbox_key, IdempotencyOutcome, IdempotencyStore, PortResult};
@@ -61,8 +61,8 @@ use tracing::Instrument;
 
 // The worker runtime (interval loop + graceful shutdown + metrics) is the
 // framework's; this crate only supplies the per-pass job. Re-exported so a caller
-// configures the in-process dispatch worker without reaching for `delonix_seiva`.
-pub use delonix_seiva::worker::{WorkerConfig, WorkerReport};
+// configures the in-process dispatch worker without reaching for `seiva`.
+pub use seiva::worker::{WorkerConfig, WorkerReport};
 
 // The in-memory outbox double needs interior mutability behind the shared `Arc`;
 // gated so a `--no-default-features` build (no `testing`) imports nothing unused.

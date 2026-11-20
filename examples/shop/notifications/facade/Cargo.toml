@@ -10,6 +10,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
-delonix-seiva = { workspace = true }
+seiva = { workspace = true }
 seiva-contract = { path = "../../../../crates/seiva-contract" }
 serde = { workspace = true }

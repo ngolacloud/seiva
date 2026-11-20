@@ -2,7 +2,7 @@
 //!
 //! A small command/query mediator built on `seiva-cqrs`, living in the
 //! application layer (where CQRS belongs — `seiva-cqrs` is allowed here, the
-//! framework runtime `delonix-seiva` is not). It demonstrates the hexagonal
+//! framework runtime `seiva` is not). It demonstrates the hexagonal
 //! read/write split the shop tutorial teaches:
 //!
 //! - [`PlaceOrderCommand`] is a write ([`Command`]) carried out by

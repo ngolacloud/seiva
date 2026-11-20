@@ -23,7 +23,7 @@ accounts-facade = { path = "../facade" }
 accounts-application = { path = "../application" }
 # The controller macro + contract, the HTTP primitives it emits, and the
 # trait-only ports the in-process `runtime` adapters implement.
-delonix-seiva = { workspace = true }
+seiva = { workspace = true }
 seiva-http = { path = "../../../crates/seiva-http" }
 seiva-ports = { path = "../../../crates/seiva-ports" }
 async-trait = { workspace = true }

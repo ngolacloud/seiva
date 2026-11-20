@@ -2,7 +2,7 @@
 //! the public facade) and the `PollRepository` outbound port.
 //!
 //! Depends on `domain`, its own `facade` (DTOs + trait) and `seiva-ports`. It
-//! names no `delonix_seiva::` item — the framework coupling is the facade's
+//! names no `seiva::` item — the framework coupling is the facade's
 //! concern (ADR 0003). The service consumes the framework's cross-cutting ports
 //! (`UnitOfWork`, `IdGenerator`, `EventPublisher`) through `seiva-ports`.
 //!

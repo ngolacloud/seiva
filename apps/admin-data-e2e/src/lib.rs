@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use delonix_seiva::admin::{AdminPermissions, AdminResource};
-use delonix_seiva::{controller, facade, register_admin};
+use seiva::admin::{AdminPermissions, AdminResource};
+use seiva::{controller, facade, register_admin};
 use dorm_core::value::Value;
 use seiva_data_dorm::DormUnitOfWork;
 use seiva_http::{fingerprint, scoped_key, Ctx, Problem, Validate, ValidationError};
@@ -41,7 +41,7 @@ pub fn catalog_table_ddl() -> &'static str {
 }
 
 /// Create body.
-#[derive(Debug, Clone, Deserialize, Serialize, delonix_seiva::WireSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, seiva::WireSchema)]
 pub struct CreateItem {
     /// The item's name (non-empty).
     pub name: String,
@@ -64,7 +64,7 @@ impl Validate for CreateItem {
 
 /// Update body: the id, the expected version (optimistic concurrency) plus the
 /// new field values.
-#[derive(Debug, Clone, Deserialize, Serialize, delonix_seiva::WireSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, seiva::WireSchema)]
 pub struct UpdateItem {
     /// The id of the item to change.
     pub id: u64,
@@ -96,7 +96,7 @@ impl Validate for UpdateItem {
 /// `order` against a fixed allow-list (mirroring the registered `ordering`) and
 /// clamps `page_size`, so a client can never inject a column name or ask for an
 /// unbounded page.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, delonix_seiva::WireSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, seiva::WireSchema)]
 pub struct ListQuery {
     /// Case-insensitive substring to match against the name (parameterised ILIKE).
     #[serde(default)]
@@ -116,7 +116,7 @@ pub struct ListQuery {
 }
 
 /// Delete body: just the id.
-#[derive(Debug, Clone, Deserialize, Serialize, delonix_seiva::WireSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, seiva::WireSchema)]
 pub struct DeleteItem {
     /// The id of the item to remove.
     pub id: u64,
@@ -130,7 +130,7 @@ impl Validate for DeleteItem {
 
 /// Response DTO. Also `Deserialize` so a stored idempotent response can be read
 /// back for a replay (ADR 0011).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, delonix_seiva::WireSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, seiva::WireSchema)]
 pub struct ItemDto {
     /// The item's id.
     pub id: u64,

@@ -63,7 +63,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use delonix_seiva::contract::{FacadeDescriptor, MethodDescriptor, Param};
+use seiva::contract::{FacadeDescriptor, MethodDescriptor, Param};
 
 /// The proto3 type a Rust type maps to, as decided by [`map_rust_type`].
 ///
@@ -164,7 +164,7 @@ pub fn is_context(param: &Param) -> bool {
 /// # Examples
 ///
 /// ```
-/// use delonix_seiva::contract::{FacadeDescriptor, MethodDescriptor, Param};
+/// use seiva::contract::{FacadeDescriptor, MethodDescriptor, Param};
 ///
 /// const DESCRIPTOR: FacadeDescriptor = FacadeDescriptor {
 ///     name: "Notes",
@@ -426,8 +426,8 @@ pub mod status {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use delonix_seiva::contract::Facade;
     use notes_facade::NotesFacade;
+    use seiva::contract::Facade;
 
     // A synthetic descriptor that exercises every mapping branch: a context
     // parameter (skipped), a `String` payload (-> `string`), an integer (-> an

@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use delonix_seiva::admin::{AdminPermissions, AdminResource};
-use delonix_seiva::{controller, register_admin};
+use seiva::admin::{AdminPermissions, AdminResource};
+use seiva::{controller, register_admin};
 
 use shop_inventory_application::{InventoryService, StockRepository};
 use shop_inventory_facade::{

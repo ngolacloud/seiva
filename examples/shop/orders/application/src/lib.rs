@@ -2,7 +2,7 @@
 //! implements the public facade) and the `OrderRepository` outbound port.
 //!
 //! Depends on `domain`, its own `facade` (DTOs + trait) and `seiva-ports`. It
-//! names no `delonix_seiva::` item (ADR 0003) and consumes the framework's
+//! names no `seiva::` item (ADR 0003) and consumes the framework's
 //! cross-cutting ports (`UnitOfWork`, `IdGenerator`, `EventPublisher`) through
 //! `seiva-ports`.
 

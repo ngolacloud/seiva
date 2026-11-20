@@ -25,7 +25,7 @@
 //! DORM-free build takes on no new supply-chain surface.
 //!
 //! ```
-//! use delonix_seiva::seed::{external_id, parse_csv};
+//! use seiva::seed::{external_id, parse_csv};
 //!
 //! // A stable textual key maps to the same id every run.
 //! assert_eq!(external_id("catalog.product", "apple"), external_id("catalog.product", "apple"));

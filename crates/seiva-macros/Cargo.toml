@@ -7,7 +7,7 @@
 # zero-trust `[[uses]]`/`[[allow]]` contract (ADR 0001, Rust-first contracts).
 #
 # "No hidden magic": the macro keeps the trait as written and only ADDS a
-# descriptor; the hand-written equivalent is documented in `delonix-seiva`.
+# descriptor; the hand-written equivalent is documented in `seiva`.
 [package]
 name = "seiva-macros"
 version.workspace = true

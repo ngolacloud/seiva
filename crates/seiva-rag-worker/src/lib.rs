@@ -7,7 +7,7 @@
 //! content hash or embedder changed, upserts them, and returns how many records it
 //! handled ([`dorm_rag::worker::WorkerStats`]). This crate is the **loop** the
 //! brief assigns to the framework: the surrounding interval, graceful shutdown and
-//! metrics come from the Seiva worker runtime ([`delonix_seiva::worker::run_worker`]),
+//! metrics come from the Seiva worker runtime ([`seiva::worker::run_worker`]),
 //! so DORM never owns a `loop {}` — that is the whole point of the boundary.
 //!
 //! DORM ships its own `run` (an infinite poll loop); this crate deliberately does
@@ -22,7 +22,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use delonix_seiva::worker::{run_worker, WorkerConfig, WorkerReport};
+use seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 use dorm_rag::worker::{run_once, WorkerConfig as RagConfig};
 use dorm_rag::Embedder;
 
@@ -46,7 +46,7 @@ use dorm_rag::Embedder;
 ///
 /// ```no_run
 /// use std::time::Duration;
-/// use delonix_seiva::worker::WorkerConfig;
+/// use seiva::worker::WorkerConfig;
 /// use dorm_rag::worker::WorkerConfig as RagConfig;
 /// use dorm_rag::Embedder;
 ///

@@ -3,11 +3,11 @@
 //! The command tree below is the shape fixed by the brief. Only `doctor` and
 //! `--version` do real work in this founding build; every other command reports
 //! the phase that will implement it rather than faking success. As each command
-//! lands, its body becomes a thin call into a public `delonix-seiva` function
+//! lands, its body becomes a thin call into a public `seiva` function
 //! with a typed result (the "CLI as a library" rule, mirrored from DORM).
 
 use clap::{Parser, Subcommand};
-use delonix_seiva::scaffold::{self, GeneratedFile};
+use seiva::scaffold::{self, GeneratedFile};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -18,7 +18,7 @@ use std::process::ExitCode;
 mod demo;
 
 /// The facades this `seiva` binary can render, discovered through the link-time
-/// inventory ([`delonix_seiva::contract::registered_facades`]) rather than a
+/// inventory ([`seiva::contract::registered_facades`]) rather than a
 /// hard-coded list.
 ///
 /// A standalone CLI only links the built-in demonstration facade ([`demo::Notes`]),
@@ -28,10 +28,10 @@ mod demo;
 /// document. Referencing the descriptor below anchors the demo facade into this
 /// binary so its `#[seiva::facade]` registration runs.
 #[cfg(feature = "demo")]
-fn cli_facades() -> Vec<delonix_seiva::contract::FacadeDescriptor> {
-    use delonix_seiva::contract::Facade;
+fn cli_facades() -> Vec<seiva::contract::FacadeDescriptor> {
+    use seiva::contract::Facade;
     let _anchor = demo::NotesFacade::DESCRIPTOR;
-    delonix_seiva::contract::registered_facades()
+    seiva::contract::registered_facades()
 }
 
 #[derive(Parser)]
@@ -708,7 +708,7 @@ fn lint() -> ExitCode {
     // CLI stays thin: scan the project and let the library decide. Run from the
     // project root; module manifests live at `modules/<name>/module.toml`.
     let root = std::path::Path::new(".");
-    match delonix_seiva::lint::lint_project(root) {
+    match seiva::lint::lint_project(root) {
         Ok(report) if report.modules_checked == 0 && report.is_clean() => {
             println!("seiva lint: no modules found under ./modules (nothing to check).");
             ExitCode::SUCCESS
@@ -752,7 +752,7 @@ fn builtin_openapi_json(compact: bool) -> String {
     use seiva_openapi::{openapi_document, ApiInfo};
     let info = ApiInfo {
         title: "Seiva API (built-in demonstration facade)".to_string(),
-        version: delonix_seiva::VERSION.to_string(),
+        version: seiva::VERSION.to_string(),
     };
     let document = openapi_document(info, &cli_facades());
     if compact {
@@ -1631,10 +1631,10 @@ fn user_create(username: &str) -> ExitCode {
 
 fn doctor() -> ExitCode {
     println!("Delonix Seiva");
-    println!("  framework version : {}", delonix_seiva::VERSION);
+    println!("  framework version : {}", seiva::VERSION);
     println!(
         "  data layer        : {}",
-        if delonix_seiva::DORM_ENABLED {
+        if seiva::DORM_ENABLED {
             "DORM (feature `dorm` on)"
         } else {
             "external (feature `dorm` off)"
@@ -1698,7 +1698,7 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_str(&json).expect("openapi must be valid JSON");
         assert_eq!(doc["openapi"], "3.1.0");
-        assert_eq!(doc["info"]["version"], delonix_seiva::VERSION);
+        assert_eq!(doc["info"]["version"], seiva::VERSION);
         // The built-in demonstration facade's `create` operation is present.
         assert!(
             doc["paths"]["/v1/notes"]["post"].is_object(),

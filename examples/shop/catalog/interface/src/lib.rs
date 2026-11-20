@@ -21,8 +21,8 @@
 
 use std::sync::Arc;
 
-use delonix_seiva::admin::{AdminPermissions, AdminResource};
-use delonix_seiva::{controller, register_admin};
+use seiva::admin::{AdminPermissions, AdminResource};
+use seiva::{controller, register_admin};
 
 use shop_catalog_application::{CatalogService, ProductRepository};
 use shop_catalog_facade::{
@@ -30,7 +30,7 @@ use shop_catalog_facade::{
 };
 
 // Make `catalog` visible to the optional admin console (ADR 0009). This couples
-// the module only to the framework contract (`delonix-seiva`), NOT to the admin
+// the module only to the framework contract (`seiva`), NOT to the admin
 // UI crate: with the console unmounted this is inert link-time data. The resource
 // id matches the module's route segment (`/v1/catalogs/...`) and each permission
 // matches the facade's `#[requires(..)]`.

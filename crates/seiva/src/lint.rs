@@ -208,10 +208,8 @@ fn forbidden_layer_dep(module: &str, layer: &str, dep: &str) -> Option<String> {
     let suffix = layer_suffix(dep);
     match layer {
         // Depends only on shared kernel types.
-        "domain" => {
-            (dep == "delonix-seiva" || dep == "seiva-ports" || is_dorm(dep) || suffix.is_some())
-                .then(|| format!("`domain` depends only on shared kernel types, not `{dep}`"))
-        }
+        "domain" => (dep == "seiva" || dep == "seiva-ports" || is_dorm(dep) || suffix.is_some())
+            .then(|| format!("`domain` depends only on shared kernel types, not `{dep}`")),
         // The public contract: shared kernel + the Seiva macros only.
         "facade" => (is_dorm(dep)
             || matches!(
@@ -222,7 +220,7 @@ fn forbidden_layer_dep(module: &str, layer: &str, dep: &str) -> Option<String> {
         // Use cases + ports: its own domain/facade and `seiva-ports`; never the
         // framework runtime, the data layer, lower layers, or another module.
         "application" => {
-            if dep == "delonix-seiva" || is_dorm(dep) {
+            if dep == "seiva" || is_dorm(dep) {
                 Some(format!(
                     "`application` stays free of the framework runtime and the data layer, not `{dep}`"
                 ))
@@ -706,7 +704,7 @@ mod tests {
         let m = layers(
             "notes",
             &[
-                ("facade", &["delonix-seiva"]),
+                ("facade", &["seiva"]),
                 ("domain", &["kernel"]),
                 (
                     "application",
@@ -721,10 +719,7 @@ mod tests {
                         "identity-facade",
                     ],
                 ),
-                (
-                    "interface",
-                    &["notes-application", "notes-facade", "delonix-seiva"],
-                ),
+                ("interface", &["notes-application", "notes-facade", "seiva"]),
             ],
         );
         assert!(check_layers(&[m]).is_empty());
@@ -798,10 +793,7 @@ mod tests {
     fn domain_may_not_depend_on_the_framework_or_the_data_layer() {
         let m = layers(
             "notes",
-            &[(
-                "domain",
-                &["delonix-seiva", "dorm-core", "notes-application"],
-            )],
+            &[("domain", &["seiva", "dorm-core", "notes-application"])],
         );
         let v = check_layers(&[m]);
         assert_eq!(v.len(), 3, "{v:?}");
@@ -819,7 +811,7 @@ mod tests {
                 &[
                     "notes-infrastructure", // lower layer
                     "identity-domain",      // another module's domain
-                    "delonix-seiva",        // the framework runtime
+                    "seiva",                // the framework runtime
                     "notes-domain",         // OK: own domain
                     "seiva-ports",          // OK
                 ],

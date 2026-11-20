@@ -13,12 +13,12 @@
 //!
 //! - `facade` — a `#[seiva::facade(version = "v1")]` trait plus serde wire DTOs,
 //!   the `Validate` impl and the error→`Problem` mapping. The facade's own DTOs
-//!   are the wire types, so this layer depends on `delonix-seiva`, `serde` and
+//!   are the wire types, so this layer depends on `seiva`, `serde` and
 //!   `seiva-http`.
 //! - `domain` — entities and rules; depends on nothing but `shared/kernel`.
 //! - `application` — the service implementing the facade over an outbound
 //!   repository port and the `seiva-ports` cross-cutting ports. Transport-free:
-//!   it names no `delonix-seiva`, `seiva-http` or `axum` item.
+//!   it names no `seiva`, `seiva-http` or `axum` item.
 //! - `infrastructure` — an in-memory repository adapter (a DORM-backed one
 //!   arrives via the `dorm` feature); depends on `application` + `domain` +
 //!   `seiva-ports`.
@@ -31,7 +31,7 @@
 //! layering choice, so the application layer stays transport-free; the decision
 //! is documented in the generated `interface` crate itself.
 //!
-//! [`examples/notes`]: https://docs.rs/delonix-seiva
+//! [`examples/notes`]: https://docs.rs/seiva
 
 /// A file to be written, with a path relative to the project root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -654,7 +654,7 @@ fn service_cargo_toml(module: &str) -> String {
          seiva-http = \"{FRAMEWORK_VERSION}\"\n\
          axum = \"0.8\"\n\
          # Emitting THIS service's contract (`seiva openapi`/`proto`, via SEIVA_EMIT).\n\
-         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
          seiva-grpc = \"{FRAMEWORK_VERSION}\"\n\
          serde_json = \"1\"\n\
@@ -716,7 +716,7 @@ fn service_main_rs(module: &str) -> String {
          \x20   // This service mounts ONLY the `{module}` module (in-memory adapters).\n\
          \x20   let modules = Router::new().merge({module}_interface::{module}_router({module}_controller));\n\
          \x20   if std::env::var(\"SEIVA_SEED\").is_ok() {{\n\
-         \x20       tracing::info!(sources = delonix_seiva::seed::registered_seeds().len(), \"seed/demo applied\");\n\
+         \x20       tracing::info!(sources = seiva::seed::registered_seeds().len(), \"seed/demo applied\");\n\
          \x20       return ExitCode::SUCCESS;\n\
          \x20   }}\n\
          \x20   let app = router_with_modules(health.clone(), &security, auth, modules);\n\n\
@@ -731,7 +731,7 @@ fn service_main_rs(module: &str) -> String {
          }}\n\n\
          /// Emits this service's contract from the `{module}` facade, then exits.\n\
          fn emit_contract(kind: &str) -> ExitCode {{\n\
-         \x20   let facades = delonix_seiva::contract::registered_facades();\n\
+         \x20   let facades = seiva::contract::registered_facades();\n\
          \x20   match kind {{\n\
          \x20       \"openapi\" => {{\n\
          \x20           let doc = seiva_openapi::openapi_document(\n\
@@ -1049,7 +1049,7 @@ fn bin_cargo_toml(app: &str, kind: ProjectKind) -> String {
              # Emitting THIS project's contract (`seiva openapi`/`proto`, via SEIVA_EMIT):\n\
              # the facade registry and the OpenAPI/proto generators, driven by the\n\
              # linked modules.\n\
-             delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+             seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
              seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
              seiva-grpc = \"{FRAMEWORK_VERSION}\"\n\
              serde_json = \"1\"\n\
@@ -1063,7 +1063,7 @@ fn bin_cargo_toml(app: &str, kind: ProjectKind) -> String {
         ProjectKind::Worker => format!(
             "# A background worker: the worker-host loop + the shutdown signal from\n\
              # the runtime, 12-factor `AppEnv` from the config crate. No HTTP surface.\n\
-             delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+             seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
              seiva-server = \"{FRAMEWORK_VERSION}\"\n\
              seiva-config = \"{FRAMEWORK_VERSION}\"\n\
              tokio = {{ version = \"1\", features = [\"rt-multi-thread\", \"macros\"] }}\n\
@@ -1072,7 +1072,7 @@ fn bin_cargo_toml(app: &str, kind: ProjectKind) -> String {
         ProjectKind::Event => format!(
             "# An event-processor: the worker-host loop drains the in-process event\n\
              # bus each pass. No HTTP surface. Wire real brokers via the DORM outbox.\n\
-             delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+             seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
              seiva-server = \"{FRAMEWORK_VERSION}\"\n\
              seiva-config = \"{FRAMEWORK_VERSION}\"\n\
              seiva-events = \"{FRAMEWORK_VERSION}\"\n\
@@ -1158,7 +1158,7 @@ fn app_main_rs(name: &str) -> String {
          \x20   // have already applied their seed (and demo, in dev); report and exit\n\
          \x20   // before serving, so seeding is a one-shot that never starts the server.\n\
          \x20   if std::env::var(\"SEIVA_SEED\").is_ok() {{\n\
-         \x20       let sources = delonix_seiva::seed::registered_seeds();\n\
+         \x20       let sources = seiva::seed::registered_seeds();\n\
          \x20       tracing::info!(sources = sources.len(), \"seed/demo sources applied\");\n\
          \x20       return ExitCode::SUCCESS;\n\
          \x20   }}\n\
@@ -1175,7 +1175,7 @@ fn app_main_rs(name: &str) -> String {
          /// Emits this project's generated contract from the facades linked into this\n\
          /// binary (the modules merged above), then exits. Driven by `seiva openapi`.\n\
          fn emit_contract(kind: &str) -> ExitCode {{\n\
-         \x20   let facades = delonix_seiva::contract::registered_facades();\n\
+         \x20   let facades = seiva::contract::registered_facades();\n\
          \x20   match kind {{\n\
          \x20       \"openapi\" => {{\n\
          \x20           let doc = seiva_openapi::openapi_document(\n\
@@ -1221,7 +1221,7 @@ fn worker_main_rs(name: &str) -> String {
          //! on SIGTERM. No HTTP surface — replace the `pass` body with the real job.\n\n\
          use std::process::ExitCode;\n\
          use std::time::Duration;\n\n\
-         use delonix_seiva::worker::{{run_worker, WorkerConfig}};\n\
+         use seiva::worker::{{run_worker, WorkerConfig}};\n\
          use seiva_config::AppEnv;\n\
          use seiva_server::{{observability, shutdown_signal}};\n\n\
          #[tokio::main(flavor = \"multi_thread\")]\n\
@@ -1314,7 +1314,7 @@ fn event_main_rs(name: &str) -> String {
          use std::sync::Arc;\n\
          use std::time::Duration;\n\n\
          use async_trait::async_trait;\n\
-         use delonix_seiva::worker::{{run_worker, WorkerConfig}};\n\
+         use seiva::worker::{{run_worker, WorkerConfig}};\n\
          use seiva_config::AppEnv;\n\
          use seiva_events::{{drain_in_process, EventSubscriber, InMemoryOutbox, SubscriberRegistry}};\n\
          use seiva_messaging::CloudEvent;\n\
@@ -1488,20 +1488,20 @@ fn module_toml(module: &str) -> String {
 }
 
 /// The crates.io version requirement a generated project uses for the framework
-/// crates (`delonix-seiva = "0.1"`, …). Generated manifests depend on the
+/// crates (`seiva = "0.1"`, …). Generated manifests depend on the
 /// framework by version, so a project compiles standalone once the crates are
 /// published; it is not tied to a local framework checkout.
 const FRAMEWORK_VERSION: &str = "0.1";
 
 /// The framework crates a generated project names as dependencies
-/// (`delonix-seiva = "0.1"`, …). Every other framework crate they pull in is
+/// (`seiva = "0.1"`, …). Every other framework crate they pull in is
 /// reached transitively, through these crates' own `path`/`workspace`
 /// dependencies, so redirecting just these to a local checkout resolves the
 /// whole graph (see [`workspace_patch_section`]). `seiva-testing` is a
 /// dev-dependency (the module's use-case test asserts against its UnitOfWork/
 /// EventPublisher doubles), so it is patched too — `cargo test` must resolve it.
 pub const FRAMEWORK_CRATES: [&str; 11] = [
-    "delonix-seiva",
+    "seiva",
     "seiva-contract",
     "seiva-http",
     "seiva-ports",
@@ -1521,7 +1521,7 @@ pub const FRAMEWORK_CRATES: [&str; 11] = [
 /// its directory under `<framework_root>/crates`, so a generated project compiles
 /// against a local framework checkout *before* the crates are published to
 /// crates.io. This is the interim that unblocks a standalone `cargo build`: the
-/// manifests keep the published contract (`delonix-seiva = "0.1"`), and this one
+/// manifests keep the published contract (`seiva = "0.1"`), and this one
 /// section — deletable in a single edit once the crates are on crates.io —
 /// points those versions at the checkout.
 ///
@@ -1593,12 +1593,12 @@ fn facade_lib(module: &str, pascal: &str) -> String {
          //! so the write DTO derives `serde` and implements `seiva_contract::Validate`,\n\
          //! the response DTO derives `serde::Serialize`, and the error maps to an\n\
          //! RFC 9457 `seiva_contract::Problem` — all transport-neutral contract types\n\
-         //! (ADR 0003), so this layer depends on `delonix-seiva`, `serde` and\n\
+         //! (ADR 0003), so this layer depends on `seiva`, `serde` and\n\
          //! `seiva-contract`, and NOT on any transport crate. The HTTP edge renders\n\
          //! the `Problem` as `application/problem+json`; another transport maps it\n\
          //! its own way.\n\
          #![allow(async_fn_in_trait)]\n\n\
-         use delonix_seiva::{{facade, WireSchema}};\n\
+         use seiva::{{facade, WireSchema}};\n\
          use seiva_contract::{{Problem, Validate, ValidationError}};\n\
          use serde::{{Deserialize, Serialize}};\n\n\
          /// Command DTO: the JSON body of `create`, validated by the controller's\n\
@@ -1701,7 +1701,7 @@ fn infrastructure_lib(snake: &str) -> String {
     format!(
         "//! Infrastructure layer: adapters implementing the application's outbound\n\
          //! ports. Depends on `application` + `domain` + `seiva-ports` (and\n\
-         //! `delonix-seiva` for the seed loader); never on `interface`.\n\
+         //! `seiva` for the seed loader); never on `interface`.\n\
          //!\n\
          //! The default adapters are in-memory, so a scaffolded project compiles and\n\
          //! runs with NO database. A DORM-backed repository arrives via the `dorm`\n\
@@ -1734,12 +1734,12 @@ fn infrastructure_lib(snake: &str) -> String {
          /// in the link-time seed registry so a fitness test and `seiva db seed` can\n\
          /// discover it; applied by [`load_seed`] in the composition root.\n\
          const SEED_CSV: &str = include_str!(\"../../seed/record.csv\");\n\n\
-         delonix_seiva::register_seed!(delonix_seiva::seed::SeedSource {{\n    module: \"{snake}\",\n    resource: \"record\",\n    csv: SEED_CSV,\n    demo: false,\n}});\n\n\
+         seiva::register_seed!(seiva::seed::SeedSource {{\n    module: \"{snake}\",\n    resource: \"record\",\n    csv: SEED_CSV,\n    demo: false,\n}});\n\n\
          /// Loads the `seed/` reference data into `repo` through an idempotent upsert\n\
          /// (no domain events). The row's `id` column is a stable textual key hashed\n\
          /// to a deterministic entity id, so re-running overwrites rather than\n\
          /// duplicating. Returns the number of rows loaded.\n\
-         pub async fn load_seed(repo: &InMemoryRecordRepository) -> usize {{\n    let mut loaded = 0;\n    for row in delonix_seiva::seed::parse_csv(SEED_CSV) {{\n        let (Some(key), Some(title)) = (row.get(\"id\"), row.get(\"title\")) else {{\n            continue;\n        }};\n        let id = delonix_seiva::seed::external_u128(\"{snake}.record\", key);\n        match Record::new(id, title.clone()) {{\n            Ok(record) => {{\n                if repo.save(&record).await.is_ok() {{\n                    loaded += 1;\n                }}\n            }}\n            Err(error) => eprintln!(\"seiva: skipping invalid seed row `{{key}}`: {{error}}\"),\n        }}\n    }}\n    loaded\n}}\n\n\
+         pub async fn load_seed(repo: &InMemoryRecordRepository) -> usize {{\n    let mut loaded = 0;\n    for row in seiva::seed::parse_csv(SEED_CSV) {{\n        let (Some(key), Some(title)) = (row.get(\"id\"), row.get(\"title\")) else {{\n            continue;\n        }};\n        let id = seiva::seed::external_u128(\"{snake}.record\", key);\n        match Record::new(id, title.clone()) {{\n            Ok(record) => {{\n                if repo.save(&record).await.is_ok() {{\n                    loaded += 1;\n                }}\n            }}\n            Err(error) => eprintln!(\"seiva: skipping invalid seed row `{{key}}`: {{error}}\"),\n        }}\n    }}\n    loaded\n}}\n\n\
          /// A process-local monotonic [`IdGenerator`] adapter: it hands out\n\
          /// 1, 2, 3, … as 128-bit ids. Replace with a ULID/UUID generator in\n\
          /// production; this keeps the scaffold dependency-free and deterministic.\n\
@@ -1768,14 +1768,14 @@ fn infrastructure_lib(snake: &str) -> String {
 fn interface_lib(snake: &str, pascal: &str, admin: bool) -> String {
     // When `seiva module new --admin` is used, the interface registers an admin
     // resource (ADR 0009) so the optional console surfaces it. This couples the
-    // module only to the framework contract (`delonix-seiva`), NOT to the admin UI
+    // module only to the framework contract (`seiva`), NOT to the admin UI
     // crate; with the console unmounted it is inert link-time data. A module
     // scaffolded without `--admin` emits nothing here and stays private to the
     // console.
     let admin_block = if admin {
         format!(
-            "use delonix_seiva::admin::{{AdminPermissions, AdminResource}};\n\
-             use delonix_seiva::register_admin;\n\n\
+            "use seiva::admin::{{AdminPermissions, AdminResource}};\n\
+             use seiva::register_admin;\n\n\
              // Make this module visible to the optional admin console (ADR 0009).\n\
              // The resource id matches the module's route segment (`/v1/{snake}/...`)\n\
              // so the console pairs it with the operations in `/openapi.json`, and\n\
@@ -1826,8 +1826,8 @@ fn interface_lib(snake: &str, pascal: &str, admin: bool) -> String {
          //! descriptor drives this module's OpenAPI document ([`openapi`]), so the\n\
          //! wire contract is generated, never hand-maintained.\n\n\
          use std::sync::Arc;\n\n\
-         use delonix_seiva::contract::Facade;\n\
-         use delonix_seiva::controller;\n\
+         use seiva::contract::Facade;\n\
+         use seiva::controller;\n\
          use seiva_ports::{{EventPublisher, IdGenerator, UnitOfWork}};\n\
          use {snake}_application::{{RecordRepository, RecordService}};\n\
          use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\n\
@@ -1857,13 +1857,13 @@ fn interface_lib(snake: &str, pascal: &str, admin: bool) -> String {
          /// real use case (the domain invariants, and the event where the facade\n\
          /// publishes one). It never ships to production.\n\
          const DEMO_CSV: &str = include_str!(\"../../demo/record.csv\");\n\n\
-         delonix_seiva::register_seed!(delonix_seiva::seed::SeedSource {{\n    module: \"{snake}\",\n    resource: \"record\",\n    csv: DEMO_CSV,\n    demo: true,\n}});\n\n\
+         seiva::register_seed!(seiva::seed::SeedSource {{\n    module: \"{snake}\",\n    resource: \"record\",\n    csv: DEMO_CSV,\n    demo: true,\n}});\n\n\
          /// Loads the `demo/` data through the facade. The composition root calls\n\
          /// this only when `config.env.is_development()`, so demo data never reaches\n\
          /// production. Invalid rows are reported and skipped, never fatal; returns\n\
          /// the number of rows accepted.\n\
          pub async fn load_demo<R, G, U, E>(controller: &{pascal}Controller<R, G, U, E>) -> usize\n\
-         where\n    R: RecordRepository + Send + Sync + 'static,\n    G: IdGenerator + Send + Sync + 'static,\n    U: UnitOfWork + Send + Sync + 'static,\n    E: EventPublisher + Send + Sync + 'static,\n{{\n    let mut loaded = 0;\n    for row in delonix_seiva::seed::parse_csv(DEMO_CSV) {{\n        let Some(title) = row.get(\"title\") else {{\n            continue;\n        }};\n        match controller.create(CreateRecord {{ title: title.clone() }}).await {{\n            Ok(_) => loaded += 1,\n            Err(error) => eprintln!(\"seiva: skipping demo row: {{}}\", error.0),\n        }}\n    }}\n    loaded\n}}\n"
+         where\n    R: RecordRepository + Send + Sync + 'static,\n    G: IdGenerator + Send + Sync + 'static,\n    U: UnitOfWork + Send + Sync + 'static,\n    E: EventPublisher + Send + Sync + 'static,\n{{\n    let mut loaded = 0;\n    for row in seiva::seed::parse_csv(DEMO_CSV) {{\n        let Some(title) = row.get(\"title\") else {{\n            continue;\n        }};\n        match controller.create(CreateRecord {{ title: title.clone() }}).await {{\n            Ok(_) => loaded += 1,\n            Err(error) => eprintln!(\"seiva: skipping demo row: {{}}\", error.0),\n        }}\n    }}\n    loaded\n}}\n"
     )
 }
 
@@ -1874,10 +1874,10 @@ fn facade_cargo_toml(module: &str) -> String {
         "[package]\nname = \"{module}-facade\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
          [dependencies]\n\
          # The framework macros (`#[facade]`) and contract descriptor. The project\n\
-         # depends on the framework by version (`delonix-seiva = \"0.1\"`); until those\n\
+         # depends on the framework by version (`seiva = \"0.1\"`); until those\n\
          # crates are published, the workspace root's `[patch.crates-io]` redirects\n\
          # them to a local checkout. The data layer is off here — the facade needs none.\n\
-         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          # The write DTO's `Validate` AND the RFC 9457 `Problem` the error maps to are\n\
          # transport-neutral contract types, so they come from `seiva-contract` (no\n\
          # axum) — the facade declares its contract WITHOUT naming any transport crate\n\
@@ -1903,7 +1903,7 @@ fn application_cargo_toml(module: &str) -> String {
          {module}-domain = {{ path = \"../domain\" }}\n\
          {module}-facade = {{ path = \"../facade\" }}\n\
          # The trait-only cross-cutting ports. The application codes against these,\n\
-         # NEVER against `delonix-seiva`, `seiva-http` or DORM — that is what keeps\n\
+         # NEVER against `seiva`, `seiva-http` or DORM — that is what keeps\n\
          # it transport- and data-layer-independent.\n\
          seiva-ports = \"{FRAMEWORK_VERSION}\"\n\
          # The domain event is a JSON envelope the use case serialises inside the\n\
@@ -1926,7 +1926,7 @@ fn infrastructure_cargo_toml(module: &str) -> String {
          seiva-ports = \"{FRAMEWORK_VERSION}\"\n\
          # The seed loader: `register_seed!`, `parse_csv` and the deterministic\n\
          # external-id hashing (ADR 0022). The data layer stays off here.\n\
-         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          # `#[async_trait]` for the in-memory EventPublisher adapter; `tracing` so a\n\
          # dev run shows the emitted event. Both drop out with the DORM gateway.\n\
          async-trait = \"0.1\"\n\
@@ -1949,7 +1949,7 @@ fn interface_cargo_toml(module: &str) -> String {
          {module}-application = {{ path = \"../application\" }}\n\
          # The controller macro + contract, the HTTP primitives it emits, and the\n\
          # OpenAPI generator — all driven by the facade descriptor.\n\
-         delonix-seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
+         seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
          seiva-http = \"{FRAMEWORK_VERSION}\"\n\
          seiva-openapi = \"{FRAMEWORK_VERSION}\"\n\
          seiva-ports = \"{FRAMEWORK_VERSION}\"\n\
@@ -2079,13 +2079,13 @@ mod tests {
     }
 
     /// The framework workspace root, resolved from this crate's manifest dir
-    /// (`<root>/crates/delonix-seiva`). The fitness build points the generated
+    /// (`<root>/crates/seiva`). The fitness build points the generated
     /// project's `[patch.crates-io]` here.
     fn framework_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(std::path::Path::parent)
-            .expect("manifest dir is <root>/crates/delonix-seiva")
+            .expect("manifest dir is <root>/crates/seiva")
             .to_path_buf()
     }
 
@@ -2253,7 +2253,7 @@ mod tests {
     }
 
     /// A cheap, context-free well-formedness check: the three bracket kinds each
-    /// balance in count. `delonix-seiva` cannot depend on `syn` (that lives in
+    /// balance in count. `seiva` cannot depend on `syn` (that lives in
     /// the proc-macro crate, not a normal dependency of this crate), so the
     /// generated code is NOT parsed; this catches a truncated or unbalanced
     /// template without a parser. Angle brackets are intentionally not counted
@@ -2349,7 +2349,7 @@ mod tests {
         let files = module_files("notes", false).unwrap();
         let facade = contents(&files, "modules/notes/facade/src/lib.rs");
         // The macro is imported and applied with an explicit version.
-        assert!(facade.contains("use delonix_seiva::{facade, WireSchema};"));
+        assert!(facade.contains("use seiva::{facade, WireSchema};"));
         // F1 (ADR 0003, fully closed): `Validate`/`ValidationError` AND the RFC 9457
         // `Problem` the error maps to are transport-neutral contract types from
         // `seiva-contract`. The facade names NO transport crate at all.
@@ -2439,8 +2439,11 @@ mod tests {
             "application must be transport-free"
         );
         assert!(!app.contains("axum"), "application must be transport-free");
+        // The umbrella framework crate is named `seiva`; a path into it reads
+        // `seiva::` — distinct from the allowed `seiva_ports`/`seiva_testing`
+        // sibling crates (which never produce the `seiva::` substring).
         assert!(
-            !app.contains("delonix_seiva"),
+            !app.contains("seiva::"),
             "application must not name a framework-runtime item"
         );
     }
@@ -2479,7 +2482,7 @@ mod tests {
             "the repo must be keyed by id for an idempotent upsert:\n{infra}"
         );
         assert!(infra.contains("include_str!(\"../../seed/record.csv\")"));
-        assert!(infra.contains("delonix_seiva::register_seed!"));
+        assert!(infra.contains("seiva::register_seed!"));
         assert!(infra.contains("pub async fn load_seed("));
         assert!(
             infra.contains("external_u128("),
@@ -2543,7 +2546,7 @@ mod tests {
         // The controller macro is imported and applied to a GENERIC adapter impl:
         // generic over the repository/id-generator ports, so the interface never
         // names the infrastructure crate (the layering rule).
-        assert!(interface.contains("use delonix_seiva::controller;"));
+        assert!(interface.contains("use seiva::controller;"));
         assert!(interface.contains("#[controller]"));
         assert!(interface
             .contains("pub struct NotesController<R, G, U, E>(Arc<RecordService<R, G, U, E>>);"));
@@ -2579,7 +2582,7 @@ mod tests {
         let interface = contents(&files, "modules/notes/interface/src/lib.rs");
         // The `--admin` flag emits a registration coupling only to the framework
         // contract — not to the admin UI crate.
-        assert!(interface.contains("use delonix_seiva::register_admin;"));
+        assert!(interface.contains("use seiva::register_admin;"));
         assert!(interface.contains("register_admin!(AdminResource {"));
         assert!(!interface.contains("seiva_console_admin"));
         // The resource id matches the module's route segment, the permissions the
@@ -2661,7 +2664,7 @@ mod tests {
         // generated project compiles standalone once they are published); the
         // intra-project layer crates stay `path`.
         let facade = contents(&files, "modules/notes/facade/Cargo.toml");
-        assert!(facade.contains("delonix-seiva = { version = \"0.1\", default-features = false }"));
+        assert!(facade.contains("seiva = { version = \"0.1\", default-features = false }"));
         // F1 (ADR 0003): the facade depends on the transport-neutral `seiva-contract`
         // (Validate + the RFC 9457 Problem), NOT on the HTTP transport.
         assert!(facade.contains("seiva-contract = \"0.1\""));
@@ -2682,7 +2685,7 @@ mod tests {
             "application stays transport-free"
         );
         assert!(
-            !app.contains("delonix-seiva = {"),
+            !app.contains("seiva = {"),
             "application stays framework-free"
         );
 
@@ -2700,7 +2703,7 @@ mod tests {
             "interface must not depend on infrastructure (layering rule)"
         );
         assert!(interface.contains("seiva-ports = \"0.1\""));
-        assert!(interface.contains("delonix-seiva = { version = \"0.1\""));
+        assert!(interface.contains("seiva = { version = \"0.1\""));
         assert!(interface.contains("seiva-http = \"0.1\""));
         // No seiva-grpc: proto generation is not per-module (it is a CLI tool).
         assert!(!interface.contains("seiva-grpc"));

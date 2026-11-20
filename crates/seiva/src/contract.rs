@@ -14,7 +14,7 @@
 //! equivalent of the generated code:
 //!
 //! ```
-//! use delonix_seiva::contract::{Facade, FacadeDescriptor, MethodDescriptor, Param};
+//! use seiva::contract::{Facade, FacadeDescriptor, MethodDescriptor, Param};
 //!
 //! pub trait Notes {
 //!     // async fn create(&self, cmd: CreateNote) -> Result<NoteDto, String>;

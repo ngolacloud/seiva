@@ -16,8 +16,8 @@
 
 use std::sync::Arc;
 
-use delonix_seiva::admin::{AdminPermissions, AdminResource};
-use delonix_seiva::{controller, register_admin};
+use seiva::admin::{AdminPermissions, AdminResource};
+use seiva::{controller, register_admin};
 
 use shop_payments_application::{PaymentRepository, PaymentsService};
 use shop_payments_facade::{

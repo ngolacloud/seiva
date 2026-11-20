@@ -65,7 +65,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use delonix_seiva::admin::{admin_registry_conflicts, registered_admin_resources, AdminResource};
+use seiva::admin::{admin_registry_conflicts, registered_admin_resources, AdminResource};
 use seiva_identity::Principal;
 use sha2::{Digest, Sha256};
 
@@ -730,7 +730,7 @@ pub fn mount_dx(router: Router) -> Router {
 #[cfg(test)]
 mod registry_tests {
     use super::*;
-    use delonix_seiva::admin::AdminPermissions;
+    use seiva::admin::AdminPermissions;
 
     fn resource(ns: &'static str, res: &'static str, view: &'static str) -> AdminResource {
         AdminResource {

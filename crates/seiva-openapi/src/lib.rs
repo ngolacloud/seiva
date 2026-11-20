@@ -20,8 +20,8 @@
 //! not a structural description. This generator still fabricates nothing: it maps
 //! the well-known scalar types to their JSON Schema equivalents, and for a named
 //! type it looks the real shape up in the link-time schema inventory
-//! ([`delonix_seiva::schema::registered_schema`]) — populated by every DTO that
-//! derives [`WireSchema`](delonix_seiva::schema::WireSchema). A named type that
+//! ([`seiva::schema::registered_schema`]) — populated by every DTO that
+//! derives [`WireSchema`](seiva::schema::WireSchema). A named type that
 //! did *not* derive `WireSchema` (so is absent from the inventory) falls back to
 //! an honest placeholder naming the Rust type:
 //!
@@ -77,7 +77,7 @@
 //! ## Security
 //!
 //! A guarded method — one whose descriptor
-//! [`is_guarded()`](delonix_seiva::contract::MethodDescriptor::is_guarded) — gets
+//! [`is_guarded()`](seiva::contract::MethodDescriptor::is_guarded) — gets
 //! a `security` requirement referencing the document's bearer
 //! `securityScheme` (`bearerAuth`), and carries the required permission in an
 //! `x-seiva-requires` operation extension. The `securityScheme` is declared
@@ -97,7 +97,7 @@
 //! ```
 //! use seiva_openapi::{openapi_document, ApiInfo};
 //! use notes_facade::NotesFacade;
-//! use delonix_seiva::contract::Facade;
+//! use seiva::contract::Facade;
 //!
 //! let doc = openapi_document(
 //!     ApiInfo { title: "Notes API".into(), version: "1.0.0".into() },
@@ -114,7 +114,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use delonix_seiva::contract::{FacadeDescriptor, MethodDescriptor, Param};
+use seiva::contract::{FacadeDescriptor, MethodDescriptor, Param};
 
 /// The top-level `info` a generated document carries: the service title and
 /// version shown to clients. Maps to OpenAPI's required `info.title` and
@@ -142,7 +142,7 @@ pub struct ApiInfo {
 /// ```
 /// use seiva_openapi::{openapi_document, ApiInfo};
 /// use notes_facade::NotesFacade;
-/// use delonix_seiva::contract::Facade;
+/// use seiva::contract::Facade;
 ///
 /// let doc = openapi_document(
 ///     ApiInfo { title: "Notes API".into(), version: "1.0.0".into() },
@@ -227,7 +227,7 @@ pub fn resource_of(facade_name: &str) -> String {
 /// | *(anything else)*                                    | `{"type":"string","x-seiva-rust-type":"<ty>"}` |
 ///
 /// A named type is resolved from the link-time schema inventory when it derived
-/// [`WireSchema`](delonix_seiva::schema::WireSchema); otherwise the final row is
+/// [`WireSchema`](seiva::schema::WireSchema); otherwise the final row is
 /// the honest placeholder — the generator records the Rust type name rather than
 /// fabricating a shape.
 pub fn schema_for_rust_type(ty: &str) -> Value {
@@ -244,7 +244,7 @@ pub fn schema_for_rust_type(ty: &str) -> Value {
         _ => {
             if let Some(inner) = ty.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')) {
                 json!({ "type": "array", "items": schema_for_rust_type(inner) })
-            } else if let Some(real) = delonix_seiva::schema::registered_schema(ty) {
+            } else if let Some(real) = seiva::schema::registered_schema(ty) {
                 // A DTO that derived `WireSchema` contributed its real shape to
                 // the link-time inventory; use it instead of the placeholder.
                 real
@@ -618,8 +618,8 @@ impl Components {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use delonix_seiva::contract::Facade;
     use notes_facade::NotesFacade;
+    use seiva::contract::Facade;
 
     /// A synthetic descriptor exercising a `&Ctx` context parameter and a
     /// `get`, which the real `notes-facade` does not declare.

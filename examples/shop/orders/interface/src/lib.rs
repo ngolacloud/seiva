@@ -27,8 +27,8 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use delonix_seiva::admin::{AdminPermissions, AdminResource};
-use delonix_seiva::{controller, register_admin};
+use seiva::admin::{AdminPermissions, AdminResource};
+use seiva::{controller, register_admin};
 use seiva_cqrs::{CommandHandler, Mediator, Transactional, Validate};
 use seiva_http::{Ctx, Idempotent, Problem, DEFAULT_IDEMPOTENCY_TTL};
 use seiva_ports::{BoxError, EventPublisher, IdempotencyStore, PortResult};

@@ -36,7 +36,7 @@ seiva-server = { path = "../../crates/seiva-server" }
 seiva-messaging = { path = "../../crates/seiva-messaging" }
 # The framework's worker runtime (WorkerConfig/WorkerReport). Data-layer-free,
 # so default features (the `dorm` flag) are off here.
-delonix-seiva = { path = "../../crates/delonix-seiva", default-features = false }
+seiva = { path = "../../crates/seiva", default-features = false }
 # The accounts example use case the DORM gateway must satisfy.
 accounts-application = { path = "../../examples/accounts/application" }
 accounts-domain = { path = "../../examples/accounts/domain" }

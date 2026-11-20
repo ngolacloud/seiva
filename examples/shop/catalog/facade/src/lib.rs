@@ -11,11 +11,11 @@
 //! `shop-catalog-interface`) uses these DTOs as the wire types, so the write DTOs
 //! derive `serde` and implement [`seiva_contract::Validate`], the response DTO
 //! derives [`serde::Serialize`], and the error maps to an RFC 9457 [`Problem`]
-//! here — hence this layer depends on `delonix-seiva`, `serde` and `seiva-http`.
+//! here — hence this layer depends on `seiva`, `serde` and `seiva-http`.
 
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::{facade, WireId, WireSchema};
+use seiva::{facade, WireId, WireSchema};
 use seiva_contract::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 

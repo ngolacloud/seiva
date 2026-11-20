@@ -15,7 +15,7 @@ publish = false
 [dependencies]
 shop-catalog-facade = { path = "../facade" }
 shop-catalog-application = { path = "../application" }
-delonix-seiva = { workspace = true }
+seiva = { workspace = true }
 seiva-http = { path = "../../../../crates/seiva-http" }
 seiva-ports = { workspace = true }
 async-trait = { workspace = true }

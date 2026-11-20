@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 shop-orders-facade = { path = "../facade" }
 shop-orders-application = { path = "../application" }
-delonix-seiva = { workspace = true }
+seiva = { workspace = true }
 seiva-http = { path = "../../../../crates/seiva-http" }
 seiva-ports = { workspace = true }
 # The command bus the controller dispatches `place` through (ADR 0020): the

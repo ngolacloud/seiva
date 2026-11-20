@@ -3,7 +3,7 @@
 //! See [`macro@facade`]. The design rule (ADR 0001, and the "no hidden magic"
 //! principle) is that a macro keeps the user's code as written and only ADDS
 //! generated items; everything it generates has a documented hand-written
-//! equivalent, shown in `delonix-seiva`'s `contract` module docs.
+//! equivalent, shown in `seiva`'s `contract` module docs.
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
@@ -67,7 +67,7 @@ fn render_tokens(tokens: proc_macro2::TokenStream) -> String {
 /// `#[requires("perm")]` nor `#[public]` is a **compile error**, so forgetting to
 /// guard a route cannot silently expose it. `#[public]` is the explicit, auditable
 /// way to serve a method without authorization.
-/// zero-sized `<Trait>Facade` type implementing `delonix_seiva::contract::Facade`,
+/// zero-sized `<Trait>Facade` type implementing `seiva::contract::Facade`,
 /// whose `DESCRIPTOR` lists the facade name, version, and every method with the
 /// permission its `#[requires(..)]` declared. That descriptor is read by the
 /// `.proto`/gRPC generator and by the `[[uses]]`/`[[allow]]` contract checks.
@@ -197,11 +197,11 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
         } = method;
         let param_descs = params.iter().map(|ParamInfo { name, ty }| {
             quote! {
-                ::delonix_seiva::contract::Param { name: #name, ty: #ty }
+                ::seiva::contract::Param { name: #name, ty: #ty }
             }
         });
         quote! {
-            ::delonix_seiva::contract::MethodDescriptor {
+            ::seiva::contract::MethodDescriptor {
                 name: #name,
                 requires: #requires,
                 params: &[ #(#param_descs),* ],
@@ -219,9 +219,9 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[doc = #doc]
         #vis struct #facade_ty;
 
-        impl ::delonix_seiva::contract::Facade for #facade_ty {
-            const DESCRIPTOR: ::delonix_seiva::contract::FacadeDescriptor =
-                ::delonix_seiva::contract::FacadeDescriptor {
+        impl ::seiva::contract::Facade for #facade_ty {
+            const DESCRIPTOR: ::seiva::contract::FacadeDescriptor =
+                ::seiva::contract::FacadeDescriptor {
                     name: #name_str,
                     version: #version,
                     methods: &[ #(#method_descs),* ],
@@ -231,19 +231,19 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
         // Register the facade in the link-time inventory so the runtime can
         // discover every mounted facade for `/openapi.json` (OWASP API9) without
         // a hand-maintained list.
-        ::delonix_seiva::inventory::submit! {
-            ::delonix_seiva::contract::FacadeRegistration {
-                descriptor: <#facade_ty as ::delonix_seiva::contract::Facade>::DESCRIPTOR,
+        ::seiva::inventory::submit! {
+            ::seiva::contract::FacadeRegistration {
+                descriptor: <#facade_ty as ::seiva::contract::Facade>::DESCRIPTOR,
             }
         }
     }
     .into()
 }
 
-/// Derives `delonix_seiva::schema::WireSchema` for a DTO so it contributes its
+/// Derives `seiva::schema::WireSchema` for a DTO so it contributes its
 /// own JSON Schema fragment to the OpenAPI generator, with no reflection (ADR
 /// 0007). Applied as `#[derive(seiva::WireSchema)]` (re-exported as
-/// `delonix_seiva::WireSchema`).
+/// `seiva::WireSchema`).
 ///
 /// It implements `WireSchema` — an `object` schema whose properties are the
 /// struct's fields, each field's schema composed from its type via
@@ -302,9 +302,9 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
                     if serde.flatten {
                         let schema_ty = field.ty.clone();
                         field_descs.push(quote! {
-                            ::delonix_seiva::schema::Field {
+                            ::seiva::schema::Field {
                                 name: "",
-                                schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
+                                schema: <#schema_ty as ::seiva::schema::WireSchema>::schema,
                                 required: false,
                                 flatten: true,
                             }
@@ -338,15 +338,15 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
                     // field, or any field under a container-level `#[serde(default)]`.
                     let required = !is_option && !serde.not_required && !container.default;
                     field_descs.push(quote! {
-                        ::delonix_seiva::schema::Field {
+                        ::seiva::schema::Field {
                             name: #wire_name,
-                            schema: <#schema_ty as ::delonix_seiva::schema::WireSchema>::schema,
+                            schema: <#schema_ty as ::seiva::schema::WireSchema>::schema,
                             required: #required,
                             flatten: false,
                         }
                     });
                 }
-                quote! { ::delonix_seiva::schema::object_schema(&[ #(#field_descs),* ]) }
+                quote! { ::seiva::schema::object_schema(&[ #(#field_descs),* ]) }
             }
             _ => {
                 return syn::Error::new_spanned(
@@ -398,7 +398,7 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
                 };
                 variant_names.push(wire_name);
             }
-            quote! { ::delonix_seiva::schema::enum_schema(&[ #(#variant_names),* ]) }
+            quote! { ::seiva::schema::enum_schema(&[ #(#variant_names),* ]) }
         }
         Data::Union(_) => {
             return syn::Error::new_spanned(ident, "WireSchema does not support a union")
@@ -408,19 +408,19 @@ pub fn derive_wire_schema(item: TokenStream) -> TokenStream {
     };
 
     quote! {
-        impl ::delonix_seiva::schema::WireSchema for #ident {
-            fn schema() -> ::delonix_seiva::serde_json::Value {
+        impl ::seiva::schema::WireSchema for #ident {
+            fn schema() -> ::seiva::serde_json::Value {
                 #schema_body
             }
         }
 
         // Register the type by name so a generator with only a type-name string
         // (the facade descriptor carries names, not shapes) resolves the real
-        // schema through `delonix_seiva::schema::registered_schema`.
-        ::delonix_seiva::inventory::submit! {
-            ::delonix_seiva::schema::SchemaRegistration {
+        // schema through `seiva::schema::registered_schema`.
+        ::seiva::inventory::submit! {
+            ::seiva::schema::SchemaRegistration {
                 name: #name_str,
-                schema: <#ident as ::delonix_seiva::schema::WireSchema>::schema,
+                schema: <#ident as ::seiva::schema::WireSchema>::schema,
             }
         }
     }
@@ -797,7 +797,7 @@ fn is_ctx_type(ty: &Type) -> bool {
 /// where
 ///     __S: Notes + Clone + Send + Sync + 'static,
 /// {
-///     let descriptor = <NotesFacade as delonix_seiva::contract::Facade>::DESCRIPTOR;
+///     let descriptor = <NotesFacade as seiva::contract::Facade>::DESCRIPTOR;
 ///     let resource = /* "notes", from descriptor.name */;
 ///     let create = descriptor.method("create").expect("…");
 ///     axum::Router::new()
@@ -1047,12 +1047,12 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
             #user_predicates
         {
             let __descriptor =
-                <#facade_path as ::delonix_seiva::contract::Facade>::DESCRIPTOR;
+                <#facade_path as ::seiva::contract::Facade>::DESCRIPTOR;
             // Resource path segment from the descriptor. The rule lives in
-            // `delonix_seiva::contract::resource_segment` so route generation and
+            // `seiva::contract::resource_segment` so route generation and
             // the boot-time collision check (`route_collisions`) share one source
             // of truth and cannot drift apart.
-            let __resource = ::delonix_seiva::contract::resource_segment(__descriptor.name);
+            let __resource = ::seiva::contract::resource_segment(__descriptor.name);
             let mut __router: ::axum::Router<#self_ty> = ::axum::Router::new();
             #(#route_blocks)*
             __router.with_state(service)

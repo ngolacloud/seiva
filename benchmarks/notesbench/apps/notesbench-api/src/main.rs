@@ -74,7 +74,7 @@ async fn main() -> ExitCode {
 /// Emits this project's generated contract from the facades linked into this
 /// binary (the modules merged above), then exits. Driven by `seiva openapi`.
 fn emit_contract(kind: &str) -> ExitCode {
-    let facades = delonix_seiva::contract::registered_facades();
+    let facades = seiva::contract::registered_facades();
     match kind {
         "openapi" => {
             let doc = seiva_openapi::openapi_document(

@@ -4,10 +4,10 @@
 # `application/problem+json`; bodies are typed and validated; a permission guard
 # is driven by the facade's `MethodDescriptor.requires`; health endpoints report
 # a Starting/Ready/Draining lifecycle. DORM-FREE: this crate never links the data
-# layer. It depends on the contract (`delonix-seiva`, default features OFF so the
+# layer. It depends on the contract (`seiva`, default features OFF so the
 # `dorm` toggle stays off) and the trait-only ports.
 #
-# still resolving the `../delonix-seiva` and `../seiva-ports` path dependencies,
+# still resolving the `../seiva` and `../seiva-ports` path dependencies,
 # which keep their membership in the parent Seiva workspace.
 
 [package]
@@ -26,7 +26,7 @@ categories = ["web-programming::http-server"]
 [dependencies]
 # The contract crate, data-layer OFF: we read `FacadeDescriptor` to drive routing
 # and the permission guard. default-features = false keeps the `dorm` toggle off.
-delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
+seiva = { version = "0.1.0", path = "../seiva", default-features = false }
 # The trait-only ports: we map their opaque `BoxError` into an RFC 9457 problem.
 seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
 # The transport-neutral contract types: `Validate`/`ValidationError` live here so

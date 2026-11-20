@@ -1,6 +1,6 @@
 //! The descriptor-driven permission guard.
 //!
-//! A facade's [`MethodDescriptor.requires`](delonix_seiva::contract::MethodDescriptor)
+//! A facade's [`MethodDescriptor.requires`](seiva::contract::MethodDescriptor)
 //! names the permission a caller must hold. [`permission_guard`] is a tower
 //! middleware, parameterised by that string via [`RequiredPermission`], that
 //! reads the [`Principal`] a request carries and returns a `403`

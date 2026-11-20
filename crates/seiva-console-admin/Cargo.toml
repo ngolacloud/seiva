@@ -27,7 +27,7 @@ axum = "0.8"
 # reads to decide what to surface. Default features OFF (no DORM): the console
 # only reads the link-time descriptors. This is the one-way edge to the framework
 # contract; the base never depends on this crate.
-delonix-seiva = { version = "0.1.0", path = "../delonix-seiva", default-features = false }
+seiva = { version = "0.1.0", path = "../seiva", default-features = false }
 # The `Principal` the registry endpoint filters by (view permission). Transport-free.
 seiva-identity = { version = "0.1.0", path = "../seiva-identity" }
 # Builds the registry JSON response.

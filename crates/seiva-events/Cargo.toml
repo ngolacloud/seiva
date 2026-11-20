@@ -61,7 +61,7 @@ seiva-observability = { version = "0.1.0", path = "../seiva-observability", defa
 # dispatchers share their shutdown/metrics behaviour. `default-features = false`
 # keeps this DORM-free (the `dorm` feature is a marker and pulls no gateway, but we
 # stay explicit); the crate carries no data layer.
-delonix-seiva = { workspace = true, default-features = false }
+seiva = { workspace = true, default-features = false }
 # Only the `testing` double `InMemoryOutboxPublisher` parses the already-serialised
 # event payload into the CloudEvent `data`, so serde_json rides in exclusively with
 # that feature (a `--no-default-features` production build pulls none of it).
@@ -70,7 +70,7 @@ serde_json = { version = "1", optional = true }
 # sleeps `RelayPolicy::backoff` on the caller's runtime — the SAME `tokio::time::sleep`
 # the broker relay (`dorm_outbox::relay`) uses — so the two paths share one failure
 # policy. Only the `time` driver rides in; the crate still starts no runtime of its
-# own (tokio is already in the tree via `delonix-seiva`'s worker loop).
+# own (tokio is already in the tree via `seiva`'s worker loop).
 tokio = { workspace = true, features = ["time"] }
 # The single source of the framework's retry backoff schedule (ADR 0028, D-2):
 # `RelayPolicy::backoff` delegates to `seiva_resilience::RetryPolicy::backoff`, so the

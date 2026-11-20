@@ -1,7 +1,7 @@
 //! Trait-only ports the application layer codes against.
 //!
 //! A module's `application` crate depends on this crate — never on
-//! `delonix-seiva` — to declare the outbound capabilities a use case needs.
+//! `seiva` — to declare the outbound capabilities a use case needs.
 //! The `infrastructure` crate wires concrete implementations (DORM-backed or
 //! external); the framework resolves them at composition time. Keeping this
 //! crate free of any runtime, macro or data layer is what lets the application

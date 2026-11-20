@@ -23,7 +23,7 @@ version = "0.1.0"
 name = "accounts-facade"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
  "seiva-contract",
  "seiva-http",
  "serde",
@@ -47,7 +47,7 @@ dependencies = [
  "accounts-infrastructure",
  "async-trait",
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-auth",
  "seiva-http",
  "seiva-ports",
@@ -866,21 +866,6 @@ name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
-
-[[package]]
-name = "delonix-seiva"
-version = "0.1.0"
-dependencies = [
- "inventory",
- "seiva-macros",
- "seiva-ports",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "toml",
- "tracing",
-]
 
 [[package]]
 name = "der"
@@ -2021,7 +2006,7 @@ version = "0.1.0"
 name = "notes-facade"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
  "seiva-http",
 ]
 
@@ -2389,7 +2374,7 @@ version = "0.1.0"
 name = "polls-facade"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
 ]
 
 [[package]]
@@ -2973,6 +2958,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "seiva-macros",
+ "seiva-ports",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-auth"
 version = "0.1.0"
 dependencies = [
@@ -2986,7 +2986,7 @@ name = "seiva-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "delonix-seiva",
+ "seiva",
  "seiva-auth",
  "seiva-openapi",
  "serde_json",
@@ -3013,8 +3013,8 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
- "delonix-seiva",
  "http-body-util",
+ "seiva",
  "seiva-http",
  "seiva-identity",
  "serde_json",
@@ -3038,7 +3038,7 @@ name = "seiva-controller-test"
 version = "0.1.0"
 dependencies = [
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-http",
  "serde",
  "serde_json",
@@ -3060,9 +3060,9 @@ name = "seiva-events"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "delonix-seiva",
  "opentelemetry",
  "opentelemetry_sdk",
+ "seiva",
  "seiva-messaging",
  "seiva-observability",
  "seiva-ports",
@@ -3079,8 +3079,8 @@ dependencies = [
 name = "seiva-grpc"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
  "notes-facade",
+ "seiva",
  "seiva-contract",
  "tonic 0.12.3",
  "tracing",
@@ -3092,8 +3092,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "delonix-seiva",
  "metrics",
+ "seiva",
  "seiva-contract",
  "seiva-cqrs",
  "seiva-identity",
@@ -3161,8 +3161,8 @@ dependencies = [
 name = "seiva-openapi"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
  "notes-facade",
+ "seiva",
  "serde",
  "serde_json",
 ]
@@ -3200,7 +3200,7 @@ dependencies = [
  "accounts-infrastructure",
  "accounts-interface",
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-config",
  "seiva-http",
  "seiva-observability",
@@ -3435,7 +3435,7 @@ version = "0.1.0"
 name = "shop-catalog-facade"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
  "seiva-contract",
  "serde",
 ]
@@ -3458,7 +3458,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-http",
  "seiva-ports",
  "serde_json",
@@ -3489,7 +3489,7 @@ version = "0.1.0"
 name = "shop-inventory-facade"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
  "seiva-contract",
  "serde",
 ]
@@ -3512,7 +3512,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-http",
  "seiva-ports",
  "serde_json",
@@ -3543,7 +3543,7 @@ version = "0.1.0"
 name = "shop-notifications-facade"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
  "seiva-contract",
  "serde",
 ]
@@ -3566,7 +3566,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-http",
  "seiva-ports",
  "serde_json",
@@ -3599,7 +3599,7 @@ name = "shop-orders-facade"
 version = "0.1.0"
 dependencies = [
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-contract",
  "seiva-http",
  "serde",
@@ -3623,7 +3623,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-cqrs",
  "seiva-http",
  "seiva-ports",
@@ -3657,7 +3657,7 @@ version = "0.1.0"
 name = "shop-payments-facade"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
  "seiva-contract",
  "serde",
 ]
@@ -3680,7 +3680,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-http",
  "seiva-ports",
  "serde_json",

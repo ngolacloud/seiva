@@ -13,7 +13,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::{facade, WireId, WireSchema};
+use seiva::{facade, WireId, WireSchema};
 use seiva_contract::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 

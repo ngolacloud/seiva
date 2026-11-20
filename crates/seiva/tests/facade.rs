@@ -1,7 +1,7 @@
 //! Proves `#[seiva::facade]` generates the contract descriptor (ADR 0001).
 
-use delonix_seiva::contract::{Facade, Param};
-use delonix_seiva::facade;
+use seiva::contract::{Facade, Param};
+use seiva::facade;
 
 // A module's public contract, written the way a real `notes` module would.
 // `Ctx` and the DTOs stand in for real types; the macro reads only the

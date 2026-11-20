@@ -1,6 +1,6 @@
 # Application layer of the `orders` shop example: the service (facade impl) and the
 # outbound port. Depends on domain, its own facade (DTOs + trait) and
-# seiva-ports. Not on infrastructure, interface, or delonix-seiva directly
+# seiva-ports. Not on infrastructure, interface, or seiva directly
 # (ADR 0003).
 [package]
 name = "shop-orders-application"
@@ -15,7 +15,7 @@ shop-orders-facade = { path = "../facade" }
 seiva-ports = { workspace = true }
 # CQRS dispatch for the `orders` module: a `PlaceOrder` command + a cached
 # `GetOrder` query through a Mediator. CQRS lives in the application layer, and
-# `seiva-cqrs` is allowed there (the layering rule only forbids `delonix-seiva`).
+# `seiva-cqrs` is allowed there (the layering rule only forbids `seiva`).
 seiva-cqrs = { path = "../../../../crates/seiva-cqrs" }
 # Domain events are published as a JSON envelope (the DORM outbox publisher
 # parses the payload as JSON).

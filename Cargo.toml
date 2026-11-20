@@ -57,7 +57,7 @@ members = [
     # DORM-free and broker-free (the outbox driver/worker is Fase 2, DORM-coupled).
     "crates/seiva-events",
     # The framework crate: the public entrypoint downstream apps depend on.
-    "crates/delonix-seiva",
+    "crates/seiva",
     # The HTTP transport: axum/tower, RFC 9457 errors, facade-driven permission
     # guard, health endpoints. Data-layer-free, so a workspace member.
     "crates/seiva-http",
@@ -188,7 +188,7 @@ seiva-ports = { version = "0.1.0", path = "crates/seiva-ports" }
 # true` the member-level `default-features` key is ignored, so the DORM toggle
 # must be declared off at the workspace root and re-enabled by `seiva-cli`'s
 # own `dorm` feature.
-delonix-seiva = { version = "0.1.0", path = "crates/delonix-seiva", default-features = false }
+seiva = { version = "0.1.0", path = "crates/seiva", default-features = false }
 seiva-testing = { version = "0.1.0", path = "crates/seiva-testing" }
 seiva-macros = { version = "0.1.0", path = "crates/seiva-macros" }
 async-trait = "0.1"

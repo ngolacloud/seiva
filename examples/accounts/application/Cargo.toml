@@ -1,7 +1,7 @@
 # Application layer of the `accounts` example: the service (facade impl), the
 # outbound port, and the use cases. Depends on domain, its own facade (DTOs +
 # trait), seiva-ports and seiva-auth (for Argon2id hashing). Not on
-# infrastructure, interface, or delonix-seiva directly (ADR 0003).
+# infrastructure, interface, or seiva directly (ADR 0003).
 #
 # NOTE (temp isolated workspace): framework crates are declared by explicit path
 # rather than `{ workspace = true }` because this nested workspace cannot read

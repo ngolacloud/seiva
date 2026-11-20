@@ -18,7 +18,7 @@ description = "Standalone proof that #[seiva::controller] generates a facade-dri
 # The contract crate, data layer OFF: it provides both macros under test through
 # their public path (`#[seiva::facade]`, `#[seiva::controller]`) and the
 # generated facade descriptor the router reads.
-delonix-seiva = { path = "../delonix-seiva", default-features = false }
+seiva = { path = "../seiva", default-features = false }
 # The transport the generated code references: Problem, Valid/Validate, the
 # permission guard and RequiredPermission.
 seiva-http = { path = "../seiva-http" }

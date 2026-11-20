@@ -1,4 +1,4 @@
-# delonix-seiva — the framework crate downstream applications depend on.
+# seiva — the framework crate downstream applications depend on.
 #
 # The public entrypoint of Delonix Seiva. Re-exports the ports and, as the
 # framework grows, the HTTP/gRPC runtime, the application-layer command/query
@@ -6,7 +6,7 @@
 # dependency here: it enters only through the separate `seiva-data-dorm` gateway
 # behind the `dorm` feature (ADR 0001, decision 5).
 [package]
-name = "delonix-seiva"
+name = "seiva"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

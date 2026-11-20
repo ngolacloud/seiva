@@ -15,9 +15,9 @@
 
 #![forbid(unsafe_code)]
 
-// Let macro-generated code name this crate by its absolute path (`::delonix_seiva::..`)
+// Let macro-generated code name this crate by its absolute path (`::seiva::..`)
 // even inside this crate's own tests, mirroring how downstream code sees it.
-extern crate self as delonix_seiva;
+extern crate self as seiva;
 
 /// The trait-only boundary the application layer codes against.
 pub mod ports {
@@ -48,12 +48,12 @@ pub use id::WireId;
 pub use seiva_macros::facade;
 
 /// Re-exported so the code `#[seiva::facade]` generates can submit each facade
-/// into the discovery inventory via `::delonix_seiva::inventory::submit!` without
+/// into the discovery inventory via `::seiva::inventory::submit!` without
 /// the facade crate depending on `inventory` directly.
 pub use inventory;
 
 /// Re-exported so `#[derive(WireSchema)]` output can name `serde_json::Value`
-/// (`::delonix_seiva::serde_json::Value`) without the DTO's crate depending on
+/// (`::seiva::serde_json::Value`) without the DTO's crate depending on
 /// `serde_json` directly.
 pub use serde_json;
 

@@ -1,6 +1,6 @@
 # Application layer of the `payments` shop example: the service (facade impl) and the
 # outbound port. Depends on domain, its own facade (DTOs + trait) and
-# seiva-ports. Not on infrastructure, interface, or delonix-seiva directly
+# seiva-ports. Not on infrastructure, interface, or seiva directly
 # (ADR 0003).
 [package]
 name = "shop-payments-application"

@@ -123,8 +123,8 @@ fn between<'a>(haystack: &'a str, open: &str, close: &str) -> &'a str {
 
 // --- The registry endpoint, end to end over the real link-time inventory ------
 
-use delonix_seiva::admin::{AdminPermissions, AdminResource};
-use delonix_seiva::register_admin;
+use seiva::admin::{AdminPermissions, AdminResource};
+use seiva::register_admin;
 use seiva_identity::Principal;
 
 // A real registration in THIS test binary's inventory (non-conflicting).
@@ -199,7 +199,7 @@ fn shipped_extension_manifest_matches_the_builtin_contract() {
     // independent DX reads; `seiva`'s built-in manifest must agree with it, or a
     // DX-driven install and a `seiva ext add` would wire the crate differently.
     let shipped = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/seiva-extension.toml"));
-    let builtin = delonix_seiva::scaffold::CONSOLE_ADMIN_EXTENSION;
+    let builtin = seiva::scaffold::CONSOLE_ADMIN_EXTENSION;
     assert!(shipped.contains(&format!("crate = \"{}\"", builtin.crate_name)));
     assert!(shipped.contains(&format!("version = \"{}\"", builtin.version_req)));
     assert!(shipped.contains(&format!("mount = \"{}\"", builtin.mount_stmt)));

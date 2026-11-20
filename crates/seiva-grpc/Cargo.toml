@@ -18,7 +18,7 @@ description = "Delonix Seiva — gRPC artefact generation (proto3 + tonic Status
 publish = false
 
 [dependencies]
-delonix-seiva = { path = "../delonix-seiva", default-features = false }
+seiva = { path = "../seiva", default-features = false }
 # Optional and deliberately light: with default features off, tonic contributes
 # only its `Status`/`Code` core — no hyper/h2/tower/prost. Used solely to map a
 # facade error into a gRPC `Status` under the `tonic` feature.

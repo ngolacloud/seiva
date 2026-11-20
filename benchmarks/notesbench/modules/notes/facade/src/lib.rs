@@ -9,10 +9,10 @@
 //! so the write DTO derives `serde` and implements `seiva_http::Validate`,
 //! the response DTO derives `serde::Serialize`, and the error maps to an
 //! RFC 9457 `Problem` here — the module owns its wire contract. Hence this
-//! layer depends on `delonix-seiva`, `serde` and `seiva-http`.
+//! layer depends on `seiva`, `serde` and `seiva-http`.
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::{facade, WireSchema};
+use seiva::{facade, WireSchema};
 use seiva_http::{Problem, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 

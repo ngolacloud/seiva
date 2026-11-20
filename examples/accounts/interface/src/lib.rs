@@ -46,8 +46,8 @@
 
 use std::sync::Arc;
 
-use delonix_seiva::admin::{AdminPermissions, AdminResource};
-use delonix_seiva::{controller, register_admin};
+use seiva::admin::{AdminPermissions, AdminResource};
+use seiva::{controller, register_admin};
 
 use accounts_application::{AccountsService, CredentialRepository};
 use accounts_facade::{Accounts, AccountsFacade, CreateUser, GetUser, UserDto, UserError};
@@ -55,7 +55,7 @@ use seiva_http::Ctx;
 use seiva_ports::{EventPublisher, IdGenerator, Scope, UnitOfWork};
 
 // Make `accounts` visible to the optional admin console (ADR 0009). This couples
-// the module only to the framework contract (`delonix-seiva`), NOT to the admin
+// the module only to the framework contract (`seiva`), NOT to the admin
 // UI crate: with the console unmounted this is inert link-time data. A module
 // that omits this registration stays private to the console. The resource id
 // matches the module's route segment (`/v1/accounts/...`) so the console can

@@ -24,7 +24,7 @@ name = "admin-data-e2e"
 path = "src/main.rs"
 
 [dependencies]
-delonix-seiva = { path = "../../crates/delonix-seiva", default-features = false }
+seiva = { path = "../../crates/seiva", default-features = false }
 seiva-ports = { path = "../../crates/seiva-ports" }
 seiva-http = { path = "../../crates/seiva-http" }
 seiva-server = { path = "../../crates/seiva-server" }

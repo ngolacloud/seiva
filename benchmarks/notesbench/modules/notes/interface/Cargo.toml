@@ -13,7 +13,7 @@ notes-facade = { path = "../facade" }
 notes-application = { path = "../application" }
 # The controller macro + contract, the HTTP primitives it emits, and the
 # OpenAPI generator — all driven by the facade descriptor.
-delonix-seiva = { version = "0.1", default-features = false }
+seiva = { version = "0.1", default-features = false }
 seiva-http = "0.1"
 seiva-openapi = "0.1"
 seiva-ports = "0.1"

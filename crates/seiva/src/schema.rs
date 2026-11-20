@@ -23,14 +23,14 @@
 //! The derive output has a hand-written equivalent. For
 //!
 //! ```ignore
-//! #[derive(delonix_seiva::WireSchema)]
+//! #[derive(seiva::WireSchema)]
 //! struct CreateNote { title: String }
 //! ```
 //!
 //! it is:
 //!
 //! ```
-//! use delonix_seiva::schema::{object_schema, Field, WireSchema};
+//! use seiva::schema::{object_schema, Field, WireSchema};
 //!
 //! struct CreateNote { title: String }
 //!
@@ -305,7 +305,7 @@ mod tests {
     //
     // These exercise `#[derive(WireSchema)]` end to end — nested DTOs, Option,
     // arrays, bytes and enums — the shapes §8 requires the contract to describe
-    // faithfully. `extern crate self as delonix_seiva` lets the derive resolve.
+    // faithfully. `extern crate self as seiva` lets the derive resolve.
 
     #[derive(crate::WireSchema)]
     #[allow(dead_code)]

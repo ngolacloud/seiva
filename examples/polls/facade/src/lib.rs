@@ -17,7 +17,7 @@
 
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::{facade, WireSchema};
+use seiva::{facade, WireSchema};
 
 /// Command DTO: create a question (Django: `Question(question_text=…)`).
 #[derive(Debug, Clone, WireSchema)]

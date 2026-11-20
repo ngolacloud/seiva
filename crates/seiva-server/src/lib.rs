@@ -12,7 +12,7 @@
 //!   controllers and calls [`serve_router`]; the `accounts` composition is
 //!   exercised in this crate's tests. See [`serve`].
 //! - **Runs a background worker host** on the framework's worker runtime
-//!   ([`delonix_seiva::worker::run_worker`]). See [`run_workers`].
+//!   ([`seiva::worker::run_worker`]). See [`run_workers`].
 //! - **Reads 12-factor configuration** from the environment with [`seiva_config`],
 //!   validated at startup and guarded against dev shortcuts in production. See
 //!   [`ServerConfig`].
@@ -56,8 +56,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use axum::Router;
-use delonix_seiva::ports::PortResult;
-use delonix_seiva::worker::{run_worker, WorkerConfig};
+use seiva::ports::PortResult;
+use seiva::worker::{run_worker, WorkerConfig};
 use std::sync::Arc;
 
 use seiva_config::{EnvReader, FromEnv};
@@ -66,7 +66,7 @@ use seiva_http::{
 };
 use tokio::net::TcpListener;
 
-pub use delonix_seiva::worker::WorkerReport;
+pub use seiva::worker::WorkerReport;
 pub use seiva_config::{AppEnv, ConfigError};
 
 /// Structured logging for a Seiva service (12-factor: logs are an event stream
@@ -730,7 +730,7 @@ pub async fn demo_pass() -> PortResult<u64> {
 /// [`WorkerReport`] per worker.
 ///
 /// Today it drives a single worker over [`demo_pass`] through
-/// [`delonix_seiva::worker::run_worker`], which owns the loop, the interval, the
+/// [`seiva::worker::run_worker`], which owns the loop, the interval, the
 /// shutdown check and the metrics. A resolved `shutdown` ends the host within one
 /// pass.
 ///
@@ -745,8 +745,8 @@ pub async fn run_workers(shutdown: impl Future<Output = ()> + Send) -> Vec<Worke
 
 /// Runs a background worker that purges expired idempotency records (ADR 0011) on
 /// `config.interval` until `shutdown` resolves. Each pass runs
-/// [`IdempotencyStore::purge_expired`](delonix_seiva::ports::IdempotencyStore::purge_expired)
-/// inside a [`UnitOfWork`](delonix_seiva::ports::UnitOfWork) transaction — the
+/// [`IdempotencyStore::purge_expired`](seiva::ports::IdempotencyStore::purge_expired)
+/// inside a [`UnitOfWork`](seiva::ports::UnitOfWork) transaction — the
 /// DORM store's purge needs an open session — and reports how many it removed.
 ///
 /// The composition root wires it next to [`serve`]; both share one `shutdown`.
@@ -759,15 +759,15 @@ pub async fn run_idempotency_purge<U, St, Sh>(
     shutdown: Sh,
 ) -> WorkerReport
 where
-    U: delonix_seiva::ports::UnitOfWork + 'static,
-    St: delonix_seiva::ports::IdempotencyStore + 'static,
+    U: seiva::ports::UnitOfWork + 'static,
+    St: seiva::ports::IdempotencyStore + 'static,
     Sh: Future<Output = ()>,
 {
     run_worker(config, shutdown, move || {
         let uow = std::sync::Arc::clone(&uow);
         let store = std::sync::Arc::clone(&store);
         async move {
-            uow.transaction(delonix_seiva::ports::Scope::Global, move || async move {
+            uow.transaction(seiva::ports::Scope::Global, move || async move {
                 store.purge_expired().await
             })
             .await

@@ -12,12 +12,12 @@
 //! module and `examples/notes` — the write DTOs derive `serde` and implement
 //! [`seiva_contract::Validate`], the response DTO derives [`serde::Serialize`], and
 //! the error maps to an RFC 9457 [`Problem`] here. Hence this layer depends on
-//! `delonix-seiva`, `serde` and `seiva-http`.
+//! `seiva`, `serde` and `seiva-http`.
 
 #![forbid(unsafe_code)]
 #![allow(async_fn_in_trait)]
 
-use delonix_seiva::{facade, WireSchema};
+use seiva::{facade, WireSchema};
 use seiva_contract::{Problem, Validate, ValidationError};
 use seiva_http::Ctx;
 use serde::{Deserialize, Serialize};

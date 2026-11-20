@@ -25,8 +25,8 @@
 
 use std::sync::Arc;
 
-use delonix_seiva::contract::Facade;
-use delonix_seiva::controller;
+use seiva::contract::Facade;
+use seiva::controller;
 use seiva_ports::IdGenerator;
 use notes_application::{RecordRepository, RecordService};
 use notes_facade::{CreateRecord, RecordDto, RecordError, Notes, NotesFacade};

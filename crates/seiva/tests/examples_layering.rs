@@ -1,7 +1,7 @@
 //! CI gate: the canonical `examples/**` modules obey the Clean-Architecture layer
 //! dependency rule (ADR 0003), enforced here so a regression fails `cargo test`.
 //!
-//! The layer rule (`delonix_seiva::lint`) was a fitness function only ever run by
+//! The layer rule (`seiva::lint`) was a fitness function only ever run by
 //! `seiva lint` over a project's `modules/` — never over the reference modules in
 //! `examples/`, where every scaffolded module is copied from. So a forbidden
 //! inter-layer edge added to an example (a `facade` reaching into `infrastructure`,
@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use delonix_seiva::lint::{
+use seiva::lint::{
     check_data_layer_neutrality, check_layers, check_scope_policy, scan_module_layers,
     scan_scope_sources,
 };

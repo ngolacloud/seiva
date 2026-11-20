@@ -15,8 +15,8 @@ publish = false
 
 [dependencies]
 # The framework's worker runtime (the loop/shutdown/metrics) and the boundary
-# error type. `delonix-seiva` is data-layer-free, so no DORM feature is pulled.
-delonix-seiva = { path = "../delonix-seiva", default-features = false }
+# error type. `seiva` is data-layer-free, so no DORM feature is pulled.
+seiva = { path = "../seiva", default-features = false }
 seiva-ports = { path = "../seiva-ports" }
 # DORM's RAG indexing library — the one-pass `run_once` and the `Embedder` trait.
 # Pinned to the same git revision as seiva-outbox-relay.

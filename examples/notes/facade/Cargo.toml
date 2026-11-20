@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-delonix-seiva = { workspace = true }
+seiva = { workspace = true }
 # The contract carries the framework request context `&Ctx` on its write methods
 # (the macro skips it from the wire, ADR 0006): the interface derives the tenant
 # `Scope` from it server-side (SG1 / ADR 0029), never from the request body. The

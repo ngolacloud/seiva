@@ -8,7 +8,7 @@
 //! descriptor-driven behaviour (version in the path, per-route permission guard,
 //! RFC 9457 problems).
 //!
-//! Both macros are used through their public path on `delonix-seiva`
+//! Both macros are used through their public path on `seiva`
 //! (`#[seiva::facade]`, `#[seiva::controller]`), the way a downstream module
 //! sees them — the proc-macro crate is an implementation detail.
 
@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use delonix_seiva::{controller, facade};
+use seiva::{controller, facade};
 use seiva_http::{Problem, Validate, ValidationError};
 
 /// Write DTO for `create`. Deserialised from the JSON body and validated by the

@@ -17,7 +17,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use delonix_seiva::worker::{run_worker, WorkerConfig, WorkerReport};
+use seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 use dorm_core::value::Value;
 use dorm_core::{db, Error, Result};
 use dorm_outbox::{RelayConfig, CURSOR, DEAD, OUTBOX};

@@ -246,7 +246,7 @@ impl EventPublisher for DormOutboxPublisher {
             serde_json::from_slice(payload).map_err(|e| Box::new(e) as BoxError)?;
         let mut event = CloudEvent::new(
             uuid::Uuid::new_v4().to_string(),
-            "urn:delonix-seiva:data-layer",
+            "urn:seiva:data-layer",
             topic,
             data,
         );
