@@ -1,0 +1,75 @@
+# seiva-jobs — the composition root that RUNS the ADR 0034 webhook delivery job.
+#
+# `seiva-webhook-delivery` owns `run_delivery_worker` (the ADR 0034 job on the
+# shared `seiva-worker` loop) but is DORM-free and http-client-free: it leaves
+# three seams open — the durable `DeliveryLedger`, the real `HttpSender`, and the
+# `SigningSecrets` resolver. This crate is the first place those three are bound to
+# PRODUCTION adapters and the worker is actually started:
+#
+#   * the ledger  → `seiva_data_dorm::DormDeliveryLedger` (one PostgreSQL table);
+#   * the sender  → a reqwest/TLS `HttpSender` (`ReqwestSender`, below);
+#   * the secrets → a `StaticSecrets` map loaded from the deployment's config.
+#
+# It is a runnable service (`src/main.rs`): read config from the environment,
+# connect the DORM handle, ensure the delivery table exists, compose the engine,
+# and drain the ledger on the worker loop until SIGTERM/Ctrl-C.
+#
+# Because it binds `seiva-data-dorm` (DORM-coupled) plus reqwest + rustls, it is —
+# like its `apps/*` siblings (`dorm-e2e`, `webhook-delivery-e2e`) — EXCLUDED from
+# the default Seiva workspace and carries its own Cargo.lock. Nothing in
+# `cargo check --workspace` links it; a dedicated CI job builds and tests it via
+# `--manifest-path`.
+[package]
+name = "seiva-jobs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "seiva-jobs"
+path = "src/main.rs"
+
+[dependencies]
+# The DORM-backed delivery ledger (the durable source of truth) + connect/config
+# + the idempotent delivery-table DDL. All DORM coupling lives behind this gateway.
+seiva-data-dorm = { path = "../../crates/seiva-data-dorm" }
+# The ADR 0034 job this crate starts: `run_delivery_worker` on the shared worker
+# loop. Default features keep `testing` on (the in-memory `InMemorySubscriptions`
+# the e2e enqueues through); harmless for the binary.
+seiva-webhook-delivery = { path = "../../crates/seiva-webhook-delivery" }
+# The engine + its ports (DeliveryEngine/DeliveryConfig/HttpSender/SigningSecrets)
+# the composition binds concrete adapters under.
+seiva-webhooks = { path = "../../crates/seiva-webhooks" }
+# The framework worker runtime re-export (WorkerConfig/WorkerReport). Data-layer
+# free, so default features (the `dorm` toggle) are off here.
+seiva = { path = "../../crates/seiva", default-features = false }
+# DORM used directly for the startup migration (db::with_session + db::run) and
+# the e2e's raw-SQL clean slate. Published version, same as the gateway resolves.
+dorm-core = "0.6"
+# The reqwest/TLS `HttpSender` adapter this crate adds. `default-features = false`
+# + `rustls-tls` keeps it off native-tls/OpenSSL — a self-contained TLS stack.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# The HttpSender trait method is async and object-safe; erase it with async-trait.
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros", "net", "sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+# The enqueue side the e2e drives: the subscriber (ADR 0021) + the in-memory
+# subscription catalogue + delivery_id. Through the real `seiva_events::dispatch`.
+seiva-events = { path = "../../crates/seiva-events" }
+seiva-messaging = { path = "../../crates/seiva-messaging", default-features = false }
+# The unit of work + the DORM inbox the e2e enqueues inside, plus the idempotency
+# DDL. `DormDeliveryLedger`/`connect`/`DormConfig` come from the main dep above.
+seiva-ports = { path = "../../crates/seiva-ports" }
+# The webhook signer/verifier the local HTTPS receiver checks each delivery with.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+serde_json = "1"
+# The local HTTPS test server: axum extracts + verifies the signature, axum-server
+# serves rustls TLS over a bound std listener (so the e2e learns the ephemeral
+# port), rcgen mints a self-signed cert. rustls needs an explicit ring provider.
+axum = "0.7"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.13"
+rustls = { version = "0.23", features = ["ring"] }

@@ -1,0 +1,68 @@
+# seiva-webhook-delivery — wire the ADR 0033 delivery engine into the runtime.
+#
+# `seiva-webhooks` (behind its `delivery` feature) owns the engine: the ledger
+# port, the signer, the per-POST timeout, the retry/breaker and the egress guard.
+# This crate is the thin, DORM-free *wiring* around it:
+#
+#   * a `seiva-events` subscriber (ADR 0021) that turns one published domain event
+#     into one `pending` delivery row per matching subscription — enqueued inside
+#     the handler, i.e. in the SAME transaction as the event is consumed in the
+#     integrated driver (exactly like the idempotency reservation of ADR 0011);
+#   * the delivery *job* (ADR 0034): a one-pass `DeliveryEngine::tick` the shared
+#     `seiva-worker` loop drives, so delivery is durable, leased and N-replica safe
+#     by construction — no new loop is written.
+#
+# It links NO http client and NO data layer: the real `HttpSender` adapter
+# (reqwest/TLS) and a DORM-backed `DeliveryLedger` live in the EXCLUDED, heavier
+# crates. This crate stays a default workspace member, DORM-free and offline.
+[package]
+name = "seiva-webhook-delivery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Wire the ADR 0033 webhook delivery engine into the runtime: a seiva-events subscriber that enqueues one delivery per subscription, and the DeliveryEngine::tick job on the shared worker loop. DORM-free, http-client-free."
+
+[features]
+# `testing` exposes the in-memory `InMemorySubscriptions` double so the enqueue
+# side is proved OFFLINE. ON by default so the crate's own tests/lints see it with
+# no extra flags; a production consumer drops it with `default-features = false`
+# (it resolves subscriptions from its own catalogue, not this double).
+default = ["testing"]
+testing = []
+
+[dependencies]
+# The engine, the ledger port, the signer port and the delivery row types
+# (ADR 0033). `delivery` is on by default; this crate uses only those ports.
+seiva-webhooks = { version = "0.1.0", path = "../seiva-webhooks" }
+# The `EventSubscriber` trait the subscriber plugs into (ADR 0021). DORM-free.
+seiva-events = { version = "0.1.0", path = "../seiva-events", default-features = false }
+# The CloudEvents envelope the subscriber reacts to — the SAME event the broker
+# path carries. `default-features = false` pulls no broker backend.
+seiva-messaging = { version = "0.1.0", path = "../seiva-messaging", default-features = false }
+# The tenant `Scope` a subscription (and thus every delivery) is keyed under, plus
+# the `PortResult`/`BoxError` boundary the subscriber and the job return on.
+seiva-ports = { workspace = true }
+# The framework worker runtime (`run_worker`/`WorkerConfig`/`WorkerReport`) the
+# delivery job loops on — the SAME loop the outbox relay and the in-process
+# dispatcher use. `default-features = false` keeps the DORM toggle off; no data
+# layer rides in.
+seiva = { workspace = true, default-features = false }
+# The subscriber trait is object-safe (`Arc<dyn EventSubscriber>` at the
+# composition edge), so its async method is erased with `async-trait`.
+async-trait = { workspace = true }
+# Each enqueue is a near-free `tracing` event; a payload/secret is never a field.
+tracing = "0.1"
+# Serialise the CloudEvent envelope into the signed-and-POSTed delivery body.
+serde_json = "1"
+
+[dev-dependencies]
+# Drive the async subscriber/dispatch on a current-thread runtime; the library
+# brings no runtime of its own.
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+# The in-memory `IdempotencyStore` double, so the subscriber is proved through the
+# real `seiva_events::dispatch` path with no broker and no database.
+seiva-testing = { workspace = true }

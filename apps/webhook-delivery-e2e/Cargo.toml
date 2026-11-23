@@ -1,0 +1,52 @@
+# webhook-delivery-e2e — the real HttpSender adapter + the end-to-end proof of
+# the ADR 0033 delivery path wired to the runtime.
+#
+# It binds the one seam the DORM-free `seiva-webhook-delivery` leaves open — a
+# REAL `HttpSender` over reqwest/TLS — and proves the whole wire: a published
+# event is enqueued by the subscriber (ADR 0021), one `DeliveryEngine::tick`
+# (the ADR 0034 job) signs and POSTs it over local HTTPS, and the ledger records
+# a `Delivered` row with the receiver having VERIFIED the signature.
+#
+# reqwest + rustls + a TLS test server (axum-server + rcgen) are heavy, so — like
+# the DORM-coupled siblings — this crate is EXCLUDED from the default Seiva
+# workspace (root `exclude`) and built by its own dedicated CI job via
+# `--manifest-path`. Nothing in the default `cargo check --workspace` links it.
+[package]
+name = "webhook-delivery-e2e"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# The engine + its ports (HttpSender/HttpResponse/SendError) the adapter implements.
+seiva-webhooks = { path = "../../crates/seiva-webhooks" }
+# A real HTTP client is exactly what this crate adds. `default-features = false` +
+# `rustls-tls` keeps it off native-tls/OpenSSL — a self-contained TLS stack.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# The HttpSender trait method is async and object-safe; erase it with async-trait.
+async-trait = "0.1"
+
+[dev-dependencies]
+# The runtime wiring the e2e drives: the subscriber (enqueue side) and the
+# DeliveryEngine::tick job (send side). Only the test composes them.
+seiva-webhook-delivery = { path = "../../crates/seiva-webhook-delivery" }
+# The bus entrypoint the e2e enqueues through, and the in-memory inbox the
+# dispatch dedups against.
+seiva-events = { path = "../../crates/seiva-events" }
+seiva-messaging = { path = "../../crates/seiva-messaging", default-features = false }
+seiva-ports = { path = "../../crates/seiva-ports" }
+seiva-testing = { path = "../../crates/seiva-testing" }
+# A multi-thread runtime so the local TLS server and the engine's POST run truly
+# concurrently (the server must accept while the tick is awaiting the response).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+# The local HTTPS test server: axum for request extraction + signature check,
+# axum-server for a rustls TLS listener over a bound std TcpListener (so the e2e
+# learns the ephemeral port), and rcgen for a self-signed server certificate.
+axum = "0.7"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.13"
+# rustls 0.23 needs a process-wide crypto provider installed before a ServerConfig
+# is built; install ring explicitly so the server never panics on first handshake.
+rustls = { version = "0.23", features = ["ring"] }
+serde_json = "1"

@@ -68,9 +68,12 @@ tracing = "0.1"
 # preflight. Only the `cors` feature; the secure default mounts no layer at all.
 tower-http = { version = "0.6", features = ["cors", "timeout"] }
 # Per-route load control (`backpressure`): `time::timeout` bounds a route's
-# latency (504) and a `sync::Semaphore` enforces its concurrency cap (503). Only
-# the `time`/`sync` leaves — no runtime is pulled into the DORM-free library.
-tokio = { version = "1", default-features = false, features = ["time", "sync"] }
+# latency (504) and a `sync::Semaphore` enforces its concurrency cap (503). The
+# `rt` leaf adds only `tokio::task::spawn_blocking`, which the authn middleware
+# uses to offload a CPU-bound JWT signature check off the async executor — the
+# binary still provides the runtime; this just exposes the offload API. No
+# executor/reactor is pulled into the DORM-free library beyond these leaves.
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.

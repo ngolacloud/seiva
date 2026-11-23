@@ -32,6 +32,19 @@ exclude = [
     # (`Catalog`) the console drives over PG. DORM-coupled, so excluded like the
     # siblings; built by the token-gated `dorm-gateway` job.
     "apps/admin-data-e2e",
+    # The ADR 0033 delivery end-to-end proof: the REAL reqwest/TLS `HttpSender`
+    # adapter + an e2e that signs and POSTs over a LOCAL HTTPS server. DORM-free,
+    # but reqwest + rustls + a TLS test server are heavy, so it is excluded from
+    # the default workspace (like the siblings) and built by its own dedicated CI
+    # job via `--manifest-path`. Nothing in `cargo check --workspace` links it.
+    "apps/webhook-delivery-e2e",
+    # The ADR 0034 delivery JOB composition root: the real `seiva-jobs` service
+    # that composes the DORM delivery ledger + the reqwest/TLS `HttpSender` + the
+    # signing secrets and runs `run_delivery_worker` to drain the ledger. DORM-
+    # coupled (via the ledger) and links reqwest + rustls, so — like the siblings —
+    # it is excluded from the default workspace and built by its own job via
+    # `--manifest-path`. Nothing in `cargo check --workspace` links it.
+    "apps/seiva-jobs",
 ]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,
@@ -75,6 +88,18 @@ members = [
     # base dependency; a multi-replica deployment opts in. A member so CI builds
     # and audits it (the `redis` client is not DORM-git-coupled).
     "crates/seiva-ratelimit-redis",
+    # The OPTIONAL real-time hub (ADR 0031): a protocol-neutral WebSocket + SSE
+    # fan-out primitive. DORM-free and runtime-free by default (the axum transport
+    # is behind the `ws` feature, the Redis bridge behind `redis-bridge`); a member
+    # so CI builds/tests it, but nothing in the base depends on it.
+    "crates/seiva-realtime",
+    # The OPTIONAL object store (ADR 0032): a tenant-aware, fail-closed
+    # `ObjectStore` port with a path-confined local-fs adapter (streaming,
+    # multipart, presigned URLs) and a seiva-resilience decorator. DORM-free and
+    # runtime-free by default (no executor linked; the vendor S3 adapter is a
+    # future feature); a member so CI builds/tests it, nothing in the base
+    # depends on it.
+    "crates/seiva-storage",
     # Password/credential primitives (Argon2id PHC) — accounts out of DORM's CLI.
     "crates/seiva-auth",
     # Identity: one verified Principal + Authenticator (OIDC/JWT via JWKS). Transport-free.
@@ -83,6 +108,12 @@ members = [
     "crates/seiva-config",
     # Standard Webhooks signing/verification (HMAC-SHA256, replay window).
     "crates/seiva-webhooks",
+    # Wiring of the ADR 0033 delivery engine into the runtime: a seiva-events
+    # subscriber that enqueues one delivery per subscription (ADR 0021) and the
+    # DeliveryEngine::tick job on the shared worker loop (ADR 0034). DORM-free and
+    # http-client-free (the real reqwest sender lives in the excluded e2e crate),
+    # so a default member.
+    "crates/seiva-webhook-delivery",
     # Production resilience primitives: a circuit breaker (closed/open/half-open),
     # a retry policy with exponential backoff (the SAME schedule as the outbox
     # relay's RelayPolicy) and a timeout wrapper. Data-layer-free, so a member.

@@ -194,15 +194,36 @@ pub async fn authn(State(authn): State<Authn>, mut request: Request, next: Next)
         .strip_prefix("Bearer ")
         .or_else(|| header.strip_prefix("bearer "))
         .unwrap_or("")
-        .trim();
+        .trim()
+        .to_owned();
 
-    match bearer_auth.authenticate(bearer) {
-        Ok(principal) => {
+    // The bearer path is where a JWT verifier lives, and its RSA/ECDSA signature
+    // check is CPU-bound and synchronous. Run it on the blocking pool so a burst of
+    // verifications never stalls the async executor; a cheap static-token lookup
+    // pays only one thread hop. The authenticator is `Send + Sync` behind an `Arc`.
+    let bearer_auth = Arc::clone(bearer_auth);
+    match tokio::task::spawn_blocking(move || bearer_auth.authenticate(&bearer)).await {
+        Ok(Ok(principal)) => {
             request.extensions_mut().insert(Arc::new(principal));
             next.run(request).await
         }
-        Err(_) => unauthorized(request, "Bearer"),
+        Ok(Err(_)) => unauthorized(request, "Bearer"),
+        // The verification task panicked — an internal fault, never an auth pass.
+        Err(_) => auth_unavailable(request),
     }
+}
+
+/// Build the `500` RFC 9457 response for an authentication task that failed to
+/// run to completion (e.g. a panic inside the verifier). Deny by default: a
+/// verifier that cannot produce a verdict is an internal fault, never a pass.
+fn auth_unavailable(request: Request) -> Response {
+    let request_id = request.extensions().request_id();
+    ProblemResponse(
+        Problem::internal("the authentication service failed")
+            .with_instance(request.uri().path().to_owned())
+            .with_request_id_opt(request_id),
+    )
+    .into_response()
 }
 
 /// Build the `401` RFC 9457 response for a present-but-invalid credential, tagged

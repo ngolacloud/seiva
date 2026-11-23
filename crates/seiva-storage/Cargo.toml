@@ -1,0 +1,53 @@
+# seiva-storage — a pluggable, tenant-aware object-store port (ADR 0032).
+#
+# Seiva has a data layer for RECORDS and nothing for BLOBS. This crate is the
+# blob half: an `ObjectStore` port (streaming both ways, never buffering a whole
+# object) whose keys are resolved under a per-tenant prefix taken from the
+# ambient `Scope` — fail-closed on a missing scope (ADR 0019), so a blob keyed
+# only by a product-chosen name can never cross tenants. The default adapter
+# `LocalFsObjectStore` is a directory tree confined to its tenant prefix
+# (rejecting `..`, absolute paths and symlink escape); the vendor S3 adapter
+# lives behind a feature so the core links no AWS SDK.
+#
+# DORM-FREE and zero-cost when unused: `tokio` enters with NO runtime feature
+# (only `io-util` + `fs` for the streaming local adapter), so the default build
+# links no executor — a service that stores nothing pays nothing.
+[package]
+name = "seiva-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Delonix Seiva — a pluggable, tenant-aware ObjectStore port (ADR 0032): streaming put/get, per-tenant fail-closed key resolution, a path-confined local-fs adapter, multipart and presigned URLs, with a seiva-resilience decorator. DORM-free; no runtime linked unless a transport feature is enabled."
+keywords = ["seiva", "object-store", "s3", "storage", "blob"]
+categories = ["web-programming", "filesystem"]
+
+[dependencies]
+# The byte-oriented port is an async trait; adapters implement it object-safely
+# so the composition root binds `Arc<dyn ObjectStore>`.
+async-trait = { workspace = true }
+# NO runtime feature: the library links no executor (ADR 0026/0032). `io-util`
+# gives the `AsyncRead`/`AsyncWrite` the port streams over; `fs` is the local
+# adapter's file I/O. A runtime is the server's, pulled in a dev-dependency.
+# Declared directly (not `workspace = true`) so `default-features = false` is
+# honoured — inheriting it would ignore the key and link tokio's defaults.
+tokio = { version = "1", default-features = false, features = ["io-util", "fs"] }
+# The isolation scope every Seiva capability resolves a tenant from (ADR 0006 /
+# the data layer's SG1). A core, data-layer-free crate: no runtime rides in.
+seiva-ports = { workspace = true }
+# The retry/timeout/breaker primitives the resilience decorator reuses rather
+# than reinventing (ADR 0032: "resilience is reused, not reinvented").
+seiva-resilience = { version = "0.1.0", path = "../seiva-resilience" }
+# Presigned-URL signatures and the local adapter's content digest — the same
+# hash `seiva-realtime` and `seiva-identity` use for tokens at rest.
+sha2 = "0.10"
+tracing = "0.1"
+
+[dev-dependencies]
+# The tests DO need a runtime to drive the async streaming/multipart proofs —
+# a dev-dependency only, so it never reaches a downstream build. `time` +
+# `test-util` drive the paused-clock timeout proof of the resilience decorator.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "fs", "time", "test-util"] }
+async-trait = { workspace = true }

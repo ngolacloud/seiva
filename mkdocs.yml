@@ -311,6 +311,7 @@ nav:
       - Documentation structure: STRUCTURE.md
       - ADRs:
           - internals/adrs.md
+          - Platform upstreaming (delonix-meet): platform-upstreaming-from-delonix-meet.md
           - 0001 · Seiva foundations: adr/0001-seiva-foundations.md
           - 0002 · Core ports and test doubles: adr/0002-core-ports-and-test-doubles.md
           - 0003 · Module layering and the facade: adr/0003-module-layering-and-facade-impl.md
@@ -334,4 +335,25 @@ nav:
           - 0021 · In-process event bus and choreography: adr/0021-in-process-event-bus-and-choreography.md
           - 0022 · Seed and demo data as CSV: adr/0022-seed-and-demo-data-as-csv.md
           - 0024 · Project kinds (--kind): adr/0024-project-kinds.md
+          - 0025 · WireSchema reflects serde: adr/0025-wire-schema-serde-fidelity.md
+          - 0026 · Per-route load control: adr/0026-per-route-load-control.md
+          - 0027 · Native observability: adr/0027-native-observability.md
+          - 0028 · Worker concurrency safety: adr/0028-worker-concurrency-safety.md
+          - 0029 · BOLA lint fitness function: adr/0029-bola-lint-fitness-function.md
+          - 0030 · Pluggable data layer: adr/0030-pluggable-data-layer.md
+          - 0031 · Native real-time (WebSocket + SSE): adr/0031-native-realtime-ws-sse.md
+          - 0032 · Object storage: adr/0032-object-storage.md
+          - 0033 · Webhook delivery engine: adr/0033-webhook-delivery-engine.md
+          - 0034 · Durable job queue: adr/0034-durable-job-queue.md
+          - 0035 · Rotating refresh tokens: adr/0035-refresh-tokens.md
+          - 0036 · MFA (TOTP): adr/0036-mfa-totp.md
+          - 0037 · Passkeys (WebAuthn): adr/0037-passkeys-webauthn.md
+          - 0038 · OAuth 2.1 authorization server: adr/0038-oauth-authz-server.md
+          - 0039 · SCIM provisioning: adr/0039-scim-provisioning.md
+          - 0040 · OIDC SSO login flow: adr/0040-oidc-sso-flow.md
+          - 0041 · Native mail: adr/0041-native-mail.md
+          - 0042 · Notifications and Web Push: adr/0042-notifications-webpush.md
+          - 0043 · Append-only audit log: adr/0043-append-only-audit.md
+          - 0044 · Native Postgres RLS: adr/0044-native-rls.md
+          - 0045 · Egress / SSRF guard: adr/0045-egress-ssrf-guard.md
   - API reference: https://ngolacloud.github.io/seiva/api/

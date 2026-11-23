@@ -30,6 +30,10 @@ seiva-messaging = { path = "../seiva-messaging" }
 # the crate's `tracing` feature at its composition root (the proof test enables it
 # via a dev-dependency), so this gateway stays zero-cost by default.
 seiva-observability = { path = "../seiva-observability", default-features = false }
+# The webhook delivery engine's ports + types (ADR 0033): this gateway binds a
+# DORM-backed `DeliveryLedger` under them. A core, DORM-free crate — the coupling
+# stays one-way (Seiva → DORM), the gateway merely satisfies a core port.
+seiva-webhooks = { path = "../seiva-webhooks" }
 # DORM as published crates (depend by version; see the header).
 dorm-core = "0.6"
 # The transactional outbox: EventPublisher writes the event here in the same
@@ -38,8 +42,33 @@ dorm-outbox = "0.1"
 uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
 async-trait = "0.1"
+# `TIMESTAMPTZ` binds/reads go through `chrono::DateTime<Utc>` (DORM's `Value::Timestamp`),
+# so the delivery ledger converts `SystemTime` ↔ `DateTime<Utc>` here. Same major
+# as dorm-core's chrono, so cargo unifies to one version.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # The live round-trip test drives a real transaction on a running PostgreSQL; it
 # is gated on `SEIVA_DORM_TEST_DSN` and skips cleanly when it is unset.
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+# The webhook-delivery e2e (tests/webhook_delivery_dorm.rs) wires the real
+# subscriber + engine over the DORM ledger. The subscriber (enqueue side) and the
+# `delivery_tick` job (send side).
+seiva-webhook-delivery = { path = "../seiva-webhook-delivery" }
+# The engine, its config, the signer resolver, and the signature verifier the
+# local HTTPS test server checks each delivery with.
+seiva-webhooks = { path = "../seiva-webhooks" }
+# The bus entrypoint the e2e enqueues through (`dispatch` + `SubscriberRegistry`).
+seiva-events = { path = "../seiva-events" }
+# A REAL HTTP client is what the e2e sends over — the one seam the engine leaves a
+# port. `rustls-tls` keeps it off native-tls/OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# The local HTTPS test server the engine POSTs to: axum for request extraction +
+# signature check, axum-server for a rustls TLS listener over a bound std
+# TcpListener (so the e2e learns the ephemeral port), rcgen for a self-signed cert.
+axum = "0.7"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.13"
+# rustls 0.23 needs a process-wide crypto provider installed before a ServerConfig
+# is built; install ring explicitly so the server never panics on first handshake.
+rustls = { version = "0.23", features = ["ring"] }

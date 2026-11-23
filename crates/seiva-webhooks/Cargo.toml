@@ -33,3 +33,37 @@ base64 = "0.22"
 # terse without inflating the type (no inline data -> clippy `result_large_err`
 # stays quiet).
 thiserror = "2"
+
+# --- the `delivery` engine (ADR 0033), on by default, opt-out via
+# `default-features = false` so a sign/verify-only consumer links none of it ---
+#
+# The delivery ports (`DeliveryLedger`, `HttpSender`) are async traits; the
+# `async-trait` box makes them object-safe (`Arc<dyn …>`) at the composition root.
+async-trait = { version = "0.1", optional = true }
+# Each state transition (retry scheduled, dead-letter, breaker deferral) is a
+# near-free `tracing` event; a secret or a signature is NEVER a field.
+tracing = { version = "0.1", optional = true }
+# The retry backoff schedule, the per-POST timeout and the per-endpoint circuit
+# breaker — reused, not reinvented (ADR 0033). It brings tokio's `time` driver
+# only; the delivery engine starts no runtime of its own (the worker host's).
+seiva-resilience = { version = "0.1.0", path = "../seiva-resilience", optional = true }
+# The ambient tenant `Scope` a delivery is keyed under — the same fail-closed
+# isolation model every Seiva capability resolves a tenant from (ADR 0019). A
+# core, data-layer-free crate: no runtime rides in through it.
+seiva-ports = { version = "0.1.0", path = "../seiva-ports", optional = true }
+
+[features]
+# `delivery` is on by default so the crate's own tests and lints exercise the
+# ADR 0033 engine; a consumer that only signs/verifies opts out with
+# `seiva-webhooks = { default-features = false }` and links none of the above.
+default = ["delivery"]
+# The durable, retrying outbound-delivery engine of ADR 0033.
+delivery = ["dep:async-trait", "dep:tracing", "dep:seiva-resilience", "dep:seiva-ports"]
+
+[dev-dependencies]
+# The delivery tests drive the async engine on a current-thread runtime with a
+# PAUSED clock (`start_paused`), so the per-POST `timeout` fires deterministically
+# against a slow sender with no real wall-clock wait. A dev-dependency only — the
+# library links no runtime of its own. Declared directly (not `workspace = true`)
+# with its features explicit.
+tokio = { version = "1", features = ["rt", "macros", "time", "test-util"] }

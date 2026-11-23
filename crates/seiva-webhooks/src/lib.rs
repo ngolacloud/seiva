@@ -76,6 +76,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "delivery")]
+pub mod delivery;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD;
@@ -361,7 +364,7 @@ fn check_timestamp(ts: i64, now: SystemTime, tolerance: Duration) -> Result<(), 
 }
 
 /// "now" as signed Unix seconds. Times before the epoch read as negative.
-fn unix_secs(now: SystemTime) -> i64 {
+pub(crate) fn unix_secs(now: SystemTime) -> i64 {
     match now.duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_secs() as i64,
         Err(e) => -(e.duration().as_secs() as i64),

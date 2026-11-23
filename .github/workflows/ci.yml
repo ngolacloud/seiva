@@ -131,6 +131,31 @@ jobs:
         # Serialize: the live tests each create/drop shared tables on one Postgres.
         run: cargo test --manifest-path "${{ matrix.manifest }}" --all-features -- --test-threads=1
 
+  # The ADR 0033 delivery end-to-end proof: the REAL reqwest/TLS `HttpSender`
+  # adapter + an e2e that enqueues via the subscriber and delivers over a LOCAL
+  # HTTPS server (rcgen self-signed cert). It is DORM-FREE (so it needs NO token
+  # and NO database) but EXCLUDED from the workspace because reqwest + rustls + a
+  # TLS test server are heavy; the `check` gate above stays http-client-free. Built
+  # here standalone via `--manifest-path`, exactly like the adapter legs.
+  webhook-delivery-e2e:
+    name: webhook-delivery-e2e
+    runs-on: ubuntu-latest
+    env:
+      MANIFEST: apps/webhook-delivery-e2e/Cargo.toml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.MANIFEST }}
+      - name: Format
+        run: cargo fmt --manifest-path "$MANIFEST" --all --check
+      - name: Lint
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --all-features -- -D warnings
+      - name: Test (sign + POST over a local HTTPS server → Delivered)
+        run: cargo test --manifest-path "$MANIFEST" --all-features
+
   # The git-coupled crates (the DORM data-layer gateway and its relay/RAG/MCP
   # companions) are EXCLUDED from the workspace, so the jobs above stay DORM-free
   # and need no credentials. This job builds and tests them against the private

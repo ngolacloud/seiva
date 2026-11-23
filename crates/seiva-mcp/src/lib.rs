@@ -19,12 +19,14 @@
 //!
 //! # What this crate provides
 //!
-//! * [`auth`] — the authentication contract Seiva owns: an [`Authenticator`]
-//!   turns a bearer token into a [`Principal`] and **denies by default**. The
-//!   first-cut implementation is [`TokenAuthenticator`], a static token →
-//!   principal map (optionally bridged from DORM's token spec via
-//!   [`TokenAuthenticator::from_http_tokens`] / [`dorm_mcp::parse_tokens`]). Real
-//!   OIDC / mTLS / OAuth token-exchange is a later step behind the same trait.
+//! * [`auth`] — the authentication boundary: the framework's single identity
+//!   model ([`Principal`] / [`Authenticator`], re-exported from `seiva-identity`,
+//!   the same types `seiva-http` uses — ADR 0006) plus MCP-specific glue. An
+//!   [`Authenticator`] turns a bearer token into a [`Principal`] and **denies by
+//!   default**; the first-cut implementation is [`TokenAuthenticator`], a static
+//!   token → principal map (optionally bridged from DORM's token spec via
+//!   [`auth::from_http_tokens`] / [`dorm_mcp::parse_tokens`]). Real OIDC / mTLS /
+//!   OAuth token-exchange is a later step behind the same trait.
 //! * [`http`] — the axum `POST /mcp` endpoint. It authenticates first, then
 //!   builds a per-request [`ServerConfig`] whose `tenant` and `writable` come
 //!   from the authenticated [`Principal`] (never a tool argument), and finally
@@ -47,9 +49,13 @@
 
 pub mod auth;
 pub mod http;
+mod limits;
 
-pub use auth::{AuthError, Authenticator, Principal, TokenAuthenticator};
-pub use http::{router, serve, serve_with_shutdown, AppState};
+pub use auth::{
+    can_write, from_http_tokens, AuthError, Authenticator, Principal, TokenAuthenticator,
+    WRITE_PERMISSION,
+};
+pub use http::{router, serve, serve_with_shutdown, AppState, ServeLimits};
 
 // Re-export the DORM protocol-config value types callers need to assemble a
 // server, so a downstream need not also name the `dorm-mcp` git dependency.
