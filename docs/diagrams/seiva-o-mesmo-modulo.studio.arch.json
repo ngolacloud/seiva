@@ -1,0 +1,357 @@
+{
+  "dxtutorArch": 1,
+  "design": {
+    "components": [
+      {
+        "id": "m-server",
+        "name": "seiva-server",
+        "kind": "process",
+        "outbox": false,
+        "x": 56,
+        "y": 96,
+        "group": "mono-body",
+        "code": "serve_router",
+        "source": "crates/seiva/src/scaffold.rs:1165 router_with_modules; :1167 serve_router (app_main_rs)"
+      },
+      {
+        "id": "m-others",
+        "name": "outros módulos\no mesmo padrão",
+        "kind": "process",
+        "outbox": false,
+        "x": 56,
+        "y": 246,
+        "group": "mono-body",
+        "source": "crates/seiva/src/scaffold.rs:491 wire_module_in_main (cada módulo junta o seu router em :533)"
+      },
+      {
+        "id": "m-interface",
+        "name": "interface",
+        "kind": "adapter",
+        "outbox": false,
+        "x": 262,
+        "y": 272,
+        "group": "mono-mod",
+        "code": "#[seiva::controller]",
+        "source": "crates/seiva/src/scaffold.rs:1939 interface_cargo_toml; :1846 #[controller]"
+      },
+      {
+        "id": "m-application",
+        "name": "application",
+        "kind": "process",
+        "outbox": false,
+        "x": 357,
+        "y": 422,
+        "group": "mono-mod",
+        "source": "crates/seiva/src/scaffold.rs:1899 application_cargo_toml (portas de seiva-ports)"
+      },
+      {
+        "id": "m-facade",
+        "name": "facade",
+        "kind": "socket",
+        "outbox": false,
+        "x": 309.5,
+        "y": 544,
+        "group": "mono-mod",
+        "code": "#[seiva::facade]",
+        "source": "crates/seiva/src/scaffold.rs:1872 facade_cargo_toml; :1620 #[facade(version = \"v1\")]"
+      },
+      {
+        "id": "m-domain",
+        "name": "domain",
+        "kind": "state",
+        "outbox": false,
+        "x": 499.5,
+        "y": 544,
+        "group": "mono-mod",
+        "source": "crates/seiva/src/scaffold.rs:1890 domain_cargo_toml (sem dependências)"
+      },
+      {
+        "id": "m-infrastructure",
+        "name": "infrastructure",
+        "kind": "adapter",
+        "outbox": false,
+        "x": 452,
+        "y": 272,
+        "group": "mono-mod",
+        "source": "crates/seiva/src/scaffold.rs:1920 infrastructure_cargo_toml (em memória por omissão)"
+      },
+      {
+        "id": "s-server",
+        "name": "seiva-server",
+        "kind": "process",
+        "outbox": false,
+        "x": 809.5,
+        "y": 96,
+        "group": "svc-body",
+        "code": "serve_router",
+        "source": "crates/seiva/src/scaffold.rs:722 router_with_modules; :724 serve_router (service_main_rs)"
+      },
+      {
+        "id": "s-interface",
+        "name": "interface",
+        "kind": "adapter",
+        "outbox": false,
+        "x": 825.5,
+        "y": 272,
+        "group": "svc-mod",
+        "code": "#[seiva::controller]",
+        "source": "crates/seiva/src/scaffold.rs:1939 interface_cargo_toml; :1846 #[controller]"
+      },
+      {
+        "id": "s-application",
+        "name": "application",
+        "kind": "process",
+        "outbox": false,
+        "x": 920.5,
+        "y": 422,
+        "group": "svc-mod",
+        "source": "crates/seiva/src/scaffold.rs:1899 application_cargo_toml (portas de seiva-ports)"
+      },
+      {
+        "id": "s-facade",
+        "name": "facade",
+        "kind": "socket",
+        "outbox": false,
+        "x": 873,
+        "y": 544,
+        "group": "svc-mod",
+        "code": "#[seiva::facade]",
+        "source": "crates/seiva/src/scaffold.rs:1872 facade_cargo_toml; :1620 #[facade(version = \"v1\")]"
+      },
+      {
+        "id": "s-domain",
+        "name": "domain",
+        "kind": "state",
+        "outbox": false,
+        "x": 1063,
+        "y": 544,
+        "group": "svc-mod",
+        "source": "crates/seiva/src/scaffold.rs:1890 domain_cargo_toml (sem dependências)"
+      },
+      {
+        "id": "s-infrastructure",
+        "name": "infrastructure",
+        "kind": "adapter",
+        "outbox": false,
+        "x": 1015.5,
+        "y": 272,
+        "group": "svc-mod",
+        "source": "crates/seiva/src/scaffold.rs:1920 infrastructure_cargo_toml (em memória por omissão)"
+      },
+      {
+        "id": "s-db",
+        "name": "<módulo>-db",
+        "kind": "state",
+        "outbox": false,
+        "x": 1269,
+        "y": 246,
+        "group": "svc-body",
+        "code": "postgres:17",
+        "source": "crates/seiva/src/scaffold.rs:616 serviço <módulo>-db; :617 image: postgres:17 (service_compose_yaml)"
+      }
+    ],
+    "connections": [
+      {
+        "from": "m-server",
+        "to": "m-interface",
+        "event": "",
+        "style": "control",
+        "label": "monta o router",
+        "source": "crates/seiva/src/scaffold.rs:533 modules.merge(<módulo>_router(...))"
+      },
+      {
+        "from": "m-server",
+        "to": "m-infrastructure",
+        "event": "",
+        "style": "control",
+        "label": "injecta",
+        "source": "crates/seiva/src/scaffold.rs:522-528 InMemoryRecordRepository, DirectUnitOfWork, LoggingEventPublisher"
+      },
+      {
+        "from": "m-server",
+        "to": "m-others",
+        "event": "",
+        "style": "control",
+        "source": "crates/seiva/src/scaffold.rs:533 (o mesmo merge por cada módulo)"
+      },
+      {
+        "from": "m-interface",
+        "to": "m-facade",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1943 {module}-facade"
+      },
+      {
+        "from": "m-interface",
+        "to": "m-application",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1949 {module}-application (nunca infrastructure)"
+      },
+      {
+        "from": "m-application",
+        "to": "m-facade",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1904 {module}-facade"
+      },
+      {
+        "from": "m-application",
+        "to": "m-domain",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1903 {module}-domain"
+      },
+      {
+        "from": "m-infrastructure",
+        "to": "m-application",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1924 {module}-application"
+      },
+      {
+        "from": "m-infrastructure",
+        "to": "m-domain",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1925 {module}-domain"
+      },
+      {
+        "from": "s-server",
+        "to": "s-interface",
+        "event": "",
+        "style": "control",
+        "label": "só este router",
+        "source": "crates/seiva/src/scaffold.rs:717 Router::new().merge(<módulo>_router(...)) — só este módulo"
+      },
+      {
+        "from": "s-server",
+        "to": "s-infrastructure",
+        "event": "",
+        "style": "control",
+        "label": "injecta",
+        "source": "crates/seiva/src/scaffold.rs:705-711 os mesmos adaptadores"
+      },
+      {
+        "from": "s-interface",
+        "to": "s-facade",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1943 {module}-facade"
+      },
+      {
+        "from": "s-interface",
+        "to": "s-application",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1949 {module}-application (nunca infrastructure)"
+      },
+      {
+        "from": "s-application",
+        "to": "s-facade",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1904 {module}-facade"
+      },
+      {
+        "from": "s-application",
+        "to": "s-domain",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1903 {module}-domain"
+      },
+      {
+        "from": "s-infrastructure",
+        "to": "s-application",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1924 {module}-application"
+      },
+      {
+        "from": "s-infrastructure",
+        "to": "s-domain",
+        "event": "",
+        "style": "depends",
+        "source": "crates/seiva/src/scaffold.rs:1925 {module}-domain"
+      },
+      {
+        "from": "s-server",
+        "to": "s-db",
+        "event": "",
+        "style": "optional",
+        "label": "DELONIX_ORM_DSN",
+        "source": "crates/seiva/src/scaffold.rs:611 DELONIX_ORM_DSN; :612 depends_on (compose); usado com a feature dorm (o código gerado começa em memória, :705)"
+      }
+    ],
+    "groups": [
+      {
+        "id": "mono-body",
+        "label": "Monólito modular · um processo",
+        "kind": "boundary",
+        "style": "dashed",
+        "x": 40,
+        "y": 70,
+        "w": 641.5,
+        "h": 596,
+        "source": "crates/seiva/src/scaffold.rs:283 project_files (apps/<projecto>-api); :1107 app_main_rs"
+      },
+      {
+        "id": "mono-mod",
+        "label": "o mesmo módulo: modules/<módulo>",
+        "kind": "module",
+        "style": "dashed",
+        "x": 246,
+        "y": 246,
+        "w": 419.5,
+        "h": 404,
+        "parent": "mono-body",
+        "source": "crates/seiva/src/scaffold.rs:369 module_files (os cinco crates)"
+      },
+      {
+        "id": "svc-body",
+        "label": "seiva module split · um serviço",
+        "kind": "boundary",
+        "style": "dashed",
+        "x": 793.5,
+        "y": 70,
+        "w": 641.5,
+        "h": 596,
+        "source": "crates/seiva/src/scaffold.rs:568 service_files (apps/<módulo>-service, monta só este módulo); crates/seiva-cli/src/main.rs:495 module_split"
+      },
+      {
+        "id": "svc-mod",
+        "label": "o mesmo módulo: modules/<módulo>",
+        "kind": "module",
+        "style": "dashed",
+        "x": 809.5,
+        "y": 246,
+        "w": 419.5,
+        "h": 404,
+        "parent": "svc-body",
+        "source": "crates/seiva/src/scaffold.rs:664-665 o mesmo módulo (interface + infrastructure), ligado por path (../../modules/<módulo>)"
+      }
+    ],
+    "views": [
+      {
+        "id": "monolito",
+        "title": "Monólito modular · um processo",
+        "color": "#0f766e",
+        "roots": [
+          "mono-body"
+        ],
+        "daemonless": false,
+        "strict": true
+      },
+      {
+        "id": "servico",
+        "title": "seiva module split · um serviço",
+        "color": "#6d28d9",
+        "roots": [
+          "svc-body"
+        ],
+        "daemonless": false,
+        "strict": true
+      }
+    ]
+  }
+}

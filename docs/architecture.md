@@ -9,34 +9,40 @@ how the pieces fit.
 ## The dependency rule
 
 A module is five crates, and the compiler enforces the direction of
-dependencies — you cannot violate the architecture and still build:
+dependencies — you cannot violate the architecture and still build. An arrow
+`a ──► b` reads "`a` depends on `b`" (ADR 0003); `application` and
+`infrastructure` also depend on the trait-only `seiva-ports`:
 
 ```
-         interface
-         /        \
-  infrastructure   application
-         \        /      \
-          domain          facade
-                            |
-                        (seiva-ports, delonix-seiva)
+            interface
+             │      │
+             ▼      ▼
+      application ──► facade ──► (seiva, seiva-contract)
+        │      ▲
+        ▼      │
+      domain   │
+        ▲      │
+        └───infrastructure
 ```
 
-- **`domain`** — entities and business rules. Depends on nothing (not even the
-  framework). Example: `notes_domain::Note`, `accounts_domain::User` with its
-  username/credential rules.
+- **`domain`** — entities and business rules, plus the module's **repository
+  port** (a trait framed in a domain error, `RepositoryError`). Depends on nothing
+  (not even the framework). Example: `notes_domain::Note`, `accounts_domain::User`
+  with its username/credential rules.
 - **`facade`** — the module's public, versioned contract: a trait annotated with
   `#[seiva::facade]` plus its DTOs. The DTOs carry no secrets and no persistence
   concerns. This is the *only* thing other modules and transports see.
 - **`application`** — the use cases: a service that implements the facade trait
-  over outbound **ports** (a repository it defines, plus the framework's
-  cross-cutting ports). Transport-free and data-layer-free — it names no `axum`,
-  no SQL, no DORM.
-- **`infrastructure`** — concrete adapters for the application's ports (a
-  repository). The default is in-memory and DORM-free; a DORM-backed adapter
+  over outbound **ports** (the repository port `domain` defines, which
+  `application` re-exports, plus the framework's cross-cutting ports from
+  `seiva-ports`). Transport-free and data-layer-free — it names no `axum`, no SQL,
+  no DORM.
+- **`infrastructure`** — concrete adapters for those ports (the repository). The default is in-memory and DORM-free; a DORM-backed adapter
   comes from `seiva-data-dorm` behind the `dorm` feature.
-- **`interface`** — composition and transport wiring (the `#[seiva::controller]`
-  lives here). Depends only on the facade in production code (ADR 0003);
-  composition of the concrete service belongs to the app that runs it.
+- **`interface`** — transport wiring (the `#[seiva::controller]` lives here).
+  Depends on `application` and the `facade` — never on `infrastructure` or
+  `domain` (ADR 0003): the controller is generic over the ports, and the app that
+  runs the module (its composition root) injects the concrete adapters.
 
 The `examples/notes` and `examples/accounts` modules are the canonical shape and
 exactly what `seiva module new` scaffolds.

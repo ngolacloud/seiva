@@ -188,6 +188,7 @@ plugins:
             Publishing status: Estado de publicação
             Internals: Interioridades
             Architecture: Arquitectura
+            "Architecture diagram: the same module": "Diagrama de arquitectura: o mesmo módulo"
             The contract and the macros: O contrato e as macros
             Evolution evidence: Evidência de evolução
             Release process: Processo de release
@@ -304,6 +305,7 @@ nav:
   - Internals:
       - internals/index.md
       - Architecture: architecture.md
+      - "Architecture diagram: the same module": diagrams/seiva-o-mesmo-modulo.studio.table.md
       - The contract and the macros: internals/the-contract-and-macros.md
       - Evolution evidence: internals/evolution-evidence.md
       - Release process: internals/release-process.md
