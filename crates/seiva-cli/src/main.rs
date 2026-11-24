@@ -550,7 +550,7 @@ fn module_split(name: &str) -> ExitCode {
     }
 
     println!("Split module `{name}` into a service. Created apps/{name}-service (mounts only `{name}`), registered it in the workspace and set mode = \"service\".");
-    println!("It OWNS its data: `apps/{name}-service/compose.yaml` brings it up with its own `{name}-db` and a per-service DELONIX_ORM_DSN (microservices decentralized data) — see its README.");
+    println!("It OWNS its data: `apps/{name}-service/compose.yaml` brings it up with its own `{name}-db` and a per-service DELONIX_ORM_DSN (microservices decentralized data). The generated code starts on the in-memory adapter; enable the `dorm` feature to persist to that database — see its README.");
     println!("Run the microservice: `cargo run -p {name}-service` (or `dx run -p {name}-service`). The monolith still serves `{name}` too; `seiva module merge {name}` undoes this.");
     ExitCode::SUCCESS
 }

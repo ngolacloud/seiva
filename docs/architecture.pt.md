@@ -9,35 +9,41 @@ as peças se encaixam.
 ## A regra de dependência
 
 Um módulo são cinco crates, e o compilador impõe a direcção das dependências — não
-consegues violar a arquitectura e ainda assim compilar:
+consegues violar a arquitectura e ainda assim compilar. Uma seta `a ──► b` lê-se
+«`a` depende de `b`» (ADR 0003); `application` e `infrastructure` dependem também
+do crate só-de-traits `seiva-ports`:
 
 ```
-         interface
-         /        \
-  infrastructure   application
-         \        /      \
-          domain          facade
-                            |
-                        (seiva-ports, delonix-seiva)
+            interface
+             │      │
+             ▼      ▼
+      application ──► facade ──► (seiva, seiva-contract)
+        │      ▲
+        ▼      │
+      domain   │
+        ▲      │
+        └───infrastructure
 ```
 
-- **`domain`** — entidades e regras de negócio. Não depende de nada (nem sequer da
-  framework). Exemplo: `notes_domain::Note`, `accounts_domain::User` com as suas
-  regras de username/credenciais.
+- **`domain`** — entidades e regras de negócio, mais a **porta de repositório** do
+  módulo (um trait com um erro de domínio, `RepositoryError`). Não depende de nada
+  (nem sequer da framework). Exemplo: `notes_domain::Note`, `accounts_domain::User`
+  com as suas regras de username/credenciais.
 - **`facade`** — o contrato público e versionado do módulo: um trait anotado com
   `#[seiva::facade]` mais os seus DTOs. Os DTOs não carregam segredos nem
   preocupações de persistência. Esta é a *única* coisa que outros módulos e
   transportes vêem.
 - **`application`** — os casos de uso: um serviço que implementa o trait da
-  fachada sobre **portas** de saída (um repositório que define, mais as portas
-  transversais da framework). Sem transporte e sem camada de dados — não nomeia
-  `axum`, nem SQL, nem DORM.
-- **`infrastructure`** — adaptadores concretos para as portas da application (um
-  repositório). O padrão é em memória e sem DORM; um adaptador assente em DORM vem
+  fachada sobre **portas** de saída (a porta de repositório que o `domain` define e
+  a `application` reexporta, mais as portas transversais da framework, de
+  `seiva-ports`). Sem transporte e sem camada de dados — não nomeia `axum`, nem SQL,
+  nem DORM.
+- **`infrastructure`** — adaptadores concretos para essas portas (o repositório). O padrão é em memória e sem DORM; um adaptador assente em DORM vem
   de `seiva-data-dorm` por trás da feature `dorm`.
-- **`interface`** — composição e ligação do transporte (o `#[seiva::controller]`
-  vive aqui). Depende apenas da fachada no código de produção (ADR 0003); a
-  composição do serviço concreto pertence à app que o corre.
+- **`interface`** — ligação do transporte (o `#[seiva::controller]` vive aqui).
+  Depende da `application` e da `facade` — nunca da `infrastructure` nem do
+  `domain` (ADR 0003): o controller é genérico sobre as portas, e a app que corre o
+  módulo (a sua raiz de composição) injecta os adaptadores concretos.
 
 Os módulos `examples/notes` e `examples/accounts` são a forma canónica e
 exactamente o que `seiva module new` esqueletiza.
