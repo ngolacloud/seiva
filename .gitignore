@@ -20,3 +20,7 @@ benchmarks/production/results/
 # The rendered MkDocs documentation site (build artifact; CI builds and deploys
 # it to GitHub Pages — see .github/workflows/pages.yml).
 /site/
+
+# Python bytecode (the MkDocs hooks in docs_ext/ compile on every `mkdocs build`).
+__pycache__/
+*.py[co]
