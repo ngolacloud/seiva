@@ -457,6 +457,76 @@ pub trait AuditSink: Send + Sync {
     async fn record(&self, entry: &AuditEntry) -> PortResult<()>;
 }
 
+/// A filter over the audit trail, read back from an [`AuditLog`] (ADR 0013) and
+/// returned newest first. Every set field is **AND-combined**; a `None` or empty
+/// field matches anything, so the default (all `None`, `limit` 0) asks for the most
+/// recent [`DEFAULT_LIMIT`](AuditQuery::DEFAULT_LIMIT) entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditQuery {
+    /// Match only entries by this actor subject (exact; empty/`None` = any).
+    pub actor: Option<String>,
+    /// Match only entries scoped to this tenant (exact; empty/`None` = any). The
+    /// admin audit view is tenant-scoped, so a tenant operator reads only their own
+    /// trail.
+    pub tenant: Option<String>,
+    /// Match only entries on this object id (exact; empty/`None` = any).
+    pub object: Option<String>,
+    /// Match only entries with this outcome, e.g. `"201"`/`"403"` (exact; empty/`None` = any).
+    pub outcome: Option<String>,
+    /// The maximum number of entries to return; `0` means
+    /// [`DEFAULT_LIMIT`](AuditQuery::DEFAULT_LIMIT). An [`AuditLog`] must never return
+    /// more than this, so a history view cannot ask for an unbounded page.
+    pub limit: u32,
+}
+
+impl AuditQuery {
+    /// The page cap applied when [`limit`](Self::limit) is `0`.
+    pub const DEFAULT_LIMIT: u32 = 100;
+
+    /// The effective limit: [`limit`](Self::limit), or [`DEFAULT_LIMIT`](Self::DEFAULT_LIMIT)
+    /// when it is `0`.
+    #[must_use]
+    pub fn effective_limit(&self) -> u32 {
+        if self.limit == 0 {
+            Self::DEFAULT_LIMIT
+        } else {
+            self.limit
+        }
+    }
+
+    /// Whether `entry` satisfies every set filter. An unset or empty filter field
+    /// matches anything; a set one must match exactly. This is the pure predicate an
+    /// [`AuditLog`] applies, factored out so the matching is unit-testable without a
+    /// store.
+    #[must_use]
+    pub fn matches(&self, entry: &AuditEntry) -> bool {
+        let str_match = |filter: &Option<String>, value: &str| match filter.as_deref() {
+            None | Some("") => true,
+            Some(wanted) => wanted == value,
+        };
+        let opt_match = |filter: &Option<String>, value: &Option<String>| match filter.as_deref() {
+            None | Some("") => true,
+            Some(wanted) => value.as_deref() == Some(wanted),
+        };
+        str_match(&self.actor, &entry.actor)
+            && opt_match(&self.tenant, &entry.tenant)
+            && opt_match(&self.object, &entry.object)
+            && str_match(&self.outcome, &entry.outcome)
+    }
+}
+
+/// The **read** side of the audit trail (ADR 0013): the history view the admin
+/// surface needs, the twin of [`AuditSink`]'s write side. An implementation returns
+/// the entries matching an [`AuditQuery`], **newest first** and **bounded** by the
+/// query's [`effective_limit`](AuditQuery::effective_limit). The base framework codes
+/// against this port; an adapter (the DORM gateway) reads the persisted entries.
+#[async_trait]
+pub trait AuditLog: Send + Sync {
+    /// Returns the entries matching `query`, newest first, capped at the query's
+    /// effective limit.
+    async fn query(&self, query: &AuditQuery) -> PortResult<Vec<AuditEntry>>;
+}
+
 /// The outcome of a rate-limit check for one client (ADR 0015).
 ///
 /// `#[non_exhaustive]`: a consumer matches with a `_` arm, so a future decision

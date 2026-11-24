@@ -10,8 +10,9 @@
 
 use async_trait::async_trait;
 use seiva_ports::{
-    AuditEntry, AuditSink, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
-    IdempotencyStore, PortResult, RateLimitDecision, RateLimitStore, Scope, UnitOfWork,
+    AuditEntry, AuditLog, AuditQuery, AuditSink, Clock, EventPublisher, Id, IdGenerator,
+    IdempotencyOutcome, IdempotencyStore, PortResult, RateLimitDecision, RateLimitStore, Scope,
+    UnitOfWork,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -330,6 +331,26 @@ impl AuditSink for RecordingAuditSink {
     }
 }
 
+// The same double reads back its own entries, so a test can write through the
+// `AuditSink` and query through the `AuditLog` — the write/read twin of the audit
+// trail (ADR 0013), with no database.
+#[async_trait]
+impl AuditLog for RecordingAuditSink {
+    async fn query(&self, query: &AuditQuery) -> PortResult<Vec<AuditEntry>> {
+        let guard = self.entries.lock().expect("audit sink poisoned");
+        let limit = query.effective_limit() as usize;
+        // Newest first: entries are recorded in order, so iterate in reverse, keep
+        // those the query matches, and stop at the effective limit.
+        Ok(guard
+            .iter()
+            .rev()
+            .filter(|entry| query.matches(entry))
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+}
+
 /// An in-memory [`RateLimitStore`] double (fixed window over `Instant`) for
 /// unit-testing the store-based middleware with no Redis. A single-process model:
 /// it does not prove the *distributed* guarantee (that is proved live against
@@ -373,6 +394,71 @@ impl RateLimitStore for InMemoryRateLimitStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(actor: &str, object: &str, outcome: &str) -> AuditEntry {
+        // `AuditEntry` is `#[non_exhaustive]`, so build it through the builder.
+        AuditEntry::new(actor, "POST /x", outcome).on_object(Some(object))
+    }
+
+    #[tokio::test]
+    async fn audit_log_reads_back_newest_first_filtered_and_bounded() {
+        let sink = RecordingAuditSink::new();
+        // Written oldest → newest. The middle entry is tenant-scoped.
+        sink.record(&entry("alice", "1", "201")).await.unwrap();
+        let mut scoped_entry = entry("bob", "2", "403");
+        scoped_entry.tenant = Some("acme".to_owned());
+        sink.record(&scoped_entry).await.unwrap();
+        sink.record(&entry("alice", "3", "201")).await.unwrap();
+
+        // No filter → everything, NEWEST FIRST.
+        let all = sink.query(&AuditQuery::default()).await.unwrap();
+        let objects: Vec<_> = all.iter().map(|e| e.object.clone().unwrap()).collect();
+        assert_eq!(objects, vec!["3", "2", "1"], "newest first");
+
+        // Filter by actor.
+        let alices = sink
+            .query(&AuditQuery {
+                actor: Some("alice".to_owned()),
+                ..AuditQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(alices.len(), 2);
+        assert!(alices.iter().all(|e| e.actor == "alice"));
+
+        // Filter by outcome.
+        let denied = sink
+            .query(&AuditQuery {
+                outcome: Some("403".to_owned()),
+                ..AuditQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(denied.len(), 1);
+        assert_eq!(denied[0].object.as_deref(), Some("2"));
+
+        // Filter by tenant → exactly the one tenant-scoped entry.
+        let scoped = sink
+            .query(&AuditQuery {
+                tenant: Some("acme".to_owned()),
+                ..AuditQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].object.as_deref(), Some("2"));
+
+        // The limit bounds the result (and keeps the newest).
+        let newest_only = sink
+            .query(&AuditQuery {
+                limit: 1,
+                ..AuditQuery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(newest_only.len(), 1);
+        assert_eq!(newest_only[0].object.as_deref(), Some("3"));
+    }
 
     #[test]
     fn fixed_clock_holds_and_advances() {
