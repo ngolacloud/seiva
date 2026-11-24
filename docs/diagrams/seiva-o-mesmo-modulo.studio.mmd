@@ -1,0 +1,80 @@
+%% dxtutor-arch v1
+graph TB
+  subgraph view__monolito["Monólito modular · um processo"]
+    m_server["seiva-server"]
+    m_others["outros módulos<br>o mesmo padrão"]
+    subgraph mono_mod["o mesmo módulo: modules/<módulo>"]
+      m_interface["interface"]
+      m_application["application"]
+      m_facade["facade"]
+      m_domain[("domain")]
+      m_infrastructure["infrastructure"]
+    end
+  end
+  subgraph view__servico["seiva module split · um serviço"]
+    s_server["seiva-server"]
+    s_db[("<módulo>-db")]
+    subgraph svc_mod["o mesmo módulo: modules/<módulo>"]
+      s_interface["interface"]
+      s_application["application"]
+      s_facade["facade"]
+      s_domain[("domain")]
+      s_infrastructure["infrastructure"]
+    end
+  end
+  m_server -.->|"monta o router"| m_interface
+  m_server -.->|"injecta"| m_infrastructure
+  m_server -.-> m_others
+  m_interface --> m_facade
+  m_interface --> m_application
+  m_application --> m_facade
+  m_application --> m_domain
+  m_infrastructure --> m_application
+  m_infrastructure --> m_domain
+  s_server -.->|"só este router"| s_interface
+  s_server -.->|"injecta"| s_infrastructure
+  s_interface --> s_facade
+  s_interface --> s_application
+  s_application --> s_facade
+  s_application --> s_domain
+  s_infrastructure --> s_application
+  s_infrastructure --> s_domain
+  s_server -.-|"DELONIX_ORM_DSN"| s_db
+%% dxt:view view__monolito {"id":"monolito","title":"Monólito modular · um processo","color":"#0f766e","strict":true}
+%% dxt:view view__servico {"id":"servico","title":"seiva module split · um serviço","color":"#6d28d9","strict":true}
+%% dxt:group mono_body {"i":0,"id":"mono-body","kind":"boundary","style":"dashed","source":"crates/seiva/src/scaffold.rs:283 project_files (apps/<projecto>-api); :1107 app_main_rs","body":"view__monolito"}
+%% dxt:group mono_mod {"i":1,"id":"mono-mod","kind":"module","style":"dashed","source":"crates/seiva/src/scaffold.rs:369 module_files (os cinco crates)"}
+%% dxt:group svc_body {"i":2,"id":"svc-body","kind":"boundary","style":"dashed","source":"crates/seiva/src/scaffold.rs:568 service_files (apps/<módulo>-service, monta só este módulo); crates/seiva-cli/src/main.rs:495 module_split","body":"view__servico"}
+%% dxt:group svc_mod {"i":3,"id":"svc-mod","kind":"module","style":"dashed","source":"crates/seiva/src/scaffold.rs:664-665 o mesmo módulo (interface + infrastructure), ligado por path (../../modules/<módulo>)"}
+%% dxt:node m_server {"i":0,"id":"m-server","kind":"process","code":"serve_router","source":"crates/seiva/src/scaffold.rs:1165 router_with_modules; :1167 serve_router (app_main_rs)"}
+%% dxt:node m_others {"i":1,"id":"m-others","kind":"process","source":"crates/seiva/src/scaffold.rs:491 wire_module_in_main (cada módulo junta o seu router em :533)"}
+%% dxt:node m_interface {"i":2,"id":"m-interface","kind":"adapter","code":"#[seiva::controller]","source":"crates/seiva/src/scaffold.rs:1939 interface_cargo_toml; :1846 #[controller]"}
+%% dxt:node m_application {"i":3,"id":"m-application","kind":"process","source":"crates/seiva/src/scaffold.rs:1899 application_cargo_toml (portas de seiva-ports)"}
+%% dxt:node m_facade {"i":4,"id":"m-facade","kind":"socket","code":"#[seiva::facade]","source":"crates/seiva/src/scaffold.rs:1872 facade_cargo_toml; :1620 #[facade(version = \"v1\")]"}
+%% dxt:node m_domain {"i":5,"id":"m-domain","kind":"state","source":"crates/seiva/src/scaffold.rs:1890 domain_cargo_toml (sem dependências)"}
+%% dxt:node m_infrastructure {"i":6,"id":"m-infrastructure","kind":"adapter","source":"crates/seiva/src/scaffold.rs:1920 infrastructure_cargo_toml (em memória por omissão)"}
+%% dxt:node s_server {"i":7,"id":"s-server","kind":"process","code":"serve_router","source":"crates/seiva/src/scaffold.rs:722 router_with_modules; :724 serve_router (service_main_rs)"}
+%% dxt:node s_interface {"i":8,"id":"s-interface","kind":"adapter","code":"#[seiva::controller]","source":"crates/seiva/src/scaffold.rs:1939 interface_cargo_toml; :1846 #[controller]"}
+%% dxt:node s_application {"i":9,"id":"s-application","kind":"process","source":"crates/seiva/src/scaffold.rs:1899 application_cargo_toml (portas de seiva-ports)"}
+%% dxt:node s_facade {"i":10,"id":"s-facade","kind":"socket","code":"#[seiva::facade]","source":"crates/seiva/src/scaffold.rs:1872 facade_cargo_toml; :1620 #[facade(version = \"v1\")]"}
+%% dxt:node s_domain {"i":11,"id":"s-domain","kind":"state","source":"crates/seiva/src/scaffold.rs:1890 domain_cargo_toml (sem dependências)"}
+%% dxt:node s_infrastructure {"i":12,"id":"s-infrastructure","kind":"adapter","source":"crates/seiva/src/scaffold.rs:1920 infrastructure_cargo_toml (em memória por omissão)"}
+%% dxt:node s_db {"i":13,"id":"s-db","kind":"state","code":"postgres:17","source":"crates/seiva/src/scaffold.rs:616 serviço <módulo>-db; :617 image: postgres:17 (service_compose_yaml)"}
+%% dxt:edge m_server m_interface 0 {"label":"monta o router","style":"control","source":"crates/seiva/src/scaffold.rs:533 modules.merge(<módulo>_router(...))"}
+%% dxt:edge m_server m_infrastructure 0 {"label":"injecta","style":"control","source":"crates/seiva/src/scaffold.rs:522-528 InMemoryRecordRepository, DirectUnitOfWork, LoggingEventPublisher"}
+%% dxt:edge m_server m_others 0 {"style":"control","source":"crates/seiva/src/scaffold.rs:533 (o mesmo merge por cada módulo)"}
+%% dxt:edge m_interface m_facade 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1943 {module}-facade"}
+%% dxt:edge m_interface m_application 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1949 {module}-application (nunca infrastructure)"}
+%% dxt:edge m_application m_facade 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1904 {module}-facade"}
+%% dxt:edge m_application m_domain 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1903 {module}-domain"}
+%% dxt:edge m_infrastructure m_application 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1924 {module}-application"}
+%% dxt:edge m_infrastructure m_domain 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1925 {module}-domain"}
+%% dxt:edge s_server s_interface 0 {"label":"só este router","style":"control","source":"crates/seiva/src/scaffold.rs:717 Router::new().merge(<módulo>_router(...)) — só este módulo"}
+%% dxt:edge s_server s_infrastructure 0 {"label":"injecta","style":"control","source":"crates/seiva/src/scaffold.rs:705-711 os mesmos adaptadores"}
+%% dxt:edge s_interface s_facade 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1943 {module}-facade"}
+%% dxt:edge s_interface s_application 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1949 {module}-application (nunca infrastructure)"}
+%% dxt:edge s_application s_facade 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1904 {module}-facade"}
+%% dxt:edge s_application s_domain 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1903 {module}-domain"}
+%% dxt:edge s_infrastructure s_application 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1924 {module}-application"}
+%% dxt:edge s_infrastructure s_domain 0 {"style":"depends","source":"crates/seiva/src/scaffold.rs:1925 {module}-domain"}
+%% dxt:edge s_server s_db 0 {"label":"DELONIX_ORM_DSN","style":"optional","source":"crates/seiva/src/scaffold.rs:611 DELONIX_ORM_DSN; :612 depends_on (compose); usado com a feature dorm (o código gerado começa em memória, :705)"}
