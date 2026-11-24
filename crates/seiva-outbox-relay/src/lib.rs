@@ -17,10 +17,10 @@ use std::future::Future;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 use dorm_core::value::Value;
 use dorm_core::{db, Error, Result};
 use dorm_outbox::{RelayConfig, CURSOR, DEAD, OUTBOX};
+use seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 use seiva_events::{DeadLetterSink, OutboxReader, OutboxRecord, RelayPolicy};
 use seiva_messaging::{CloudEvent, Publisher};
 use seiva_observability::trace_context::{self, TraceContext};
