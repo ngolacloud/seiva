@@ -22,9 +22,9 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 use dorm_rag::worker::{run_once, WorkerConfig as RagConfig};
 use dorm_rag::Embedder;
+use seiva::worker::{run_worker, WorkerConfig, WorkerReport};
 
 /// Run DORM's RAG indexer as a **worker**: the framework's loop ([`run_worker`])
 /// drives [`run_once`] one pass at a time, with an interval, graceful shutdown and
