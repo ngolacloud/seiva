@@ -8,8 +8,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "delonix-seiva",
  "dorm-core",
+ "seiva",
  "seiva-console-admin",
  "seiva-data-dorm",
  "seiva-http",
@@ -386,21 +386,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "delonix-seiva"
-version = "0.1.0"
-dependencies = [
- "inventory",
- "seiva-macros",
- "seiva-ports",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -437,6 +422,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer 0.10.4",
  "crypto-common 0.1.7",
+ "subtle",
 ]
 
 [[package]]
@@ -473,7 +459,7 @@ dependencies = [
  "cidr",
  "deadpool-postgres",
  "eui48",
- "hmac",
+ "hmac 0.13.0",
  "inventory",
  "rust_decimal",
  "rustls",
@@ -560,9 +546,9 @@ checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -709,6 +695,15 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest 0.10.7",
+]
 
 [[package]]
 name = "hmac"
@@ -1069,6 +1064,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "metrics"
+version = "0.24.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89550ee9f79e88fef3119de263694973a8adb26c21d75322164fb8c493039fe2"
+dependencies = [
+ "portable-atomic",
+ "rapidhash",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1217,6 +1222,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
+
+[[package]]
 name = "postgres-protocol"
 version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1226,7 +1237,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "fallible-iterator",
- "hmac",
+ "hmac 0.13.0",
  "md-5",
  "memchr",
  "rand 0.10.3",
@@ -1391,6 +1402,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "rapidhash"
+version = "4.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5da7e78a036ce858e8d55b7e7dc8ba3a88b78350fd2155d3591bbd966b58589e"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "redis"
 version = "0.27.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1553,6 +1573,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "seiva"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "seiva-macros",
+ "seiva-ports",
+ "seiva-worker",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "seiva-config"
 version = "0.1.0"
 
@@ -1562,10 +1596,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
- "delonix-seiva",
+ "seiva",
  "seiva-identity",
+ "seiva-ports",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tracing",
 ]
 
 [[package]]
@@ -1590,10 +1627,13 @@ name = "seiva-data-dorm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "dorm-core",
  "dorm-outbox",
  "seiva-messaging",
+ "seiva-observability",
  "seiva-ports",
+ "seiva-webhooks",
  "serde_json",
  "uuid",
 ]
@@ -1603,7 +1643,8 @@ name = "seiva-http"
 version = "0.1.0"
 dependencies = [
  "axum",
- "delonix-seiva",
+ "metrics",
+ "seiva",
  "seiva-contract",
  "seiva-cqrs",
  "seiva-identity",
@@ -1613,6 +1654,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "sha2 0.10.9",
+ "tokio",
  "tower-http",
  "tracing",
 ]
@@ -1645,10 +1687,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-observability"
+version = "0.1.0"
+
+[[package]]
 name = "seiva-openapi"
 version = "0.1.0"
 dependencies = [
- "delonix-seiva",
+ "seiva",
  "serde",
  "serde_json",
 ]
@@ -1670,16 +1716,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-resilience"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-server"
 version = "0.1.0"
 dependencies = [
  "axum",
- "delonix-seiva",
+ "seiva",
  "seiva-config",
  "seiva-http",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "seiva-webhooks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "hmac 0.12.1",
+ "seiva-ports",
+ "seiva-resilience",
+ "sha2 0.10.9",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "seiva-worker"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2339,9 +2417,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
