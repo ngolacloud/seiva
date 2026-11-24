@@ -28,6 +28,6 @@ mod adapter;
 #[cfg(feature = "seaorm")]
 pub use adapter::{
     audit_migrations, connect, current_scope, idempotency_migrations, outbox_migrations,
-    with_current_tx, SeaOrmAuditSink, SeaOrmConfig, SeaOrmIdempotencyStore, SeaOrmOutboxPublisher,
-    SeaOrmUnitOfWork,
+    with_current_tx, SeaOrmAuditLog, SeaOrmAuditSink, SeaOrmConfig, SeaOrmIdempotencyStore,
+    SeaOrmOutboxPublisher, SeaOrmUnitOfWork,
 };

@@ -3049,10 +3049,14 @@ dependencies = [
  "seiva",
  "seiva-http",
  "seiva-identity",
+ "seiva-ports",
+ "seiva-testing",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",
  "tower",
+ "tracing",
 ]
 
 [[package]]

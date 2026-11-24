@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use seiva_ports::{
-    AuditEntry, AuditSink, BoxError, EventPublisher, IdempotencyOutcome, IdempotencyStore,
-    PortResult, Scope, UnitOfWork,
+    AuditEntry, AuditLog, AuditQuery, AuditSink, BoxError, EventPublisher, IdempotencyOutcome,
+    IdempotencyStore, PortResult, Scope, UnitOfWork,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Transaction};
@@ -399,6 +399,108 @@ impl AuditSink for SqlxAuditSink {
         .await
         .map(|_| ())
         .map_err(boxed)
+    }
+}
+
+/// The sqlx-backed [`AuditLog`] (ADR 0013): the **read** twin of [`SqlxAuditSink`],
+/// returning the persisted `seiva_audit` entries matching an [`AuditQuery`],
+/// **newest first** and **bounded** by the query's
+/// [`effective_limit`](AuditQuery::effective_limit).
+///
+/// Like the sink it reads on its own pooled connection (the admin read path runs
+/// above any request transaction). The filters are AND-combined and **bound** as
+/// parameters — never interpolated — so `actor`/`tenant`/`object`/`outcome` match
+/// exactly (an unset or empty filter matches anything, exactly as
+/// [`AuditQuery::matches`] defines it). Ordering is by the `bigserial` primary key
+/// descending, so "newest first" is the insertion order the sink produced, and the
+/// `LIMIT` is the bounded effective limit, so a history view can never ask for an
+/// unbounded page.
+pub struct SqlxAuditLog {
+    pool: PgPool,
+}
+
+impl SqlxAuditLog {
+    /// Wraps a [`connect`]-built pool as an audit log reader.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl AuditLog for SqlxAuditLog {
+    async fn query(&self, query: &AuditQuery) -> PortResult<Vec<AuditEntry>> {
+        use sqlx::Row;
+
+        // Build the WHERE clause from only the *set* filters (a `None` or empty
+        // filter matches anything — the same rule `AuditQuery::matches` applies),
+        // binding each as a parameter so a value can never be interpolated into SQL.
+        let mut conditions: Vec<String> = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
+        let mut push = |column: &str, filter: &Option<String>| {
+            if let Some(wanted) = filter.as_deref().filter(|s| !s.is_empty()) {
+                binds.push(wanted.to_owned());
+                conditions.push(format!("{column} = ${}", binds.len()));
+            }
+        };
+        push("actor", &query.actor);
+        push("tenant", &query.tenant);
+        push("object", &query.object);
+        push("outcome", &query.outcome);
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        // The limit is server-controlled and bounded; bind it too (as i64) rather
+        // than interpolate, keeping the whole statement parameterized.
+        let limit = i64::from(query.effective_limit());
+        let sql = format!(
+            "SELECT actor, tenant, operation, object, outcome, request_id, details \
+             FROM seiva_audit{where_clause} ORDER BY id DESC LIMIT ${}",
+            binds.len() + 1
+        );
+
+        // Only framework-owned column names and `$n` placeholders are interpolated
+        // (every filter VALUE is bound above); `AssertSqlSafe` is sqlx 0.9's opt-in
+        // for a non-`'static` query string.
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for bind in binds {
+            q = q.bind(bind);
+        }
+        q = q.bind(limit);
+        let rows = q.fetch_all(&self.pool).await.map_err(boxed)?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let actor: String = row.try_get("actor").map_err(boxed)?;
+            let tenant: Option<String> = row.try_get("tenant").map_err(boxed)?;
+            let operation: String = row.try_get("operation").map_err(boxed)?;
+            let object: Option<String> = row.try_get("object").map_err(boxed)?;
+            let outcome: String = row.try_get("outcome").map_err(boxed)?;
+            let request_id: Option<String> = row.try_get("request_id").map_err(boxed)?;
+            let details: serde_json::Value = row.try_get("details").map_err(boxed)?;
+
+            // Reconstruct through the builder, never a literal (`AuditEntry` is
+            // `#[non_exhaustive]`). `details` comes back as the redacted JSON object
+            // the sink stored; rehydrate it as the `(name, value)` detail pairs.
+            let mut entry = AuditEntry::new(actor, operation, outcome)
+                .in_tenant(tenant)
+                .on_object(object)
+                .with_request_id(request_id);
+            if let serde_json::Value::Object(map) = details {
+                for (name, value) in map {
+                    let value = match value {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    entry = entry.with_detail(name, value);
+                }
+            }
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 }
 

@@ -54,9 +54,10 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
 use std::sync::OnceLock;
 
-use axum::extract::FromRequestParts;
+use axum::extract::{FromRequestParts, Query, State};
 use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode};
@@ -67,6 +68,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use seiva::admin::{admin_registry_conflicts, registered_admin_resources, AdminResource};
 use seiva_identity::Principal;
+use seiva_ports::{AuditEntry, AuditLog, AuditQuery};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 /// The path the console is served at when [`mount`]ed. The base framework does
@@ -77,6 +80,18 @@ pub const ADMIN_PATH: &str = "/admin";
 /// decide which resources to show. Mounted alongside [`ADMIN_PATH`] by
 /// [`admin_router`].
 pub const REGISTRY_PATH: &str = "/admin/registry.json";
+
+/// The path serving the audit trail history (ADR 0013), mounted by
+/// [`mount_audit`] when a composition root supplies an [`AuditLog`]. It is a
+/// **separate, stateful** opt-in from [`mount`]: the base console needs no store,
+/// but the audit view reads one.
+pub const AUDIT_PATH: &str = "/admin/audit";
+
+/// The permission a caller must hold to read the audit trail. The endpoint fails
+/// **closed** without it (a `403`), so an authenticated-but-unprivileged caller —
+/// and the anonymous one — gets nothing. An operator grants this to the roles that
+/// may inspect the history.
+pub const AUDIT_VIEW_PERM: &str = "audit.view";
 
 /// The opt-in dxjs console page (ADR 0016). Served only when a composition root
 /// calls [`mount_dx`]; the default [`ADMIN_PATH`] is the inline hash-pinned page.
@@ -633,6 +648,112 @@ pub fn mount(router: Router) -> Router {
     router.merge(admin_router())
 }
 
+// --- ADR 0013: the audit trail history view ------------------------------
+
+/// The allow-listed filters a caller may set on `GET /admin/audit` through the
+/// query-string. This typed struct **is** the allow-list: `serde_urlencoded`
+/// ignores any parameter that is not a field here, so an unknown or disallowed key
+/// is simply dropped. `tenant` is **deliberately absent** — the audit view is
+/// tenant-scoped and the tenant is taken from the caller's [`Principal`], never
+/// from the query-string, so a tenant operator cannot ask for another tenant's
+/// trail by adding `?tenant=…`.
+#[derive(Debug, Default, Deserialize)]
+struct AuditQueryParams {
+    /// Narrow to this actor subject (exact).
+    actor: Option<String>,
+    /// Narrow to this target object id (exact).
+    object: Option<String>,
+    /// Narrow to this outcome, e.g. `"201"`/`"403"` (exact).
+    outcome: Option<String>,
+    /// Cap the page size; `0`/absent means the port's `DEFAULT_LIMIT`.
+    limit: Option<u32>,
+}
+
+/// Renders one [`AuditEntry`] as JSON ([`AuditEntry`] is a core port type and does
+/// not derive `Serialize`, so the transport owns its wire shape — like
+/// [`resource_json`] does for a resource).
+fn audit_json(entry: &AuditEntry) -> serde_json::Value {
+    serde_json::json!({
+        "actor": entry.actor,
+        "tenant": entry.tenant,
+        "operation": entry.operation,
+        "object": entry.object,
+        "outcome": entry.outcome,
+        "request_id": entry.request_id,
+        "details": entry.details
+            .iter()
+            .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// `GET /admin/audit` — the audit trail history (ADR 0013), **tenant-scoped and
+/// fail-closed**. The caller must hold [`AUDIT_VIEW_PERM`] or the endpoint returns
+/// `403` (so anonymous and unprivileged callers get nothing). The returned page is
+/// built from an [`AuditQuery`] whose `actor`/`object`/`outcome`/`limit` come from
+/// the allow-listed [`AuditQueryParams`], but whose **`tenant` is taken from the
+/// caller's [`Principal`]**, not the query-string — a tenant operator reads only
+/// their own tenant's trail, and cannot widen it. A global (tenant-less) principal
+/// that holds the permission sees across tenants, which is the deliberate operator
+/// escape, mirroring the gateway's audited `Scope::Global`.
+async fn audit_handler(
+    Caller(caller): Caller,
+    State(log): State<Arc<dyn AuditLog>>,
+    Query(params): Query<AuditQueryParams>,
+) -> Response {
+    // Fail closed: no permission, no trail — before a query ever reaches the store.
+    if !caller.has(AUDIT_VIEW_PERM) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let query = AuditQuery {
+        actor: params.actor,
+        // The tenant constraint is the caller's, never the client's (fail-closed):
+        // a tenant-bound principal is pinned to its tenant; a global one is `None`
+        // (sees all), the audited cross-tenant escape.
+        tenant: caller.tenant.clone(),
+        object: params.object,
+        outcome: params.outcome,
+        limit: params.limit.unwrap_or(0),
+    };
+    match log.query(&query).await {
+        Ok(entries) => {
+            let page: Vec<serde_json::Value> = entries.iter().map(audit_json).collect();
+            (StatusCode::OK, Json(serde_json::json!({ "entries": page }))).into_response()
+        }
+        Err(error) => {
+            // Surface the cause (like the write-side audit middleware) but keep the
+            // response body generic — an internal store error is not the caller's.
+            tracing::warn!(target: "seiva::admin::audit", %error, "audit query failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// A `Router` serving `GET /admin/audit` backed by `log`. The audit store is the
+/// route's axum state, so this router carries it; merge it into the pre-layer
+/// `modules` router with [`mount_audit`].
+pub fn audit_router(log: Arc<dyn AuditLog>) -> Router {
+    Router::new()
+        .route(AUDIT_PATH, get(audit_handler))
+        .with_state(log)
+}
+
+/// Mounts the audit history view (`GET /admin/audit`) onto `router`, backed by
+/// `log`, and returns it. A **separate opt-in** from [`mount`]: the base console
+/// needs no store, so a composition root that wants the history explicitly hands an
+/// [`AuditLog`] (the DORM-backed `seiva_data_dorm::DormAuditLog`, or an in-memory
+/// one in tests).
+///
+/// Mount it on the **pre-layer `modules` router**, before
+/// `seiva_http::router_with_modules` wraps it — exactly like [`mount`] — so the
+/// route gets authn (the `Principal` the handler reads for its tenant scope and
+/// permission), the security headers and the rate limit. Mounting onto the
+/// already-layered application router would leave `/admin/audit` outside authn, so
+/// every caller would look anonymous and the permission guard would deny all.
+pub fn mount_audit(router: Router, log: Arc<dyn AuditLog>) -> Router {
+    router.merge(audit_router(log))
+}
+
 // --- ADR 0016: the opt-in dxjs console -----------------------------------
 
 /// The vendored dxjs console bundle, built from `examples/seiva-console` in the
@@ -821,6 +942,181 @@ mod registry_tests {
             recorded,
             "vendored dxjs bundle drifted from assets/dx.js.sha256 — re-vendor from the \
              dxjs repo (examples/seiva-console) and update the recorded hash (ADR 0016)"
+        );
+    }
+}
+
+/// HTTP tests for `GET /admin/audit`: tenant-scope fail-closed, the allow-list,
+/// and the newest-first page — driven over the real router with the in-memory
+/// [`RecordingAuditSink`] (which also `impl AuditLog`), no database. A request's
+/// `Arc<Principal>` extension stands in for what the authn layer populates (the
+/// same extension the write-side audit middleware and the `Caller` extractor read).
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use seiva_ports::{AuditEntry, AuditSink};
+    use seiva_testing::RecordingAuditSink;
+    use tower::ServiceExt;
+
+    /// A sink pre-loaded with three entries across two tenants, recorded oldest →
+    /// newest (so `acme`'s PATCH is the newest acme row).
+    async fn seeded_sink() -> RecordingAuditSink {
+        let sink = RecordingAuditSink::new();
+        for entry in [
+            AuditEntry::new("alice", "POST /v1/accounts/create_user", "201")
+                .in_tenant(Some("acme"))
+                .on_object(Some("user-1")),
+            AuditEntry::new("bob", "DELETE /v1/accounts/user-2", "403")
+                .in_tenant(Some("globex"))
+                .on_object(Some("user-2")),
+            AuditEntry::new("alice", "PATCH /v1/accounts/user-1", "200")
+                .in_tenant(Some("acme"))
+                .on_object(Some("user-1")),
+        ] {
+            sink.record(&entry).await.expect("seed");
+        }
+        sink
+    }
+
+    /// Drives `GET /admin/audit{query}` as `principal`, returning the status and the
+    /// parsed JSON body.
+    async fn get_audit(
+        sink: RecordingAuditSink,
+        principal: Principal,
+        query: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let log: Arc<dyn AuditLog> = Arc::new(sink);
+        let app = audit_router(log);
+        let request = Request::builder()
+            .uri(format!("{AUDIT_PATH}{query}"))
+            .extension(Arc::new(principal))
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(request).await.unwrap();
+        let status = res.status();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn without_the_view_permission_it_is_403() {
+        // An authenticated tenant operator who lacks `audit.view` gets nothing.
+        let (status, _) = get_audit(
+            seeded_sink().await,
+            Principal::in_tenant("alice", "acme", ["accounts.read"]),
+            "",
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "fail closed without audit.view"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_caller_is_403() {
+        let (status, _) = get_audit(seeded_sink().await, Principal::anonymous(), "").await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_tenant_operator_reads_only_their_own_trail_newest_first() {
+        // acme's operator holds the permission: sees exactly acme's two rows, the
+        // PATCH (newest) before the POST — globex's row is absent.
+        let (status, body) = get_audit(
+            seeded_sink().await,
+            Principal::in_tenant("alice", "acme", [AUDIT_VIEW_PERM]),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["entries"].as_array().expect("entries array");
+        assert_eq!(entries.len(), 2, "only acme's rows: {body}");
+        assert_eq!(
+            entries[0]["operation"], "PATCH /v1/accounts/user-1",
+            "newest first"
+        );
+        assert_eq!(entries[1]["operation"], "POST /v1/accounts/create_user");
+        assert!(
+            entries.iter().all(|e| e["tenant"] == "acme"),
+            "no cross-tenant leak: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_tenant_cannot_be_widened_from_the_query_string() {
+        // acme's operator tries `?tenant=globex` to read another tenant's trail.
+        // The param is NOT in the allow-list, so it is ignored and the tenant stays
+        // pinned to the caller's — acme's two rows, never globex's.
+        let (status, body) = get_audit(
+            seeded_sink().await,
+            Principal::in_tenant("alice", "acme", [AUDIT_VIEW_PERM]),
+            "?tenant=globex",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2, "still only acme's rows");
+        assert!(
+            entries.iter().all(|e| e["tenant"] == "acme"),
+            "the ?tenant override must not escape the caller's tenant: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_allow_listed_filters_narrow_the_page() {
+        // `?outcome=403` combined with the forced tenant: acme has no 403, so empty.
+        let (_, acme_403) = get_audit(
+            seeded_sink().await,
+            Principal::in_tenant("alice", "acme", [AUDIT_VIEW_PERM]),
+            "?outcome=403",
+        )
+        .await;
+        assert_eq!(
+            acme_403["entries"].as_array().unwrap().len(),
+            0,
+            "acme has no denied row"
+        );
+
+        // A global (tenant-less) operator holding the permission sees across tenants;
+        // `?outcome=403` then yields globex's denied delete.
+        let (status, body) = get_audit(
+            seeded_sink().await,
+            Principal::new("root", [AUDIT_VIEW_PERM]),
+            "?outcome=403",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "exactly the 403: {body}");
+        assert_eq!(entries[0]["actor"], "bob");
+        assert_eq!(entries[0]["outcome"], "403");
+    }
+
+    #[tokio::test]
+    async fn the_limit_is_allow_listed_and_bounds_the_page() {
+        // A global operator asks for one row: the newest across all tenants.
+        let (status, body) = get_audit(
+            seeded_sink().await,
+            Principal::new("root", [AUDIT_VIEW_PERM]),
+            "?limit=1",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = body["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "limit 1 returns one row");
+        assert_eq!(
+            entries[0]["operation"], "PATCH /v1/accounts/user-1",
+            "the newest"
         );
     }
 }

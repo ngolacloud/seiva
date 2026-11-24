@@ -8,12 +8,12 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, Value};
 use seiva_data_seaorm::{
     audit_migrations, connect, current_scope, idempotency_migrations, outbox_migrations,
-    with_current_tx, SeaOrmAuditSink, SeaOrmConfig, SeaOrmIdempotencyStore, SeaOrmOutboxPublisher,
-    SeaOrmUnitOfWork,
+    with_current_tx, SeaOrmAuditLog, SeaOrmAuditSink, SeaOrmConfig, SeaOrmIdempotencyStore,
+    SeaOrmOutboxPublisher, SeaOrmUnitOfWork,
 };
 use seiva_ports::{
-    AuditEntry, AuditSink, BoxError, EventPublisher, IdempotencyOutcome, IdempotencyStore, Scope,
-    UnitOfWork,
+    AuditEntry, AuditLog, AuditQuery, AuditSink, BoxError, EventPublisher, IdempotencyOutcome,
+    IdempotencyStore, Scope, UnitOfWork,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -343,4 +343,111 @@ async fn scope_is_surfaced_to_the_body() {
     })
     .await
     .expect("tx");
+}
+
+/// Live proof of the **read** side ([`SeaOrmAuditLog`], ADR 0013): entries written
+/// through [`SeaOrmAuditSink`] are read back by [`AuditLog::query`] **newest
+/// first**, each filter (`actor`/`tenant`/`object`/`outcome`) narrows the page, and
+/// the `effective_limit` bounds it — the SeaORM twin of the DORM gateway's
+/// read-side proof. Gated on `SEIVA_SEAORM_TEST_DSN`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn audit_log_reads_back_filtered_newest_first() {
+    let Some(conn) = conn().await else {
+        eprintln!("skipping: set SEIVA_SEAORM_TEST_DSN to run the SeaORM audit read-side proof");
+        return;
+    };
+    migrate(&conn).await;
+    run(
+        &conn,
+        "DELETE FROM seiva_audit WHERE actor IN ('reader-alice', 'reader-bob')",
+    )
+    .await;
+
+    let sink = SeaOrmAuditSink::new(conn.clone());
+    let log = SeaOrmAuditLog::new(conn.clone());
+
+    // Three entries, recorded e1 → e2 → e3 (so e3 is newest). Two actors, two
+    // tenants, two outcomes, so every filter has something to cut.
+    let e1 = AuditEntry::new("reader-alice", "POST /v1/accounts/create_user", "201")
+        .in_tenant(Some("acme"))
+        .on_object(Some("user-1"));
+    let e2 = AuditEntry::new("reader-bob", "DELETE /v1/accounts/user-2", "403")
+        .in_tenant(Some("globex"))
+        .on_object(Some("user-2"));
+    let e3 = AuditEntry::new("reader-alice", "PATCH /v1/accounts/user-1", "200")
+        .in_tenant(Some("acme"))
+        .on_object(Some("user-1"));
+    sink.record(&e1).await.expect("record e1");
+    sink.record(&e2).await.expect("record e2");
+    sink.record(&e3).await.expect("record e3");
+
+    let alice = |limit: u32| AuditQuery {
+        actor: Some("reader-alice".to_owned()),
+        limit,
+        ..AuditQuery::default()
+    };
+
+    // NEWEST FIRST: reader-alice's two rows come back e3 then e1.
+    let page = log.query(&alice(0)).await.expect("query alice");
+    assert_eq!(page.len(), 2, "two rows for reader-alice");
+    assert_eq!(
+        page[0].operation, "PATCH /v1/accounts/user-1",
+        "newest first"
+    );
+    assert_eq!(page[1].operation, "POST /v1/accounts/create_user");
+    assert_eq!(page[0].tenant.as_deref(), Some("acme"));
+    assert_eq!(page[0].object.as_deref(), Some("user-1"));
+
+    // LIMIT BOUND: effective_limit caps the page to the newest row only.
+    let bounded = log.query(&alice(1)).await.expect("query bounded");
+    assert_eq!(bounded.len(), 1, "limit 1 returns exactly one row");
+    assert_eq!(bounded[0].operation, "PATCH /v1/accounts/user-1");
+
+    // TENANT FILTER: globex has only reader-bob's denied delete.
+    let globex = log
+        .query(&AuditQuery {
+            tenant: Some("globex".to_owned()),
+            ..AuditQuery::default()
+        })
+        .await
+        .expect("query globex");
+    assert!(
+        globex.iter().all(|e| e.tenant.as_deref() == Some("globex")),
+        "the tenant filter admits only globex rows"
+    );
+    assert!(
+        globex
+            .iter()
+            .any(|e| e.actor == "reader-bob" && e.outcome == "403"),
+        "globex sees reader-bob's denied delete"
+    );
+
+    // OUTCOME FILTER (AND actor): only the 403 (reader-bob) among this test's rows.
+    let denied = log
+        .query(&AuditQuery {
+            outcome: Some("403".to_owned()),
+            actor: Some("reader-bob".to_owned()),
+            ..AuditQuery::default()
+        })
+        .await
+        .expect("query denied");
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].actor, "reader-bob");
+
+    // OBJECT FILTER (AND actor): reader-alice on user-1 → both rows.
+    let on_user1 = log
+        .query(&AuditQuery {
+            actor: Some("reader-alice".to_owned()),
+            object: Some("user-1".to_owned()),
+            ..AuditQuery::default()
+        })
+        .await
+        .expect("query object");
+    assert_eq!(on_user1.len(), 2, "both reader-alice rows target user-1");
+
+    run(
+        &conn,
+        "DELETE FROM seiva_audit WHERE actor IN ('reader-alice', 'reader-bob')",
+    )
+    .await;
 }

@@ -27,8 +27,8 @@ use async_trait::async_trait;
 use seiva_messaging::CloudEvent;
 use seiva_observability::trace_context;
 use seiva_ports::{
-    AuditEntry, AuditSink, BoxError, Clock, EventPublisher, Id, IdGenerator, IdempotencyOutcome,
-    IdempotencyStore, PortResult, Scope, UnitOfWork,
+    AuditEntry, AuditLog, AuditQuery, AuditSink, BoxError, Clock, EventPublisher, Id, IdGenerator,
+    IdempotencyOutcome, IdempotencyStore, PortResult, Scope, UnitOfWork,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -432,6 +432,104 @@ impl AuditSink for DormAuditSink {
         .await
         .map(|_| ())
         .map_err(|e| Box::new(e) as BoxError)
+    }
+}
+
+/// The DORM-backed [`AuditLog`] (ADR 0013): the **read** twin of [`DormAuditSink`],
+/// returning the persisted `seiva_audit` entries matching an [`AuditQuery`],
+/// **newest first** and **bounded** by the query's
+/// [`effective_limit`](AuditQuery::effective_limit).
+///
+/// Like the sink it opens its own session per query (the admin read path runs
+/// above any request transaction). The filters are AND-combined and bound as
+/// parameters — never interpolated — so `actor`/`tenant`/`object`/`outcome` match
+/// exactly (an unset or empty filter matches anything, exactly as
+/// [`AuditQuery::matches`] defines it). Ordering is by the `bigserial` primary key
+/// descending, so "newest first" is the insertion order the sink produced, and the
+/// `LIMIT` is the bounded effective limit, so a history view can never ask for an
+/// unbounded page.
+pub struct DormAuditLog {
+    db: Arc<dorm_core::db::Database>,
+}
+
+impl DormAuditLog {
+    /// Wraps a [`connect`]-built handle as an audit log reader.
+    #[must_use]
+    pub fn new(db: dorm_core::db::Database) -> Self {
+        Self { db: Arc::new(db) }
+    }
+}
+
+#[async_trait]
+impl AuditLog for DormAuditLog {
+    async fn query(&self, query: &AuditQuery) -> PortResult<Vec<AuditEntry>> {
+        use dorm_core::value::Value;
+
+        // Build the WHERE clause from only the *set* filters (a `None` or empty
+        // filter matches anything — the same rule `AuditQuery::matches` applies),
+        // binding each as a parameter so a value can never be interpolated into SQL.
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<Value> = Vec::new();
+        let mut push = |column: &str, filter: &Option<String>| {
+            if let Some(wanted) = filter.as_deref().filter(|s| !s.is_empty()) {
+                params.push(Value::Text(wanted.to_owned()));
+                conditions.push(format!("{column} = ${}", params.len()));
+            }
+        };
+        push("actor", &query.actor);
+        push("tenant", &query.tenant);
+        push("object", &query.object);
+        push("outcome", &query.outcome);
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        // The limit is server-controlled and bounded; bind it too (as i64) rather
+        // than interpolate, keeping the whole statement parameterized.
+        params.push(Value::I64(i64::from(query.effective_limit())));
+        let sql = format!(
+            "SELECT actor, tenant, operation, object, outcome, request_id, details \
+             FROM seiva_audit{where_clause} ORDER BY id DESC LIMIT ${}",
+            params.len()
+        );
+
+        let db = self.db.clone();
+        let rows =
+            dorm_core::db::with_session(db, async move { dorm_core::db::sql(&sql, &params).await })
+                .await
+                .map_err(|e| Box::new(e) as BoxError)?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let actor: String = row.try_get(0).map_err(|e| Box::new(e) as BoxError)?;
+            let tenant: Option<String> = row.try_get(1).map_err(|e| Box::new(e) as BoxError)?;
+            let operation: String = row.try_get(2).map_err(|e| Box::new(e) as BoxError)?;
+            let object: Option<String> = row.try_get(3).map_err(|e| Box::new(e) as BoxError)?;
+            let outcome: String = row.try_get(4).map_err(|e| Box::new(e) as BoxError)?;
+            let request_id: Option<String> = row.try_get(5).map_err(|e| Box::new(e) as BoxError)?;
+            let details: serde_json::Value = row.try_get(6).map_err(|e| Box::new(e) as BoxError)?;
+
+            // Reconstruct through the builder, never a literal (`AuditEntry` is
+            // `#[non_exhaustive]`). `details` comes back as the redacted JSON object
+            // the sink stored; rehydrate it as the `(name, value)` detail pairs.
+            let mut entry = AuditEntry::new(actor, operation, outcome)
+                .in_tenant(tenant)
+                .on_object(object)
+                .with_request_id(request_id);
+            if let serde_json::Value::Object(map) = details {
+                for (name, value) in map {
+                    let value = match value {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    entry = entry.with_detail(name, value);
+                }
+            }
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 }
 
@@ -1035,6 +1133,138 @@ mod tests {
         // Cleanup.
         dorm_core::db::with_session(probe, async move {
             dorm_core::db::run("DELETE FROM seiva_audit WHERE actor = 'alice'", &[]).await
+        })
+        .await
+        .expect("cleanup succeeds");
+    }
+
+    /// Live proof of the **read** side ([`DormAuditLog`], ADR 0013): entries
+    /// written through [`DormAuditSink`] are read back by [`AuditLog::query`]
+    /// **newest first**, each filter (`actor`/`tenant`/`object`/`outcome`) narrows
+    /// the page, and the `effective_limit` bounds it. This is the write→read
+    /// round-trip the `GET /admin/audit` endpoint relies on. Gated on
+    /// `SEIVA_DORM_TEST_DSN`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_audit_log_reads_back_filtered_newest_first() {
+        let Ok(dsn) = std::env::var("SEIVA_DORM_TEST_DSN") else {
+            eprintln!("skipping: set SEIVA_DORM_TEST_DSN to run the live audit read-side proof");
+            return;
+        };
+        let cfg = DormConfig {
+            dsn,
+            replicas: vec![],
+            read_only: false,
+            schema: None,
+            pool_max: 4,
+            cursor_key: b"live-audit-read-secret".to_vec(),
+        };
+        let sink = DormAuditSink::new(connect(&cfg).expect("connect the sink"));
+        let log = DormAuditLog::new(connect(&cfg).expect("connect the log"));
+        let probe = Arc::new(connect(&cfg).expect("connect the probe"));
+
+        // Fresh table, cleaned of any prior run's rows for these two actors.
+        let ddl = audit_migrations();
+        dorm_core::db::with_session(probe.clone(), async move {
+            for stmt in &ddl {
+                dorm_core::db::run_ddl(stmt).await?;
+            }
+            dorm_core::db::run(
+                "DELETE FROM seiva_audit WHERE actor IN ('reader-alice', 'reader-bob')",
+                &[],
+            )
+            .await?;
+            Ok::<_, dorm_core::Error>(())
+        })
+        .await
+        .expect("audit read-side setup succeeds");
+
+        // Three entries, recorded in order e1 → e2 → e3 (so e3 is newest). Two
+        // actors, two tenants, two outcomes, so every filter has something to cut.
+        let e1 = AuditEntry::new("reader-alice", "POST /v1/accounts/create_user", "201")
+            .in_tenant(Some("acme"))
+            .on_object(Some("user-1"));
+        let e2 = AuditEntry::new("reader-bob", "DELETE /v1/accounts/user-2", "403")
+            .in_tenant(Some("globex"))
+            .on_object(Some("user-2"));
+        let e3 = AuditEntry::new("reader-alice", "PATCH /v1/accounts/user-1", "200")
+            .in_tenant(Some("acme"))
+            .on_object(Some("user-1"));
+        sink.record(&e1).await.expect("record e1");
+        sink.record(&e2).await.expect("record e2");
+        sink.record(&e3).await.expect("record e3");
+
+        // Scope every assertion to this test's rows so a shared database stays sane.
+        let acme_alice = |limit: u32| AuditQuery {
+            actor: Some("reader-alice".to_owned()),
+            limit,
+            ..AuditQuery::default()
+        };
+
+        // NEWEST FIRST: reader-alice's two rows come back e3 then e1.
+        let page = log.query(&acme_alice(0)).await.expect("query alice");
+        assert_eq!(page.len(), 2, "two rows for reader-alice");
+        assert_eq!(
+            page[0].operation, "PATCH /v1/accounts/user-1",
+            "newest first"
+        );
+        assert_eq!(page[1].operation, "POST /v1/accounts/create_user");
+        assert_eq!(page[0].tenant.as_deref(), Some("acme"));
+        assert_eq!(page[0].object.as_deref(), Some("user-1"));
+
+        // LIMIT BOUND: effective_limit caps the page to the newest row only.
+        let bounded = log.query(&acme_alice(1)).await.expect("query bounded");
+        assert_eq!(bounded.len(), 1, "limit 1 returns exactly one row");
+        assert_eq!(bounded[0].operation, "PATCH /v1/accounts/user-1");
+
+        // TENANT FILTER: globex has only reader-bob's denied delete.
+        let globex = log
+            .query(&AuditQuery {
+                tenant: Some("globex".to_owned()),
+                ..AuditQuery::default()
+            })
+            .await
+            .expect("query globex");
+        assert!(
+            globex.iter().all(|e| e.tenant.as_deref() == Some("globex")),
+            "the tenant filter admits only globex rows"
+        );
+        assert!(
+            globex
+                .iter()
+                .any(|e| e.actor == "reader-bob" && e.outcome == "403"),
+            "globex sees reader-bob's denied delete"
+        );
+
+        // OUTCOME FILTER: only the 403 (reader-bob) among this test's rows.
+        let denied = log
+            .query(&AuditQuery {
+                outcome: Some("403".to_owned()),
+                actor: Some("reader-bob".to_owned()),
+                ..AuditQuery::default()
+            })
+            .await
+            .expect("query denied");
+        assert_eq!(denied.len(), 1);
+        assert_eq!(denied[0].actor, "reader-bob");
+
+        // OBJECT FILTER (AND-combined with actor): reader-alice on user-1 → 2 rows.
+        let on_user1 = log
+            .query(&AuditQuery {
+                actor: Some("reader-alice".to_owned()),
+                object: Some("user-1".to_owned()),
+                ..AuditQuery::default()
+            })
+            .await
+            .expect("query object");
+        assert_eq!(on_user1.len(), 2, "both reader-alice rows target user-1");
+
+        // Cleanup.
+        dorm_core::db::with_session(probe, async move {
+            dorm_core::db::run(
+                "DELETE FROM seiva_audit WHERE actor IN ('reader-alice', 'reader-bob')",
+                &[],
+            )
+            .await
         })
         .await
         .expect("cleanup succeeds");

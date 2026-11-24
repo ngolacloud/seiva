@@ -34,6 +34,6 @@ mod adapter;
 #[cfg(feature = "sqlx")]
 pub use adapter::{
     audit_migrations, connect, current_scope, idempotency_migrations, outbox_migrations,
-    with_current_tx, SqlxAuditSink, SqlxConfig, SqlxIdempotencyStore, SqlxOutboxPublisher,
-    SqlxUnitOfWork,
+    with_current_tx, SqlxAuditLog, SqlxAuditSink, SqlxConfig, SqlxIdempotencyStore,
+    SqlxOutboxPublisher, SqlxUnitOfWork,
 };

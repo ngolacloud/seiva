@@ -6,8 +6,8 @@ use sea_orm::{
     DatabaseTransaction, Statement, TransactionTrait, Value,
 };
 use seiva_ports::{
-    AuditEntry, AuditSink, BoxError, EventPublisher, IdempotencyOutcome, IdempotencyStore,
-    PortResult, Scope, UnitOfWork,
+    AuditEntry, AuditLog, AuditQuery, AuditSink, BoxError, EventPublisher, IdempotencyOutcome,
+    IdempotencyStore, PortResult, Scope, UnitOfWork,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -400,6 +400,108 @@ impl AuditSink for SeaOrmAuditSink {
             .await
             .map(|_| ())
             .map_err(boxed)
+    }
+}
+
+/// The SeaORM-backed [`AuditLog`] (ADR 0013): the **read** twin of
+/// [`SeaOrmAuditSink`], returning the persisted `seiva_audit` entries matching an
+/// [`AuditQuery`], **newest first** and **bounded** by the query's
+/// [`effective_limit`](AuditQuery::effective_limit).
+///
+/// Like the sink it reads on its own connection (the admin read path runs above any
+/// request transaction). The filters are AND-combined and **bound** as parameters —
+/// never interpolated — so `actor`/`tenant`/`object`/`outcome` match exactly (an
+/// unset or empty filter matches anything, exactly as [`AuditQuery::matches`]
+/// defines it). Ordering is by the `bigserial` primary key descending, so "newest
+/// first" is the insertion order the sink produced, and the `LIMIT` is the bounded
+/// effective limit, so a history view can never ask for an unbounded page. The
+/// JSON `details` is read back as text (`details::text`) and reparsed, so the
+/// adapter needs no SeaORM JSON feature — symmetric with how the sink casts it.
+pub struct SeaOrmAuditLog {
+    conn: DatabaseConnection,
+}
+
+impl SeaOrmAuditLog {
+    /// Wraps a [`connect`]-built connection as an audit log reader.
+    #[must_use]
+    pub fn new(conn: DatabaseConnection) -> Self {
+        Self { conn }
+    }
+}
+
+#[async_trait]
+impl AuditLog for SeaOrmAuditLog {
+    async fn query(&self, query: &AuditQuery) -> PortResult<Vec<AuditEntry>> {
+        // Build the WHERE clause from only the *set* filters (a `None` or empty
+        // filter matches anything — the same rule `AuditQuery::matches` applies),
+        // binding each as a parameter so a value can never be interpolated into SQL.
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<Value> = Vec::new();
+        let mut push = |column: &str, filter: &Option<String>| {
+            if let Some(wanted) = filter.as_deref().filter(|s| !s.is_empty()) {
+                params.push(Value::String(Some(wanted.to_owned())));
+                conditions.push(format!("{column} = ${}", params.len()));
+            }
+        };
+        push("actor", &query.actor);
+        push("tenant", &query.tenant);
+        push("object", &query.object);
+        push("outcome", &query.outcome);
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        // The limit is server-controlled and bounded; bind it too (as i64) rather
+        // than interpolate, keeping the whole statement parameterized.
+        params.push(Value::BigInt(Some(i64::from(query.effective_limit()))));
+        let sql = format!(
+            "SELECT actor, tenant, operation, object, outcome, request_id, details::text \
+             FROM seiva_audit{where_clause} ORDER BY id DESC LIMIT ${}",
+            params.len()
+        );
+
+        let rows = self
+            .conn
+            .query_all_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                sql,
+                params,
+            ))
+            .await
+            .map_err(boxed)?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let actor: String = row.try_get_by_index(0).map_err(boxed)?;
+            let tenant: Option<String> = row.try_get_by_index(1).map_err(boxed)?;
+            let operation: String = row.try_get_by_index(2).map_err(boxed)?;
+            let object: Option<String> = row.try_get_by_index(3).map_err(boxed)?;
+            let outcome: String = row.try_get_by_index(4).map_err(boxed)?;
+            let request_id: Option<String> = row.try_get_by_index(5).map_err(boxed)?;
+            let details_text: String = row.try_get_by_index(6).map_err(boxed)?;
+
+            // Reconstruct through the builder, never a literal (`AuditEntry` is
+            // `#[non_exhaustive]`). `details` comes back as the redacted JSON object
+            // the sink stored (as text); rehydrate it as the `(name, value)` pairs.
+            let mut entry = AuditEntry::new(actor, operation, outcome)
+                .in_tenant(tenant)
+                .on_object(object)
+                .with_request_id(request_id);
+            let details: serde_json::Value = serde_json::from_str(&details_text).map_err(boxed)?;
+            if let serde_json::Value::Object(map) = details {
+                for (name, value) in map {
+                    let value = match value {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    entry = entry.with_detail(name, value);
+                }
+            }
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 }
 
