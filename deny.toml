@@ -13,15 +13,25 @@
 version = 2
 # A yanked dependency is treated as hard a failure as a vulnerable one.
 yanked = "deny"
-# Both gates (default AND --all-features) are clean and need NO exception. The
-# optional broker backends of seiva-messaging (nats/amqp/kafka) were bumped
-# (async-nats 0.51, lapin 4, rskafka 0.6) so their TLS/compression stacks no
-# longer carry advisories.
+# The default gate is clean and needs NO exception. The optional broker backends
+# of seiva-messaging (nats/amqp/kafka) were bumped (async-nats 0.51, lapin 4,
+# rskafka 0.6) so their TLS/compression stacks no longer carry vulnerabilities;
+# the one exception below only shows up with --all-features (the `kafka` feature).
 #
 # Format for a genuine exception, when one is ever unavoidable:
 #   # RUSTSEC-YYYY-NNNN — <crate>: <why it does not affect Seiva>. Reviewed
 #   # YYYY-MM-DD; remove once <fixed-version> is reachable.
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0543 — chrono: unmaintained, NOT a vulnerability (no known
+    # exploit; every version is "affected" and there is no fixed release). It is
+    # reached only through the optional `kafka` backend of seiva-messaging:
+    # rskafka 0.6 depends on chrono, and seiva-messaging enables chrono's `clock`
+    # feature (gated to `kafka`) to stamp record times with
+    # `rskafka::chrono::Utc::now()`. The default build does not contain it.
+    # Reviewed 2026-11-24; remove once rskafka (or the Kafka backend) moves to
+    # `time`/`jiff`, the alternatives the advisory recommends.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (no vulnerability); only via the optional kafka backend (rskafka 0.6)" },
+]
 
 [licenses]
 version = 2

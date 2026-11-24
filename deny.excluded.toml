@@ -26,4 +26,9 @@ ignore = [
     # rustls-pki-types). Pulled by `tokio-postgres-rustls` in DORM's TLS path.
     # Unmaintained-only, no known vulnerability. Owner: DORM.
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained via tokio-postgres-rustls; fix in DORM" },
+    # chrono is unmaintained (RUSTSEC-2026-0543, added 2026-11-24). Unmaintained-
+    # only: no known vulnerability and no fixed release. Pulled by `dorm-core` and
+    # by `postgres-types` (its chrono feature, enabled in DORM's tree) for date/time
+    # columns. Fix: DORM moves its date/time types to `time`/`jiff`. Owner: DORM.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained via dorm-core/postgres-types; no vulnerability; fix in DORM" },
 ]
