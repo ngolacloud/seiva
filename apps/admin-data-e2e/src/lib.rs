@@ -14,9 +14,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
+use dorm_core::value::Value;
 use seiva::admin::{AdminPermissions, AdminResource};
 use seiva::{controller, facade, register_admin};
-use dorm_core::value::Value;
 use seiva_data_dorm::DormUnitOfWork;
 use seiva_http::{fingerprint, scoped_key, Ctx, Problem, Validate, ValidationError};
 use seiva_ports::{BoxError, IdempotencyOutcome, IdempotencyStore, PortResult, Scope, UnitOfWork};
@@ -362,6 +362,14 @@ impl Catalog for CatalogController {
                         IdempotencyOutcome::Mismatch => {
                             return Ok(CreateOutcome::Conflict(
                                 "this Idempotency-Key was already used for a request with different content",
+                            ));
+                        }
+                        // A future outcome kind is treated as a conflict (fail-closed):
+                        // refuse rather than silently re-run the insert, as
+                        // seiva-http's bus does.
+                        _ => {
+                            return Ok(CreateOutcome::Conflict(
+                                "a request with this Idempotency-Key is still being processed; retry shortly",
                             ));
                         }
                     }
