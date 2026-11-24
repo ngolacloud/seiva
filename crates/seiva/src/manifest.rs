@@ -2,7 +2,7 @@
 //!
 //! Each module declares, in `module.toml`, the facade version it exposes, who
 //! owns it, the facades it **uses** (`[[uses]]`) and who it **allows** to call
-//! it (`[[allow]]`). The [`crate::lint`] contract check reads these and enforces
+//! it (`[[allow]]`). The `seiva lint` contract check reads these and enforces
 //! that every `uses` has a matching `allow` — everything is denied by default.
 
 use serde::Deserialize;

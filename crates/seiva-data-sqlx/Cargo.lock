@@ -1125,6 +1125,7 @@ dependencies = [
  "notes-domain",
  "notes-facade",
  "seiva-ports",
+ "seiva-sql-ambient-tx",
  "seiva-testing",
  "serde_json",
  "sqlx",
@@ -1185,6 +1186,14 @@ name = "seiva-ports"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+]
+
+[[package]]
+name = "seiva-sql-ambient-tx"
+version = "0.1.0"
+dependencies = [
+ "seiva-ports",
+ "tokio",
 ]
 
 [[package]]

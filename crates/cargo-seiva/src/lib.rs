@@ -281,17 +281,31 @@ pub fn check_layers(modules: &[ModuleLayers]) -> Vec<Violation> {
     violations
 }
 
-/// Checks the data-layer neutrality rule (ADR 0030): an `application` or `domain`
-/// crate must name no data-layer crate — not a Seiva data adapter (`seiva-data-*`)
-/// and not an ORM/driver (`sqlx`, `sea-orm`, `diesel`, `tokio-postgres`, …). The
-/// pure layers code against the ports in `seiva-ports` and their own repository
-/// port, never a concrete backend. Pure; deterministic. The DORM-specific edge is
-/// also caught by [`check_layers`]; this check is the broader neutrality gate that
-/// turns "don't name an ORM" from a convention into a fitness function.
+/// The layers the data-layer-neutrality rule reads. `application` and `domain` are
+/// the Clean-Architecture core — coding against a concrete backend there is the sin
+/// the ports exist to prevent. `facade` is included as the published contract /
+/// inbound port (the single source of OpenAPI + proto + routes): the wire DTOs are
+/// already kept ORM-free by `WireSchema` (which rejects generics and demands each
+/// field be `WireSchema`), so this is defence-in-depth — it makes the boundary's
+/// ORM-freedom an explicit gate rather than an emergent property, catching a facade
+/// that `depend`s on an ORM crate before a hand-written `impl WireSchema` could ever
+/// leak a backend type onto the wire. `infrastructure` and `interface` are exempt:
+/// the adapter layer legitimately binds the backend, and the transport shell only
+/// maps it.
+const NEUTRALITY_SCANNED_LAYERS: [&str; 3] = ["application", "domain", "facade"];
+
+/// Checks the data-layer neutrality rule (ADR 0030): an `application`, `domain` or
+/// `facade` crate must name no data-layer crate — not a Seiva data adapter
+/// (`seiva-data-*`) and not an ORM/driver (`sqlx`, `sea-orm`, `diesel`,
+/// `tokio-postgres`, …). The pure layers code against the ports in `seiva-ports` and
+/// their own repository port, and the contract is expressed in wire DTOs — never a
+/// concrete backend. Pure; deterministic. The DORM-specific edge is also caught by
+/// [`check_layers`]; this check is the broader neutrality gate that turns "don't
+/// name an ORM" from a convention into a fitness function.
 pub fn check_data_layer_neutrality(modules: &[ModuleLayers]) -> Vec<Violation> {
     let mut violations = Vec::new();
     for m in modules {
-        for layer in ["application", "domain"] {
+        for layer in NEUTRALITY_SCANNED_LAYERS {
             let Some(deps) = m.layers.get(layer) else {
                 continue;
             };

@@ -1,6 +1,6 @@
 # ADR 0030 — The data layer is pluggable: DORM is the default adapter, not a requirement; sqlx and SeaORM are first-class
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-15
 - Deciders: NgolaCloud
 - Follows: ADR 0002 (core ports and in-memory doubles), ADR 0004 (the DORM data-layer gateway), ADR 0011 (idempotency as a port, reusing DORM), ADR 0017 (pluggable password hashers + a reference flow)
@@ -98,9 +98,12 @@ to DORM when the adapter *is* DORM; for sqlx/SeaORM the CLI points at the native
 separate slice; this ADR fixes the **policy**, not the plumbing.
 
 **Neutrality becomes a fitness function.** `seiva lint` gains a check that fails if
-an `application` or `domain` crate names a data-adapter crate (`seiva-data-*`) or an
-ORM type. The one-way, ORM-free boundary stops being a convention and becomes a CI
-gate; CI builds all three reference adapters against the ports.
+an `application`, `domain` or `facade` crate names a data-adapter crate
+(`seiva-data-*`) or an ORM type. The pure layers code against the ports; the `facade`
+is covered too as the published contract (the single source of OpenAPI + proto +
+routes) — defence-in-depth over the `WireSchema` boundary, which already keeps the
+wire DTOs ORM-free. The one-way, ORM-free boundary stops being a convention and
+becomes a CI gate; CI builds all three reference adapters against the ports.
 
 ## Alternatives considered
 
@@ -142,7 +145,9 @@ gate; CI builds all three reference adapters against the ports.
   that is a signal the port is wrong, caught early by the sqlx adapter.
 - **Enforcement, not trust:** neutrality is checked by `seiva lint` and the boundary
   is a CI gate, so it cannot silently rot.
-- **Out of this ADR:** the migration CLI for non-DORM adapters (`seiva db *`,
-  `module new --data external`) is a separate slice; until it lands, sqlx/SeaORM
-  users run their own migration tool outside `seiva db`. This ADR commits the policy
-  that makes that slice worth doing.
+- **Out of this ADR:** the DORM-specific migration CLI for non-DORM adapters
+  (`seiva db migrate/pull/studio`) is a separate slice; until it lands, sqlx/SeaORM
+  users run their own migration tool outside `seiva db`. (`module new --data
+  sqlx|seaorm|external` itself did land under this ADR's adapter slice, scaffolding
+  per adapter and pointing at the native tool.) This ADR commits the policy that
+  makes the remaining slice worth doing.

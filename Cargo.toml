@@ -59,6 +59,11 @@ members = [
     # In-memory reference doubles for the ports, so a module's application layer
     # unit-tests with no server, broker or database. A dev-dependency only.
     "crates/seiva-testing",
+    # The ambient-transaction read-seam shared by the handle-based SQL reference
+    # adapters (ADR 0030). Pure — only `seiva-ports` + `tokio`, no ORM, no DORM — so
+    # it IS a default member (covered by `check`); the ORM adapters that depend on it
+    # by path stay excluded.
+    "crates/seiva-sql-ambient-tx",
     # The framework's procedural macros (#[seiva::facade], ...).
     "crates/seiva-macros",
     # Messaging: CloudEvents envelope + Publisher + broker backends (features).

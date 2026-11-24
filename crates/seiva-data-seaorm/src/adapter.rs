@@ -9,33 +9,20 @@ use seiva_ports::{
     AuditEntry, AuditLog, AuditQuery, AuditSink, BoxError, EventPublisher, IdempotencyOutcome,
     IdempotencyStore, PortResult, Scope, UnitOfWork,
 };
+use seiva_sql_ambient_tx::{
+    boxed, current_scope as shared_current_scope, with_current_tx_ref, TxState,
+};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-
-/// Boxes any concrete error as the port boundary's opaque [`BoxError`].
-fn boxed<E: std::error::Error + Send + Sync + 'static>(e: E) -> BoxError {
-    Box::new(e)
-}
-
-/// The error a port returns when driven outside a [`UnitOfWork::transaction`].
-fn no_ambient_tx() -> BoxError {
-    "no ambient SeaORM transaction in scope: call this inside UnitOfWork::transaction".into()
-}
-
-/// State bound into the task-local for one unit of work: the live transaction (an
-/// `Option` so it can be taken back out to commit/roll back) and its [`Scope`].
-struct TxState {
-    tx: Mutex<Option<DatabaseTransaction>>,
-    scope: Scope,
-}
 
 tokio::task_local! {
-    /// The current unit of work's transaction + scope. Bound only inside
-    /// [`SeaOrmUnitOfWork::transaction`]; read by [`with_current_tx`] / [`current_scope`].
-    static CURRENT: Arc<TxState>;
+    /// The current unit of work's transaction + scope (the shared [`TxState`] seam).
+    /// Bound only inside [`SeaOrmUnitOfWork::transaction`]; read by [`with_current_tx`]
+    /// / [`current_scope`]. A `static` cannot be generic, so each adapter declares its
+    /// own key over its concrete handle type.
+    static CURRENT: Arc<TxState<DatabaseTransaction>>;
 }
 
 /// The SeaORM connection configuration a composition root hands the adapter.
@@ -63,7 +50,7 @@ pub async fn connect(config: &SeaOrmConfig) -> Result<DatabaseConnection, sea_or
 /// [`SeaOrmUnitOfWork::transaction`] opened. The closure returns a **boxed** future
 /// whose lifetime is tied to the borrowed `&DatabaseTransaction` (the `for<'c>`
 /// bound), which is what lets the body `.await` while holding the reference.
-/// Returns [`no_ambient_tx`] if called outside a transaction.
+/// Errors if called outside a transaction (the task-local is unbound).
 ///
 /// ```ignore
 /// seiva_data_seaorm::with_current_tx(|txn| Box::pin(async move {
@@ -81,17 +68,14 @@ where
         &'c DatabaseTransaction,
     ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'c>>,
 {
-    let state = CURRENT.try_with(Arc::clone).map_err(|_| no_ambient_tx())?;
-    let guard = state.tx.lock().await;
-    let txn = guard.as_ref().ok_or_else(no_ambient_tx)?;
-    f(txn).await
+    with_current_tx_ref(&CURRENT, "SeaORM", f).await
 }
 
 /// The [`Scope`] the current unit of work was opened for, or `None` outside a
 /// transaction. A tenant-aware repository reads it to constrain its own SQL.
 #[must_use]
 pub fn current_scope() -> Option<Scope> {
-    CURRENT.try_with(|state| state.scope.clone()).ok()
+    shared_current_scope(&CURRENT)
 }
 
 /// The SeaORM-backed [`UnitOfWork`]: the scope-based port mapped onto
@@ -128,16 +112,13 @@ impl UnitOfWork for SeaOrmUnitOfWork {
         let conn = self.conn.clone();
         Box::pin(async move {
             let txn = conn.begin().await.map_err(boxed)?;
-            let state = Arc::new(TxState {
-                tx: Mutex::new(Some(txn)),
-                scope,
-            });
+            let state = TxState::new(txn, scope);
+            // Run the body with the transaction bound as the ambient one, then take
+            // the handle back out to commit/roll back once the body has returned.
             let result = CURRENT.scope(Arc::clone(&state), work()).await;
             let txn = state
-                .tx
-                .lock()
-                .await
                 .take()
+                .await
                 .ok_or_else(|| BoxError::from("ambient transaction already consumed"))?;
             match result {
                 Ok(value) => {

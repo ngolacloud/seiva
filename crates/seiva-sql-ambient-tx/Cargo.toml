@@ -1,0 +1,32 @@
+# seiva-sql-ambient-tx — the ambient-transaction read-seam shared by the handle-based
+# SQL reference adapters (`seiva-data-sqlx`, `seiva-data-seaorm`; ADR 0030).
+#
+# The "ambient transaction" contract (ADR 0030): `UnitOfWork::transaction` passes no
+# handle to the body, so a module's repository reaches the current transaction through
+# a task-local. This crate factors out the half of that mechanism that is identical
+# across the two SQL adapters — the `TxState<T>` holder, the task-local lookup, the
+# `current_scope` read and the opaque error boxing — generic over the backend's
+# transaction handle `T`. Each adapter keeps its OWN `tokio::task_local!` (a static
+# cannot be generic) and its own `begin`/`commit`/`rollback` (backend-specific).
+#
+# The DORM gateway (`seiva-data-dorm`) does NOT use this: its transaction model is
+# closure-scoped (`dorm_core::db::atomic`, ADR 0004), with no handle to bind, so there
+# is nothing to share. This seam is for handle-based adapters only.
+#
+# Pure (only `seiva-ports` + `tokio`), so — unlike the ORM adapters — it IS a default
+# workspace member and is covered by the core `check` job.
+[package]
+name = "seiva-sql-ambient-tx"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+seiva-ports = { path = "../seiva-ports" }
+# task-local lookup + an async Mutex to hold the handle across the repository awaits
+# (a std Mutex guard held across `.await` would make the future non-Send).
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

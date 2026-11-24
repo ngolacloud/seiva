@@ -22,10 +22,14 @@ publish = false
 [features]
 default = ["seaorm"]
 # The adapter proper. Off → the crate is empty (the ports are not implemented).
-seaorm = ["dep:sea-orm"]
+seaorm = ["dep:sea-orm", "dep:seiva-sql-ambient-tx"]
 
 [dependencies]
 seiva-ports = { path = "../seiva-ports" }
+# The ambient-transaction read-seam shared with the sqlx adapter (ADR 0030): the
+# generic `TxState<T>`, the task-local lookup and `current_scope`. Gated with the
+# adapter so a feature-off build links neither it nor SeaORM.
+seiva-sql-ambient-tx = { path = "../seiva-sql-ambient-tx", optional = true }
 async-trait = "0.1"
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 serde_json = "1"

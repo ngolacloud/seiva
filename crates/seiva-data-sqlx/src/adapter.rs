@@ -5,37 +5,22 @@ use seiva_ports::{
     AuditEntry, AuditLog, AuditQuery, AuditSink, BoxError, EventPublisher, IdempotencyOutcome,
     IdempotencyStore, PortResult, Scope, UnitOfWork,
 };
+use seiva_sql_ambient_tx::{
+    boxed, current_scope as shared_current_scope, with_current_tx_mut, TxState,
+};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Transaction};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-
-/// Boxes any concrete error as the port boundary's opaque [`BoxError`].
-fn boxed<E: std::error::Error + Send + Sync + 'static>(e: E) -> BoxError {
-    Box::new(e)
-}
-
-/// The error a port returns when it is driven outside a [`UnitOfWork::transaction`]
-/// — the ambient transaction the sqlx ports require is simply not there.
-fn no_ambient_tx() -> BoxError {
-    "no ambient sqlx transaction in scope: call this inside UnitOfWork::transaction".into()
-}
-
-/// The state bound into the task-local for the duration of one unit of work: the
-/// live transaction (an `Option` so it can be taken back out to commit/roll back
-/// once the body returns) and the [`Scope`] it was opened under.
-struct TxState {
-    tx: Mutex<Option<Transaction<'static, Postgres>>>,
-    scope: Scope,
-}
 
 tokio::task_local! {
-    /// The current unit of work's transaction + scope. Bound only inside
-    /// [`SqlxUnitOfWork::transaction`]; read by [`with_current_tx`] / [`current_scope`].
-    static CURRENT: Arc<TxState>;
+    /// The current unit of work's transaction + scope (the shared [`TxState`] seam).
+    /// Bound only inside [`SqlxUnitOfWork::transaction`]; read by [`with_current_tx`]
+    /// / [`current_scope`]. A `static` cannot be generic, so each adapter declares its
+    /// own key over its concrete handle type.
+    static CURRENT: Arc<TxState<Transaction<'static, Postgres>>>;
 }
 
 /// The sqlx connection configuration a composition root hands the adapter.
@@ -63,7 +48,8 @@ pub async fn connect(config: &SqlxConfig) -> Result<PgPool, sqlx::Error> {
 /// The scope-based [`UnitOfWork`] passes no handle to the body, so a repository
 /// calls this to reach the transaction the surrounding [`SqlxUnitOfWork::transaction`]
 /// opened. Every statement run on the `&mut Transaction` joins that transaction and
-/// commits or rolls back with it. Returns [`no_ambient_tx`] if called outside one.
+/// commits or rolls back with it. Errors if called outside one (the task-local is
+/// unbound).
 ///
 /// The closure returns a **boxed** future whose lifetime is tied to the borrowed
 /// `&mut Transaction` (the `for<'c>` bound) — that higher-ranked lifetime is what
@@ -85,10 +71,7 @@ where
         &'c mut Transaction<'static, Postgres>,
     ) -> Pin<Box<dyn Future<Output = PortResult<T>> + Send + 'c>>,
 {
-    let state = CURRENT.try_with(Arc::clone).map_err(|_| no_ambient_tx())?;
-    let mut guard = state.tx.lock().await;
-    let tx = guard.as_mut().ok_or_else(no_ambient_tx)?;
-    f(tx).await
+    with_current_tx_mut(&CURRENT, "sqlx", f).await
 }
 
 /// The [`Scope`] the current unit of work was opened for, or `None` outside a
@@ -96,7 +79,7 @@ where
 /// sqlx adapter does not auto-filter — the query is the user's).
 #[must_use]
 pub fn current_scope() -> Option<Scope> {
-    CURRENT.try_with(|state| state.scope.clone()).ok()
+    shared_current_scope(&CURRENT)
 }
 
 /// The sqlx-backed [`UnitOfWork`]: the scope-based port mapped onto
@@ -133,19 +116,13 @@ impl UnitOfWork for SqlxUnitOfWork {
         let pool = self.pool.clone();
         Box::pin(async move {
             let tx = pool.begin().await.map_err(boxed)?;
-            let state = Arc::new(TxState {
-                tx: Mutex::new(Some(tx)),
-                scope,
-            });
-            // Run the body with the transaction bound as the ambient one. The scope
-            // clone the body ran under is dropped when it returns, leaving `state`
-            // as the sole owner, so we can take the transaction back out below.
+            let state = TxState::new(tx, scope);
+            // Run the body with the transaction bound as the ambient one, then take
+            // the handle back out to commit/roll back once the body has returned.
             let result = CURRENT.scope(Arc::clone(&state), work()).await;
             let tx = state
-                .tx
-                .lock()
-                .await
                 .take()
+                .await
                 .ok_or_else(|| BoxError::from("ambient transaction already consumed"))?;
             match result {
                 Ok(value) => {
