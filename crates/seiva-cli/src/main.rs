@@ -371,7 +371,7 @@ fn append_patch_section(manifest: &Path, framework_root: &str) -> std::io::Resul
     std::fs::write(manifest, cargo)
 }
 
-fn module_new(name: &str, data: &str, admin: bool) -> ExitCode {
+fn module_new(name: &str, data: &str, data_explicit: bool, admin: bool) -> ExitCode {
     if let Err(err) = scaffold::validate_name(name) {
         eprintln!("seiva: {err}");
         return ExitCode::FAILURE;
@@ -391,7 +391,15 @@ fn module_new(name: &str, data: &str, admin: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let files = match scaffold::module_files(name, admin) {
+    // An explicit `--data dorm` also paves the typed DORM repository behind the
+    // module's `dorm` feature; the default stays on the in-memory adapter alone.
+    let dorm_adapter = data_explicit && data == scaffold::DataLayer::Dorm;
+    let generated = if dorm_adapter {
+        scaffold::module_files_with_dorm_adapter(name, admin)
+    } else {
+        scaffold::module_files(name, admin)
+    };
+    let files = match generated {
         Ok(files) => files,
         Err(err) => {
             eprintln!("seiva: {err}");
@@ -416,6 +424,13 @@ fn module_new(name: &str, data: &str, admin: bool) -> ExitCode {
     };
     // Non-DORM adapters need no `data/` DORM project; point at the native tool.
     let data_note = match data {
+        scaffold::DataLayer::Dorm if dorm_adapter => {
+            " Data layer: DORM (run `seiva db init` to scaffold migrations). Paved a typed \
+             DORM repository behind the `dorm` feature: enable it and swap \
+             `InMemoryRecordRepository` for `dorm_adapter::DormRecordRepository` in the \
+             composition root."
+                .to_owned()
+        }
         scaffold::DataLayer::Dorm => {
             " Data layer: DORM (run `seiva db init` to scaffold migrations).".to_owned()
         }
@@ -1659,9 +1674,12 @@ fn main() -> ExitCode {
             ProjectAction::New { name, kind } => project_new(&name, kind.as_deref()),
         },
         Command::Module { action } => match action {
-            ModuleAction::New { name, data, admin } => {
-                module_new(&name, data.as_deref().unwrap_or("dorm"), admin)
-            }
+            ModuleAction::New { name, data, admin } => module_new(
+                &name,
+                data.as_deref().unwrap_or("dorm"),
+                data.is_some(),
+                admin,
+            ),
             ModuleAction::Split { name } => module_split(&name),
             ModuleAction::Merge { name } => module_merge(&name),
         },
