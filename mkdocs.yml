@@ -358,4 +358,5 @@ nav:
           - 0043 · Append-only audit log: adr/0043-append-only-audit.md
           - 0044 · Native Postgres RLS: adr/0044-native-rls.md
           - 0045 · Egress / SSRF guard: adr/0045-egress-ssrf-guard.md
+          - 0046 · Typed event contract: adr/0046-typed-event-contract.md
   - API reference: https://ngolacloud.github.io/seiva/api/

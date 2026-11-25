@@ -42,3 +42,9 @@ seiva-worker = { workspace = true }
 # yet; the flag is declared here now so the boundary is visible from day one.
 default = ["dorm"]
 dorm = []
+
+[dev-dependencies]
+# The typed-event test (`event::tests`) publishes through the in-memory
+# `RecordingEventPublisher` to prove `publish_event` carries the declared topic.
+seiva-testing = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }

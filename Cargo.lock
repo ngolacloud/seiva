@@ -2996,10 +2996,12 @@ dependencies = [
  "inventory",
  "seiva-macros",
  "seiva-ports",
+ "seiva-testing",
  "seiva-worker",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
  "toml",
 ]
 

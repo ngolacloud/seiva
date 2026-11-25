@@ -366,7 +366,33 @@ fn project_readme(name: &str, kind: ProjectKind) -> String {
 /// adapter that yields `<trait>_router` plus the OpenAPI/proto generation, and
 /// the `application` implements the facade over `seiva-ports`. See the module
 /// docs for the full shape and the layering decision.
+///
+/// The infrastructure crate starts on the in-memory adapter, so a generated
+/// project compiles and runs with **no database and no ORM**; see
+/// [`module_files_with_dorm_adapter`] for the typed DORM repository.
 pub fn module_files(module: &str, admin: bool) -> Result<Vec<GeneratedFile>, ScaffoldError> {
+    module_files_with(module, admin, false)
+}
+
+/// Files for a new module, like [`module_files`], whose infrastructure crate also
+/// gains, **behind its `dorm` feature**, a typed DORM-backed repository
+/// (`dorm_adapter::DormRecordRepository`) over a `#[derive(Model)]` row — the paved
+/// typed path, modelled on the compile-proven `apps/dorm-e2e`. The in-memory adapter
+/// the composition root wires by default is left untouched, so the generated project
+/// still builds DORM-free. `seiva module new --data dorm` (asked for explicitly)
+/// emits this shape.
+pub fn module_files_with_dorm_adapter(
+    module: &str,
+    admin: bool,
+) -> Result<Vec<GeneratedFile>, ScaffoldError> {
+    module_files_with(module, admin, true)
+}
+
+fn module_files_with(
+    module: &str,
+    admin: bool,
+    dorm_adapter: bool,
+) -> Result<Vec<GeneratedFile>, ScaffoldError> {
     validate_name(module)?;
     // A validated name is already lowercase snake_case, so `snake == module`;
     // we keep the name explicit for the crate-import spellings (`<snake>_facade`).
@@ -377,6 +403,16 @@ pub fn module_files(module: &str, admin: bool) -> Result<Vec<GeneratedFile>, Sca
     let pascal = to_pascal_case(&snake);
     let base = format!("modules/{module}");
     let file = |path: String, contents: String| GeneratedFile { path, contents };
+
+    // Infrastructure: in-memory by default; `--data dorm` appends a feature-gated
+    // typed DORM adapter to the crate (and the optional ORM deps to its manifest), so
+    // the ORM enters only when the `dorm` feature is on — the gateway boundary.
+    let mut infra_lib = infrastructure_lib(&snake);
+    let mut infra_cargo = infrastructure_cargo_toml(module);
+    if dorm_adapter {
+        infra_lib.push_str(&infrastructure_dorm_adapter(&snake));
+        infra_cargo.push_str(&infrastructure_dorm_features());
+    }
 
     Ok(vec![
         file(format!("{base}/module.toml"), module_toml(module)),
@@ -405,15 +441,10 @@ pub fn module_files(module: &str, admin: bool) -> Result<Vec<GeneratedFile>, Sca
             format!("{base}/application/src/lib.rs"),
             application_lib(&snake, &pascal),
         ),
-        // infrastructure: the in-memory repository adapter (DORM via `dorm`).
-        file(
-            format!("{base}/infrastructure/Cargo.toml"),
-            infrastructure_cargo_toml(module),
-        ),
-        file(
-            format!("{base}/infrastructure/src/lib.rs"),
-            infrastructure_lib(&snake),
-        ),
+        // infrastructure: the in-memory repository adapter, plus a feature-gated
+        // typed DORM adapter when `--data dorm` was chosen.
+        file(format!("{base}/infrastructure/Cargo.toml"), infra_cargo),
+        file(format!("{base}/infrastructure/src/lib.rs"), infra_lib),
         // interface: the transport — the #[seiva::controller] adapter and the
         // OpenAPI/proto generation from the facade descriptor.
         file(
@@ -1611,6 +1642,10 @@ fn facade_lib(module: &str, pascal: &str) -> String {
          /// application layer maps the domain entity to this at the boundary.\n\
          #[derive(Debug, Clone, PartialEq, Eq, Serialize, WireSchema)]\n\
          pub struct RecordDto {{\n    /// The record's identifier.\n    pub id: u128,\n    /// The record's title.\n    pub title: String,\n}}\n\n\
+         /// Response DTO: a list of records returned by `list`. A NAMED wrapper (not a\n\
+         /// bare `Vec`) so the OpenAPI document and the gRPC proto name the list shape.\n\
+         #[derive(Debug, Clone, PartialEq, Eq, Serialize, WireSchema)]\n\
+         pub struct RecordList {{\n    /// The records in this response.\n    pub items: Vec<RecordDto>,\n}}\n\n\
          /// The facade's error type. The controller maps it to an RFC 9457 problem\n\
          /// via this `Into<Problem>`, so the module owns how failures surface.\n\
          #[derive(Debug, Clone)]\n\
@@ -1618,7 +1653,7 @@ fn facade_lib(module: &str, pascal: &str) -> String {
          impl From<RecordError> for Problem {{\n    fn from(error: RecordError) -> Self {{\n        Problem::unprocessable_entity(error.0)\n    }}\n}}\n\n\
          /// The `{module}` module's versioned public contract.\n\
          #[facade(version = \"v1\")]\n\
-         pub trait {pascal} {{\n    /// Create a record (guarded; `POST /v1/{resource}`).\n    #[requires(\"{module}.create\")]\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError>;\n}}\n"
+         pub trait {pascal} {{\n    /// Create a record (guarded; `POST /v1/{resource}`).\n    #[requires(\"{module}.create\")]\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError>;\n\n    /// List records (guarded; `GET /v1/{resource}`). The controller routes a\n    /// method named `list` to the resource's collection GET automatically.\n    #[requires(\"{module}.read\")]\n    async fn list(&self) -> Result<RecordList, RecordError>;\n}}\n"
     )
 }
 
@@ -1653,7 +1688,7 @@ fn domain_lib() -> String {
      /// `infrastructure`; the application adapts its [`RepositoryError`] to the\n\
      /// framework's `PortResult`. The future is `Send` so the use case can `.await`\n\
      /// it inside a `UnitOfWork::transaction` on a multi-threaded runtime.\n\
-     pub trait RecordRepository {\n    /// Persists a record.\n    fn save(&self, record: &Record) -> impl Future<Output = Result<(), RepositoryError>> + Send;\n}\n\n\
+     pub trait RecordRepository {\n    /// Persists a record.\n    fn save(&self, record: &Record) -> impl Future<Output = Result<(), RepositoryError>> + Send;\n\n    /// Lists all records, ordered by id. Pagination arrives in a later slice; the\n    /// read path exists now so the module exposes a `list` route.\n    fn list(&self) -> impl Future<Output = Result<Vec<Record>, RepositoryError>> + Send;\n}\n\n\
      #[cfg(test)]\n\
      mod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_empty_title() {\n        assert_eq!(Record::new(1, \"   \"), Err(DomainError::EmptyTitle));\n        assert!(Record::new(1, \"hello\").is_ok());\n    }\n}\n"
         .to_owned()
@@ -1681,7 +1716,7 @@ fn application_lib(snake: &str, pascal: &str) -> String {
          // `domain`), keeping the layer rule intact. The application maps the domain\n\
          // `RepositoryError` to the framework's `PortResult` at the use-case boundary.\n\
          pub use {snake}_domain::{{RecordRepository, RepositoryError}};\n\
-         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}}};\n\
+         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, RecordList, {pascal}}};\n\
          use seiva_ports::{{BoxError, EventPublisher, IdGenerator, PortResult, Scope, UnitOfWork}};\n\n\
          /// The application service: it implements the [`{pascal}`] facade by running\n\
          /// the use case and mapping the domain entity to the DTO. Generic over the\n\
@@ -1691,9 +1726,9 @@ fn application_lib(snake: &str, pascal: &str) -> String {
          impl<R, G, U, E> RecordService<R, G, U, E>\n\
          where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n    U: UnitOfWork,\n    E: EventPublisher,\n{{\n    async fn create_record(&self, cmd: CreateRecord) -> PortResult<RecordDto> {{\n        // Validate in the domain first — no point opening a transaction for a\n        // command the rule will reject.\n        let id = u128::from_be_bytes(self.ids.new_id().0);\n        let record = Record::new(id, cmd.title).map_err(BoxError::from)?;\n\n        // The event payload is a JSON envelope — the DORM gateway's outbox\n        // publisher parses the bytes as JSON before persisting them, so a\n        // non-JSON payload would fail against the real data layer.\n        let event = serde_json::to_vec(&serde_json::json!({{\n            \"id\": record.id.to_string(),\n            \"title\": record.title.clone(),\n        }}))\n        .map_err(BoxError::from)?;\n\n        // One transaction per use case (ADR 0021): the save AND the event publish\n        // run inside it, so data and event commit atomically with the DORM gateway.\n        // A module reacts to another's event in the composition root, never by a\n        // direct call — which is what keeps `seiva module split` a composition change.\n        self.uow\n            .transaction(Scope::Global, || async {{\n                self.repository.save(&record).await?;\n                self.events.publish(\"{snake}.record.created\", &event).await\n            }})\n            .await?;\n\n        Ok(RecordDto {{\n            id: record.id,\n            title: record.title,\n        }})\n    }}\n}}\n\n\
          impl<R, G, U, E> {pascal} for RecordService<R, G, U, E>\n\
-         where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n    U: UnitOfWork,\n    E: EventPublisher,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        // Map the internal error to the contract's error type: no internal\n        // detail leaks across the module boundary beyond a message.\n        self.create_record(cmd)\n            .await\n            .map_err(|err| RecordError(err.to_string()))\n    }}\n}}\n\n\
+         where\n    R: RecordRepository + Sync,\n    G: IdGenerator,\n    U: UnitOfWork,\n    E: EventPublisher,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        // Map the internal error to the contract's error type: no internal\n        // detail leaks across the module boundary beyond a message.\n        self.create_record(cmd)\n            .await\n            .map_err(|err| RecordError(err.to_string()))\n    }}\n\n    async fn list(&self) -> Result<RecordList, RecordError> {{\n        // A read: no transaction needed. Map the domain entities to the wire DTO\n        // at the boundary, never leaking a domain type across it.\n        let records = self\n            .repository\n            .list()\n            .await\n            .map_err(|err| RecordError(err.to_string()))?;\n        Ok(RecordList {{\n            items: records\n                .into_iter()\n                .map(|record| RecordDto {{ id: record.id, title: record.title }})\n                .collect(),\n        }})\n    }}\n}}\n\n\
          #[cfg(test)]\n\
-         mod tests {{\n    use super::*;\n    use seiva_testing::{{InMemoryUnitOfWork, RecordingEventPublisher, SequenceIdGenerator, TxOutcome}};\n    use std::sync::Mutex;\n\n    #[derive(Default)]\n    struct FakeRepo {{\n        saved: Mutex<Vec<Record>>,\n    }}\n\n    impl RecordRepository for FakeRepo {{\n        async fn save(&self, record: &Record) -> Result<(), RepositoryError> {{\n            self.saved.lock().unwrap().push(record.clone());\n            Ok(())\n        }}\n    }}\n\n    fn service(\n    ) -> RecordService<FakeRepo, SequenceIdGenerator, InMemoryUnitOfWork, RecordingEventPublisher> {{\n        RecordService {{\n            repository: FakeRepo::default(),\n            ids: SequenceIdGenerator::new(),\n            uow: InMemoryUnitOfWork::new(),\n            events: RecordingEventPublisher::new(),\n        }}\n    }}\n\n    #[tokio::test]\n    async fn create_persists_commits_and_emits() {{\n        let service = service();\n        let dto = service\n            .create(CreateRecord {{ title: \"hello\".into() }})\n            .await\n            .unwrap();\n        assert_eq!(dto.id, 1);\n        assert_eq!(dto.title, \"hello\");\n        assert_eq!(service.repository.saved.lock().unwrap().len(), 1);\n        // The use case committed exactly one transaction and emitted the event.\n        assert_eq!(service.uow.outcomes(), [TxOutcome::Committed]);\n        assert_eq!(service.events.topics(), [\"{snake}.record.created\"]);\n    }}\n\n    #[tokio::test]\n    async fn empty_title_is_rejected_before_any_transaction() {{\n        let service = service();\n        let result = service.create(CreateRecord {{ title: \"   \".into() }}).await;\n        assert!(result.is_err());\n        // Nothing committed or emitted when the domain rule rejected the command.\n        assert!(service.uow.outcomes().is_empty());\n        assert!(service.events.topics().is_empty());\n    }}\n}}\n"
+         mod tests {{\n    use super::*;\n    use seiva_testing::{{InMemoryUnitOfWork, RecordingEventPublisher, SequenceIdGenerator, TxOutcome}};\n    use std::sync::Mutex;\n\n    #[derive(Default)]\n    struct FakeRepo {{\n        saved: Mutex<Vec<Record>>,\n    }}\n\n    impl RecordRepository for FakeRepo {{\n        async fn save(&self, record: &Record) -> Result<(), RepositoryError> {{\n            self.saved.lock().unwrap().push(record.clone());\n            Ok(())\n        }}\n\n        async fn list(&self) -> Result<Vec<Record>, RepositoryError> {{\n            Ok(self.saved.lock().unwrap().clone())\n        }}\n    }}\n\n    fn service(\n    ) -> RecordService<FakeRepo, SequenceIdGenerator, InMemoryUnitOfWork, RecordingEventPublisher> {{\n        RecordService {{\n            repository: FakeRepo::default(),\n            ids: SequenceIdGenerator::new(),\n            uow: InMemoryUnitOfWork::new(),\n            events: RecordingEventPublisher::new(),\n        }}\n    }}\n\n    #[tokio::test]\n    async fn create_persists_commits_and_emits() {{\n        let service = service();\n        let dto = service\n            .create(CreateRecord {{ title: \"hello\".into() }})\n            .await\n            .unwrap();\n        assert_eq!(dto.id, 1);\n        assert_eq!(dto.title, \"hello\");\n        assert_eq!(service.repository.saved.lock().unwrap().len(), 1);\n        // The use case committed exactly one transaction and emitted the event.\n        assert_eq!(service.uow.outcomes(), [TxOutcome::Committed]);\n        assert_eq!(service.events.topics(), [\"{snake}.record.created\"]);\n    }}\n\n    #[tokio::test]\n    async fn empty_title_is_rejected_before_any_transaction() {{\n        let service = service();\n        let result = service.create(CreateRecord {{ title: \"   \".into() }}).await;\n        assert!(result.is_err());\n        // Nothing committed or emitted when the domain rule rejected the command.\n        assert!(service.uow.outcomes().is_empty());\n        assert!(service.events.topics().is_empty());\n    }}\n\n    #[tokio::test]\n    async fn list_returns_the_saved_records() {{\n        let service = service();\n        service.create(CreateRecord {{ title: \"a\".into() }}).await.unwrap();\n        service.create(CreateRecord {{ title: \"b\".into() }}).await.unwrap();\n        let page = service.list().await.unwrap();\n        assert_eq!(page.items.len(), 2, \"both records are listed\");\n    }}\n}}\n"
     )
 }
 
@@ -1729,7 +1764,7 @@ fn infrastructure_lib(snake: &str) -> String {
          #[derive(Clone, Default)]\n\
          pub struct InMemoryRecordRepository {{\n    by_id: Arc<Mutex<HashMap<u128, Record>>>,\n}}\n\n\
          impl InMemoryRecordRepository {{\n    /// Creates an empty repository.\n    pub fn new() -> Self {{\n        Self::default()\n    }}\n\n    /// Every record saved so far, ordered by id — for composition-level assertions.\n    pub fn saved(&self) -> Vec<Record> {{\n        let guard = self.by_id.lock().expect(\"repository poisoned\");\n        let mut records: Vec<Record> = guard.values().cloned().collect();\n        records.sort_by_key(|record| record.id);\n        records\n    }}\n}}\n\n\
-         impl RecordRepository for InMemoryRecordRepository {{\n    async fn save(&self, record: &Record) -> Result<(), RepositoryError> {{\n        // Upsert by id: idempotent, so seeding the same key twice is a no-op.\n        self.by_id\n            .lock()\n            .map_err(|_| RepositoryError(\"repository lock poisoned\".to_owned()))?\n            .insert(record.id, record.clone());\n        Ok(())\n    }}\n}}\n\n\
+         impl RecordRepository for InMemoryRecordRepository {{\n    async fn save(&self, record: &Record) -> Result<(), RepositoryError> {{\n        // Upsert by id: idempotent, so seeding the same key twice is a no-op.\n        self.by_id\n            .lock()\n            .map_err(|_| RepositoryError(\"repository lock poisoned\".to_owned()))?\n            .insert(record.id, record.clone());\n        Ok(())\n    }}\n\n    async fn list(&self) -> Result<Vec<Record>, RepositoryError> {{\n        // `saved()` returns the records sorted by id — a stable list order.\n        Ok(self.saved())\n    }}\n}}\n\n\
          /// The `seed/` reference data, embedded at build time (ADR 0022). Declared\n\
          /// in the link-time seed registry so a fitness test and `seiva db seed` can\n\
          /// discover it; applied by [`load_seed`] in the composition root.\n\
@@ -1830,7 +1865,7 @@ fn interface_lib(snake: &str, pascal: &str, admin: bool) -> String {
          use seiva::controller;\n\
          use seiva_ports::{{EventPublisher, IdGenerator, UnitOfWork}};\n\
          use {snake}_application::{{RecordRepository, RecordService}};\n\
-         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, {pascal}, {pascal}Facade}};\n\n\
+         use {snake}_facade::{{CreateRecord, RecordDto, RecordError, RecordList, {pascal}, {pascal}Facade}};\n\n\
          {admin_block}\
          /// Transport adapter: a concrete `{pascal}` service exposed over HTTP,\n\
          /// generic over the repository port `R` and the id-generator port `G`.\n\
@@ -1845,7 +1880,7 @@ fn interface_lib(snake: &str, pascal: &str, admin: bool) -> String {
          impl<R, G, U, E> {pascal}Controller<R, G, U, E> {{\n    /// Builds the controller over the given ports (repository, id generator, unit\n    /// of work, event publisher). The composition root in `apps/` chooses them\n    /// (the in-memory adapters, or DORM-backed ones); the interface never names a\n    /// concrete adapter.\n    pub fn new(repository: R, ids: G, uow: U, events: E) -> Self {{\n        {pascal}Controller(Arc::new(RecordService {{\n            repository,\n            ids,\n            uow,\n            events,\n        }}))\n    }}\n}}\n\n\
          #[controller]\n\
          impl<R, G, U, E> {pascal} for {pascal}Controller<R, G, U, E>\n\
-         where\n    R: RecordRepository + Send + Sync + 'static,\n    G: IdGenerator + Send + Sync + 'static,\n    U: UnitOfWork + Send + Sync + 'static,\n    E: EventPublisher + Send + Sync + 'static,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n}}\n\n\
+         where\n    R: RecordRepository + Send + Sync + 'static,\n    G: IdGenerator + Send + Sync + 'static,\n    U: UnitOfWork + Send + Sync + 'static,\n    E: EventPublisher + Send + Sync + 'static,\n{{\n    async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError> {{\n        self.0.create(cmd).await\n    }}\n\n    async fn list(&self) -> Result<RecordList, RecordError> {{\n        self.0.list().await\n    }}\n}}\n\n\
          /// The module's OpenAPI 3.1 document, generated from the facade descriptor.\n\
          /// (A proto3 document is available from the same descriptor via\n\
          /// `seiva proto`; it is not generated per-module to keep this crate free\n\
@@ -1934,6 +1969,58 @@ fn infrastructure_cargo_toml(module: &str) -> String {
          # A DORM-backed repository arrives through the `seiva-data-dorm` gateway\n\
          # behind a `dorm` feature; the default in-memory adapter pulls in no ORM.\n"
     )
+}
+
+/// The typed DORM-backed repository adapter appended to a module's
+/// `infrastructure/src/lib.rs` when `seiva module new --data dorm` is used.
+///
+/// Gated behind the crate's `dorm` feature, so it compiles ONLY when the ORM is
+/// turned on; the default build keeps the in-memory adapter and pulls in no DORM.
+/// The shape is the compile-proven one from `apps/dorm-e2e`: a `#[derive(Model)]`
+/// row and a repository that persists through the **typed DORM QuerySet**
+/// (`objects().create(...)`), never hand-written SQL. The composition root swaps
+/// `InMemoryRecordRepository` for `dorm_adapter::DormRecordRepository` once it wires
+/// a database (connect + `DormUnitOfWork`/`DormOutboxPublisher` from
+/// `seiva-data-dorm`).
+fn infrastructure_dorm_adapter(snake: &str) -> String {
+    format!(
+        "\n\
+         // --- DORM data layer (`seiva module new --data dorm`) -------------------\n\
+         // A typed, DORM-backed `RecordRepository` behind the `dorm` feature — the\n\
+         // paved alternative to the in-memory adapter above, modelled on the\n\
+         // compile-proven `apps/dorm-e2e`. It persists through the typed DORM\n\
+         // QuerySet over a `#[derive(Model)]` row and holds no handle: it runs\n\
+         // against the current session the gateway's `DormUnitOfWork::transaction`\n\
+         // establishes. To use it, enable the `dorm` feature and swap\n\
+         // `InMemoryRecordRepository` for `dorm_adapter::DormRecordRepository` in the\n\
+         // composition root once a database is wired.\n\
+         #[cfg(feature = \"dorm\")]\n\
+         pub mod dorm_adapter {{\n    // `Model` brings the typed `objects()` entry point into scope (the same import\n    // `apps/dorm-e2e` uses); the derive generates `NewRecordRow` and the\n    // `record_row` field-handle module alongside `RecordRow`.\n    use dorm_core::model::Model;\n    use {snake}_domain::{{Record, RecordRepository, RepositoryError}};\n\n    /// The DORM row backing a `Record`: the `id` stored as its decimal 128-bit\n    /// form (a text primary key) plus the `title`. The table is `{snake}_record`.\n    #[derive(dorm_derive::Model, Debug, Clone)]\n    #[model(table = \"{snake}_record\")]\n    struct RecordRow {{\n        #[field(primary_key, max_length = 48)]\n        id: String,\n        title: String,\n    }}\n\n    /// The DDL that creates the `{snake}_record` table idempotently — applied by\n    /// the composition root (or a migration) before the repository runs.\n    #[must_use]\n    pub fn record_table_ddl() -> String {{\n        \"CREATE TABLE IF NOT EXISTS {snake}_record (id TEXT PRIMARY KEY, title TEXT NOT NULL)\"\n            .to_owned()\n    }}\n\n    /// A real `RecordRepository` persisting a `Record` through the typed DORM\n    /// QuerySet over `RecordRow` — no hand-written SQL.\n    pub struct DormRecordRepository;\n\n    impl RecordRepository for DormRecordRepository {{\n        async fn save(&self, record: &Record) -> Result<(), RepositoryError> {{\n            // Insert through the typed `create` terminal (the proven\n            // `apps/dorm-e2e` shape). A `tenant_scoped` model would have its\n            // tenant column forced on by `scope.rs` from the ambient scope.\n            RecordRow::objects()\n                .create(NewRecordRow {{\n                    id: record.id.to_string(),\n                    title: record.title.clone(),\n                }})\n                .await\n                .map(|_| ())\n                .map_err(|e| RepositoryError(e.to_string()))\n        }}\n\n        async fn list(&self) -> Result<Vec<Record>, RepositoryError> {{\n            // `objects().all()` opens a typed QuerySet over every row; the second\n            // `all()` is the async terminal that executes it (dorm-core 0.6). Each\n            // row is then lifted back into the domain `Record` (parse the text id,\n            // re-check the rule). Pagination arrives in a later slice.\n            let rows = RecordRow::objects()\n                .all()\n                .all()\n                .await\n                .map_err(|e| RepositoryError(e.to_string()))?;\n            rows.into_iter()\n                .map(|row| {{\n                    let id: u128 = row\n                        .id\n                        .parse()\n                        .map_err(|_| RepositoryError(format!(\"invalid record id: {{}}\", row.id)))?;\n                    Record::new(id, row.title).map_err(|e| RepositoryError(e.to_string()))\n                }})\n                .collect()\n        }}\n    }}\n}}\n"
+    )
+}
+
+/// The manifest fragment appended to a module's `infrastructure/Cargo.toml` when
+/// `seiva module new --data dorm` is used: the optional ORM deps the typed adapter
+/// needs and the `dorm` feature that pulls them in.
+///
+/// The deps are `optional = true` and reached only through the feature, so the
+/// default build pulls in no ORM — the gateway boundary, enforced by Cargo.
+fn infrastructure_dorm_features() -> String {
+    // A plain literal (no interpolation): the real `{`/`}` of the dep tables would
+    // otherwise need escaping in a `format!`, and an unformatted `format!` is a lint.
+    "\n\
+     # --- DORM data layer (`seiva module new --data dorm`) -------------------\n\
+     # Optional ORM deps, pulled in ONLY by the `dorm` feature below, so the\n\
+     # default build stays in-memory and DORM-free (the gateway boundary). The\n\
+     # typed adapter uses the DORM model derive and the QuerySet directly; the\n\
+     # `seiva-data-dorm` gateway (UnitOfWork/outbox) is wired in the composition\n\
+     # root, not here.\n\
+     dorm-core = { version = \"0.6\", optional = true }\n\
+     dorm-derive = { version = \"0.3\", optional = true }\n\n\
+     [features]\n\
+     # Turn on the typed DORM-backed repository adapter (`dorm_adapter`).\n\
+     dorm = [\"dep:dorm-core\", \"dep:dorm-derive\"]\n"
+        .to_owned()
 }
 
 fn interface_cargo_toml(module: &str) -> String {
@@ -2366,6 +2453,14 @@ mod tests {
         assert!(facade.contains(
             "async fn create(&self, cmd: CreateRecord) -> Result<RecordDto, RecordError>;"
         ));
+        // A2 slice 2: the facade also exposes a guarded `list` returning a named
+        // `RecordList` DTO, auto-routed by the controller as GET /v1/{resource}.
+        assert!(facade.contains("#[requires(\"notes.read\")]"));
+        assert!(
+            facade.contains("async fn list(&self) -> Result<RecordList, RecordError>;"),
+            "the facade must expose a `list` method:\n{facade}"
+        );
+        assert!(facade.contains("pub struct RecordList"));
         // Wire DTOs: serde + Validate on the write DTO, Serialize on the response,
         // WireSchema so the OpenAPI document carries the real fields, error →
         // Problem mapping. This is the controller-test shape.
@@ -2459,6 +2554,86 @@ mod tests {
         assert!(
             infra.contains("`dorm`") && infra.contains("feature"),
             "the DORM-via-feature note must be present"
+        );
+        // The default module ships NO typed DORM adapter and NO ORM deps.
+        assert!(
+            !infra.contains("pub mod dorm_adapter"),
+            "the default (in-memory) module must not emit the DORM adapter"
+        );
+        let cargo = contents(&files, "modules/notes/infrastructure/Cargo.toml");
+        assert!(
+            !cargo.contains("dorm-core") && !cargo.contains("[features]"),
+            "the default manifest must pull in no ORM and declare no dorm feature"
+        );
+    }
+
+    // B1 slice 1 (ADR roadmap): `--data dorm` paves a typed DORM-backed repository
+    // behind the module's `dorm` feature, modelled on the compile-proven dorm-e2e,
+    // WITHOUT disturbing the in-memory default the composition root wires.
+    #[test]
+    fn data_dorm_module_appends_a_feature_gated_typed_dorm_adapter() {
+        let files = module_files_with_dorm_adapter("notes", false).unwrap();
+        let infra = contents(&files, "modules/notes/infrastructure/src/lib.rs");
+
+        // The in-memory adapter is still there (non-breaking: main.rs wiring unchanged).
+        assert!(infra.contains("pub struct InMemoryRecordRepository"));
+        // The typed DORM adapter is appended, behind the `dorm` feature.
+        assert!(infra.contains("#[cfg(feature = \"dorm\")]"));
+        assert!(infra.contains("pub mod dorm_adapter"));
+        // It is TYPED — the DORM model derive and the QuerySet, not hand-written SQL.
+        assert!(infra.contains("#[derive(dorm_derive::Model"));
+        assert!(infra.contains("RecordRow::objects()"));
+        assert!(infra.contains(".create(NewRecordRow"));
+        assert!(infra.contains("impl RecordRepository for DormRecordRepository"));
+        assert!(
+            !infra.contains("db::sql") && !infra.contains("db::execute"),
+            "the paved adapter must be typed, never raw SQL"
+        );
+
+        // The manifest pulls the ORM in ONLY through the `dorm` feature (optional deps).
+        let cargo = contents(&files, "modules/notes/infrastructure/Cargo.toml");
+        assert!(cargo.contains("[features]"));
+        assert!(cargo.contains("dorm = [\"dep:dorm-core\", \"dep:dorm-derive\"]"));
+        assert!(cargo.contains("dorm-core = { version = \"0.6\", optional = true }"));
+        assert!(cargo.contains("dorm-derive = { version = \"0.3\", optional = true }"));
+
+        // A2 slice 2: the DORM adapter also implements the new `list` port method
+        // (via the typed `all()` terminal), so `--features dorm` still compiles.
+        assert!(infra.contains("async fn list(&self) -> Result<Vec<Record>, RepositoryError>"));
+        assert!(
+            infra.contains("RecordRow::objects()\n                .all()\n                .all()")
+        );
+    }
+
+    // A2 slice 2: the generated `list` read method runs through every layer — the
+    // facade trait, the domain port, the application service and the in-memory
+    // adapter — so a scaffolded module exposes a collection GET, not only `create`.
+    #[test]
+    fn generated_list_method_spans_the_whole_vertical() {
+        let files = module_files("notes", false).unwrap();
+
+        let domain = contents(&files, "modules/notes/domain/src/lib.rs");
+        assert!(
+            domain.contains(
+                "fn list(&self) -> impl Future<Output = Result<Vec<Record>, RepositoryError>> + Send;"
+            ),
+            "the repository port must declare `list`:\n{domain}"
+        );
+
+        let app = contents(&files, "modules/notes/application/src/lib.rs");
+        assert!(app.contains("async fn list(&self) -> Result<RecordList, RecordError>"));
+        assert!(
+            app.contains(".repository")
+                && app.contains(".list()")
+                && app.contains("items: records"),
+            "the service must read through the repository `list` and map to RecordList:\n{app}"
+        );
+
+        let infra = contents(&files, "modules/notes/infrastructure/src/lib.rs");
+        assert!(
+            infra.contains("async fn list(&self) -> Result<Vec<Record>, RepositoryError> {")
+                && infra.contains("Ok(self.saved())"),
+            "the in-memory adapter must implement `list`:\n{infra}"
         );
     }
 

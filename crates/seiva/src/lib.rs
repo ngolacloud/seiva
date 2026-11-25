@@ -26,6 +26,7 @@ pub mod ports {
 
 pub mod admin;
 pub mod contract;
+pub mod event;
 pub mod id;
 pub mod manifest;
 pub mod scaffold;
