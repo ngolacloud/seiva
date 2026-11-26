@@ -24,7 +24,7 @@ description = "Transport-neutral wire-contract types (Validate, ValidationError,
 
 [dependencies]
 # The trait-only ports: an opaque `BoxError` maps into a 500 `Problem`.
-seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
+seiva-ports = { version = "0.2.0", path = "../seiva-ports" }
 # Protocol-level status codes (not a server): `Problem` carries an `http::StatusCode`.
 http = "1"
 # The problem document is serialised to JSON by the transport.

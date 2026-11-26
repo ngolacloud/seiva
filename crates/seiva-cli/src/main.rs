@@ -322,7 +322,7 @@ fn project_new(name: &str, kind: Option<&str>) -> ExitCode {
     }
     // Interim until the framework crates are published: append a
     // `[patch.crates-io]` redirecting them to this checkout, so `cargo build`
-    // resolves the `= "0.1"` dependencies standalone.
+    // resolves the `= "0.2"` dependencies standalone.
     let manifest = root.join("Cargo.toml");
     if let Err(err) = append_patch_section(&manifest, &framework_root()) {
         eprintln!("seiva: writing {}: {err}", manifest.display());

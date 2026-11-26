@@ -39,7 +39,7 @@ tokio = { version = "1", default-features = false, features = ["io-util", "fs"] 
 seiva-ports = { workspace = true }
 # The retry/timeout/breaker primitives the resilience decorator reuses rather
 # than reinventing (ADR 0032: "resilience is reused, not reinvented").
-seiva-resilience = { version = "0.1.0", path = "../seiva-resilience" }
+seiva-resilience = { version = "0.2.0", path = "../seiva-resilience" }
 # Presigned-URL signatures and the local adapter's content digest — the same
 # hash `seiva-realtime` and `seiva-identity` use for tokens at rest.
 sha2 = "0.10"
