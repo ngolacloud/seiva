@@ -15,13 +15,13 @@ name = "seiva-console-admin"
 summary = "The optional admin console at /admin (ADR 0008/0009)."
 
 # Minimum framework version this extension integrates against.
-requires_seiva = "0.1"
+requires_seiva = "0.2"
 
 [dependency]
 # Added to the composition root's [dependencies] at the managed
 # `# seiva:extension-deps` anchor.
 crate = "seiva-console-admin"
-version = "0.1"
+version = "0.2"
 
 [compose]
 # Inserted in the composition root's main.rs at the managed `// seiva:extensions`

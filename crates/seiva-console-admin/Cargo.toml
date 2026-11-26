@@ -27,13 +27,13 @@ axum = "0.8"
 # reads to decide what to surface. Default features OFF (no DORM): the console
 # only reads the link-time descriptors. This is the one-way edge to the framework
 # contract; the base never depends on this crate.
-seiva = { version = "0.1.0", path = "../seiva", default-features = false }
+seiva = { version = "0.2.0", path = "../seiva", default-features = false }
 # The `Principal` the registry endpoint filters by (view permission). Transport-free.
-seiva-identity = { version = "0.1.0", path = "../seiva-identity" }
+seiva-identity = { version = "0.2.0", path = "../seiva-identity" }
 # The audit read port (`AuditLog`/`AuditQuery`/`AuditEntry`) the `GET /admin/audit`
 # endpoint serves. A core, transport- and database-free crate (the DORM-backed
 # `AuditLog` lives behind the gateway); this is the same one-way edge as the rest.
-seiva-ports = { version = "0.1.0", path = "../seiva-ports" }
+seiva-ports = { version = "0.2.0", path = "../seiva-ports" }
 # Deserializes the `GET /admin/audit` query-string into its allow-listed fields
 # (the typed struct IS the allow-list; `tenant` is deliberately absent).
 serde = { version = "1", features = ["derive"] }
@@ -56,8 +56,8 @@ http-body-util = "0.1"
 # `modules` router and wrapped by `router_with_modules`, sees the authenticated
 # `Principal` through the authn layer. No dependency cycle: seiva-http does not
 # depend on seiva-console-admin.
-seiva-http = { version = "0.1.0", path = "../seiva-http" }
+seiva-http = { version = "0.2.0", path = "../seiva-http" }
 # The in-memory audit double (`RecordingAuditSink` also `impl AuditLog`): the
 # `GET /admin/audit` controller test writes through it and reads back the page,
 # with no database. A dev-dependency only.
-seiva-testing = { version = "0.1.0", path = "../seiva-testing" }
+seiva-testing = { version = "0.2.0", path = "../seiva-testing" }

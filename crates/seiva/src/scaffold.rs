@@ -883,7 +883,7 @@ pub struct ExtensionManifest {
 /// The first-party admin console's integration contract.
 pub const CONSOLE_ADMIN_EXTENSION: ExtensionManifest = ExtensionManifest {
     crate_name: "seiva-console-admin",
-    version_req: "0.1",
+    version_req: "0.2",
     // Mounts into `modules` BEFORE `router_with_modules` layers them, so /admin is
     // covered by authn/security-headers/rate-limit (see the composition point).
     mount_stmt: "let modules = seiva_console_admin::mount(modules);",
@@ -1519,13 +1519,13 @@ fn module_toml(module: &str) -> String {
 }
 
 /// The crates.io version requirement a generated project uses for the framework
-/// crates (`seiva = "0.1"`, …). Generated manifests depend on the
+/// crates (`seiva = "0.2"`, …). Generated manifests depend on the
 /// framework by version, so a project compiles standalone once the crates are
 /// published; it is not tied to a local framework checkout.
-const FRAMEWORK_VERSION: &str = "0.1";
+const FRAMEWORK_VERSION: &str = "0.2";
 
 /// The framework crates a generated project names as dependencies
-/// (`seiva = "0.1"`, …). Every other framework crate they pull in is
+/// (`seiva = "0.2"`, …). Every other framework crate they pull in is
 /// reached transitively, through these crates' own `path`/`workspace`
 /// dependencies, so redirecting just these to a local checkout resolves the
 /// whole graph (see [`workspace_patch_section`]). `seiva-testing` is a
@@ -1552,7 +1552,7 @@ pub const FRAMEWORK_CRATES: [&str; 11] = [
 /// its directory under `<framework_root>/crates`, so a generated project compiles
 /// against a local framework checkout *before* the crates are published to
 /// crates.io. This is the interim that unblocks a standalone `cargo build`: the
-/// manifests keep the published contract (`seiva = "0.1"`), and this one
+/// manifests keep the published contract (`seiva = "0.2"`), and this one
 /// section — deletable in a single edit once the crates are on crates.io —
 /// points those versions at the checkout.
 ///
@@ -1567,7 +1567,7 @@ pub fn workspace_patch_section(framework_root: &str) -> String {
     let mut out = String::from(
         "\n\
          # INTERIM — remove once the framework crates are published to crates.io.\n\
-         # The manifests above depend on the framework by version (`= \"0.1\"`); until\n\
+         # The manifests above depend on the framework by version (`= \"0.2\"`); until\n\
          # those versions exist on crates.io, this redirects them to a local\n\
          # framework checkout so `cargo build` resolves standalone. Regenerate with\n\
          # `SEIVA_FRAMEWORK_DIR=/path/to/seiva` to point elsewhere.\n\
@@ -1909,7 +1909,7 @@ fn facade_cargo_toml(module: &str) -> String {
         "[package]\nname = \"{module}-facade\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
          [dependencies]\n\
          # The framework macros (`#[facade]`) and contract descriptor. The project\n\
-         # depends on the framework by version (`seiva = \"0.1\"`); until those\n\
+         # depends on the framework by version (`seiva = \"0.2\"`); until those\n\
          # crates are published, the workspace root's `[patch.crates-io]` redirects\n\
          # them to a local checkout. The data layer is off here — the facade needs none.\n\
          seiva = {{ version = \"{FRAMEWORK_VERSION}\", default-features = false }}\n\
@@ -2218,7 +2218,7 @@ mod tests {
             .contents
             .clone();
         let registered = add_members_to_workspace(&cargo, "notes").expect("register module");
-        // The interim patch redirecting `= "0.1"` to this checkout — exactly what
+        // The interim patch redirecting `= "0.2"` to this checkout — exactly what
         // `seiva project new` appends.
         let with_patch = format!(
             "{registered}{}",
@@ -2799,7 +2799,7 @@ mod tests {
         // First application wires both the dependency and the mount.
         let cargo1 = add_extension_to_app_manifest(cargo0, &ext).unwrap();
         let main1 = mount_extension_in_main(main0, &ext).unwrap();
-        assert!(cargo1.contains("seiva-console-admin = \"0.1\""));
+        assert!(cargo1.contains("seiva-console-admin = \"0.2\""));
         assert_eq!(
             main1.matches(ext.mount_stmt).count(),
             1,
@@ -2839,10 +2839,10 @@ mod tests {
         // generated project compiles standalone once they are published); the
         // intra-project layer crates stay `path`.
         let facade = contents(&files, "modules/notes/facade/Cargo.toml");
-        assert!(facade.contains("seiva = { version = \"0.1\", default-features = false }"));
+        assert!(facade.contains("seiva = { version = \"0.2\", default-features = false }"));
         // F1 (ADR 0003): the facade depends on the transport-neutral `seiva-contract`
         // (Validate + the RFC 9457 Problem), NOT on the HTTP transport.
-        assert!(facade.contains("seiva-contract = \"0.1\""));
+        assert!(facade.contains("seiva-contract = \"0.2\""));
         assert!(
             !facade.contains("seiva-http"),
             "the facade must not depend on the HTTP transport (F1)"
@@ -2853,7 +2853,7 @@ mod tests {
         let app = contents(&files, "modules/notes/application/Cargo.toml");
         assert!(app.contains("notes-domain = { path = \"../domain\" }"));
         assert!(app.contains("notes-facade = { path = \"../facade\" }"));
-        assert!(app.contains("seiva-ports = \"0.1\""));
+        assert!(app.contains("seiva-ports = \"0.2\""));
         // No transport/framework DEPENDENCY entries (the prose may name them).
         assert!(
             !app.contains("seiva-http = {"),
@@ -2866,7 +2866,7 @@ mod tests {
 
         let infra = contents(&files, "modules/notes/infrastructure/Cargo.toml");
         assert!(infra.contains("notes-application = { path = \"../application\" }"));
-        assert!(infra.contains("seiva-ports = \"0.1\""));
+        assert!(infra.contains("seiva-ports = \"0.2\""));
 
         // The interface carries the transport crates + `application` (allowed),
         // but NOT `infrastructure` (the layering rule forbids it).
@@ -2877,12 +2877,12 @@ mod tests {
             !interface.contains("notes-infrastructure = {"),
             "interface must not depend on infrastructure (layering rule)"
         );
-        assert!(interface.contains("seiva-ports = \"0.1\""));
-        assert!(interface.contains("seiva = { version = \"0.1\""));
-        assert!(interface.contains("seiva-http = \"0.1\""));
+        assert!(interface.contains("seiva-ports = \"0.2\""));
+        assert!(interface.contains("seiva = { version = \"0.2\""));
+        assert!(interface.contains("seiva-http = \"0.2\""));
         // No seiva-grpc: proto generation is not per-module (it is a CLI tool).
         assert!(!interface.contains("seiva-grpc"));
-        assert!(interface.contains("seiva-openapi = \"0.1\""));
+        assert!(interface.contains("seiva-openapi = \"0.2\""));
         assert!(interface.contains("axum = \"0.8\""));
         assert!(interface.contains("serde_json = \"1\""));
     }

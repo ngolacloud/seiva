@@ -7,7 +7,7 @@
 # a database, broker or the framework runtime.
 [package]
 name = "seiva-webhooks"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["NgolaCloud <angolar.devops@gmail.com>"]
@@ -46,11 +46,11 @@ tracing = { version = "0.1", optional = true }
 # The retry backoff schedule, the per-POST timeout and the per-endpoint circuit
 # breaker — reused, not reinvented (ADR 0033). It brings tokio's `time` driver
 # only; the delivery engine starts no runtime of its own (the worker host's).
-seiva-resilience = { version = "0.1.0", path = "../seiva-resilience", optional = true }
+seiva-resilience = { version = "0.2.0", path = "../seiva-resilience", optional = true }
 # The ambient tenant `Scope` a delivery is keyed under — the same fail-closed
 # isolation model every Seiva capability resolves a tenant from (ADR 0019). A
 # core, data-layer-free crate: no runtime rides in through it.
-seiva-ports = { version = "0.1.0", path = "../seiva-ports", optional = true }
+seiva-ports = { version = "0.2.0", path = "../seiva-ports", optional = true }
 
 [features]
 # `delivery` is on by default so the crate's own tests and lints exercise the
