@@ -42,7 +42,7 @@ seiva-ports = { workspace = true }
 # The CloudEvents 1.0 envelope. `default-features = false` so none of the broker
 # backends (NATS/AMQP/Kafka) are pulled — we reuse only the data-layer-free
 # envelope so a subscriber sees the SAME event type as the broker path.
-seiva-messaging = { version = "0.2.0", path = "../seiva-messaging", default-features = false }
+seiva-messaging = { version = "0.2.1", path = "../seiva-messaging", default-features = false }
 # The subscriber trait is object-safe (stored as `Arc<dyn EventSubscriber>` at the
 # composition edge), so its async method is erased with `async-trait`.
 async-trait = { workspace = true }
@@ -55,7 +55,7 @@ tracing = { version = "0.1" }
 # `set_parent` on handle. `default-features = false` keeps this DORM-free and links
 # NO exporter — both calls are no-ops until a service enables the crate's `tracing`
 # feature at its composition root (the proof test enables it via a dev-dependency).
-seiva-observability = { version = "0.2.0", path = "../seiva-observability", default-features = false }
+seiva-observability = { version = "0.2.1", path = "../seiva-observability", default-features = false }
 # The worker runtime (`run_worker`/`WorkerConfig`/`WorkerReport`) the in-process
 # dispatch worker loops on — the SAME engine the relay worker uses, so the two
 # dispatchers share their shutdown/metrics behaviour. `default-features = false`
@@ -77,19 +77,19 @@ tokio = { workspace = true, features = ["time"] }
 # exponential-backoff formula lives in ONE crate and the in-process drain, the broker
 # relay and any `seiva-client` call all pace a transient failure identically. This is
 # the DORM-free resilience crate (breaker/retry/timeout), so no data layer rides in.
-seiva-resilience = { version = "0.2.0", path = "../seiva-resilience" }
+seiva-resilience = { version = "0.2.1", path = "../seiva-resilience" }
 
 [dev-dependencies]
 # The tests drive async dispatch on a current-thread runtime; the library brings
 # no runtime of its own.
 tokio = { workspace = true, features = ["rt", "macros"] }
 # The in-memory `IdempotencyStore` double, so the dedup logic is proved OFFLINE.
-seiva-testing = { version = "0.2.0", path = "../seiva-testing" }
+seiva-testing = { version = "0.2.1", path = "../seiva-testing" }
 # The trace-propagation proof turns ON the facade's real runtime: this dev edge
 # enables `seiva-observability/tracing`, so for the TEST build the no-op facade
 # becomes the real W3C propagation (feature unification) while a plain
 # `cargo build -p seiva-events` still links nothing.
-seiva-observability = { version = "0.2.0", path = "../seiva-observability", default-features = false, features = ["tracing"] }
+seiva-observability = { version = "0.2.1", path = "../seiva-observability", default-features = false, features = ["tracing"] }
 # An in-memory span exporter + the `tracing-opentelemetry` bridge, so the test can
 # install a tracer, drive the choreography, and assert the handling span's parent is
 # the emitting span. Versions match the coherent OTLP set seiva-observability pins.
