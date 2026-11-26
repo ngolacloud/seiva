@@ -1736,7 +1736,10 @@ fn doctor() -> ExitCode {
 /// does not repeat the name.
 fn long_version_text() -> String {
     let since = match env!("SEIVA_GIT_SINCE").split_once('|') {
-        Some((n, tag)) => format!(" (+{n} commits since {tag})"),
+        Some((n, tag)) => {
+            let noun = if n == "1" { "commit" } else { "commits" };
+            format!(" (+{n} {noun} since {tag})")
+        }
         None => String::new(),
     };
     let dirty = if env!("SEIVA_GIT_DIRTY").is_empty() {
