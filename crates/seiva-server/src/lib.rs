@@ -369,6 +369,12 @@ pub enum ServeError {
     /// refuses to boot silently blind. Only constructed under the `metrics` /
     /// `tracing-otlp` features.
     Observability(String),
+    /// The mutual-TLS configuration could not be loaded (a `SEIVA_TLS_*` file is
+    /// unreadable, or rustls refused the certificate, key, CA or CRL). A startup
+    /// error: the service refuses to boot with a half-configured listener. Only
+    /// under the `mtls` feature (ADR 0047).
+    #[cfg(feature = "mtls")]
+    Tls(String),
 }
 
 impl fmt::Display for ServeError {
@@ -386,6 +392,8 @@ impl fmt::Display for ServeError {
             ServeError::Observability(m) => {
                 write!(f, "failed to install an observability exporter: {m}")
             }
+            #[cfg(feature = "mtls")]
+            ServeError::Tls(m) => write!(f, "failed to load the mutual-TLS configuration: {m}"),
         }
     }
 }
@@ -397,6 +405,8 @@ impl std::error::Error for ServeError {
             ServeError::Identity(_)
             | ServeError::RouteCollision(_)
             | ServeError::Observability(_) => None,
+            #[cfg(feature = "mtls")]
+            ServeError::Tls(_) => None,
         }
     }
 }
@@ -525,6 +535,11 @@ pub async fn serve_router(
 
     Ok(())
 }
+
+#[cfg(feature = "mtls")]
+pub mod mtls;
+#[cfg(feature = "mtls")]
+pub use mtls::{serve_router_mtls, MtlsFiles};
 
 /// A Seiva service with **opt-in observability** (ADR 0027).
 ///

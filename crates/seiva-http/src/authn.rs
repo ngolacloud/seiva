@@ -14,6 +14,11 @@
 //!
 //! Two credential sources, each with its own authenticator, run side by side
 //! (ADR 0006): an opaque `X-API-Key` (checked first) and `Authorization: Bearer`.
+//! With the `mtls` feature a third comes first (ADR 0047): the **client
+//! certificate** the TLS handshake verified, mapped by a
+//! `CertificateAuthenticator` (`seiva_http::mtls`). A request
+//! carrying a verified certificate *and* a header credential is refused (`401`):
+//! one request, one identity.
 //! The [`Authenticator`] is the only authority on identity; the middleware never
 //! trusts a header or body field to set the subject, tenant or permissions.
 
@@ -27,6 +32,8 @@ use axum::response::{IntoResponse, Response};
 
 use seiva_identity::{Authenticator, Principal};
 
+#[cfg(feature = "mtls")]
+use crate::mtls::{CertificateAuthenticator, PeerCertificate};
 use crate::problem::{Problem, ProblemResponse};
 use crate::request_id::RequestIdExt;
 
@@ -46,6 +53,8 @@ static X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
 pub struct Authn {
     bearer: Option<Arc<dyn Authenticator>>,
     api_key: Option<Arc<dyn Authenticator>>,
+    #[cfg(feature = "mtls")]
+    client_cert: Option<Arc<dyn CertificateAuthenticator>>,
 }
 
 impl Authn {
@@ -57,6 +66,8 @@ impl Authn {
         Self {
             bearer: Some(bearer),
             api_key: None,
+            #[cfg(feature = "mtls")]
+            client_cert: None,
         }
     }
 
@@ -68,6 +79,8 @@ impl Authn {
         Self {
             bearer: Some(bearer),
             api_key: Some(api_key),
+            #[cfg(feature = "mtls")]
+            client_cert: None,
         }
     }
 }
@@ -87,6 +100,8 @@ impl Authn {
 pub struct AuthConfig {
     bearer: Option<Arc<dyn Authenticator>>,
     api_key: Option<Arc<dyn Authenticator>>,
+    #[cfg(feature = "mtls")]
+    client_cert: Option<Arc<dyn CertificateAuthenticator>>,
 }
 
 impl AuthConfig {
@@ -103,7 +118,7 @@ impl AuthConfig {
     pub fn bearer(bearer: Arc<dyn Authenticator>) -> Self {
         Self {
             bearer: Some(bearer),
-            api_key: None,
+            ..Self::default()
         }
     }
 
@@ -116,14 +131,38 @@ impl AuthConfig {
         self
     }
 
-    /// The [`Authn`] middleware state for this config, or `None` when neither a
-    /// bearer nor an `X-API-Key` authenticator is set — in which case no authn
-    /// layer is mounted (deny-by-default via the per-route guard still applies).
+    /// Also admit callers by the **client certificate** the mutual-TLS handshake
+    /// verified (feature `mtls`, ADR 0047), mapped to a [`Principal`] by
+    /// `certificates`. Consulted before `X-API-Key` and `Authorization`; it only
+    /// sees requests served by a [`MtlsListener`](crate::mtls::MtlsListener).
+    #[cfg(feature = "mtls")]
+    #[must_use]
+    pub fn with_client_certificates(
+        mut self,
+        certificates: Arc<dyn CertificateAuthenticator>,
+    ) -> Self {
+        self.client_cert = Some(certificates);
+        self
+    }
+
+    /// The [`Authn`] middleware state for this config, or `None` when no
+    /// authenticator is set — in which case no authn layer is mounted
+    /// (deny-by-default via the per-route guard still applies).
     pub(crate) fn into_authn(self) -> Option<Authn> {
-        match (self.bearer, self.api_key) {
-            (None, None) => None,
-            (bearer, api_key) => Some(Authn { bearer, api_key }),
+        #[cfg(feature = "mtls")]
+        if self.bearer.is_none() && self.api_key.is_none() && self.client_cert.is_none() {
+            return None;
         }
+        #[cfg(not(feature = "mtls"))]
+        if self.bearer.is_none() && self.api_key.is_none() {
+            return None;
+        }
+        Some(Authn {
+            bearer: self.bearer,
+            api_key: self.api_key,
+            #[cfg(feature = "mtls")]
+            client_cert: self.client_cert,
+        })
     }
 }
 
@@ -133,7 +172,7 @@ impl From<Option<Arc<dyn Authenticator>>> for AuthConfig {
     fn from(bearer: Option<Arc<dyn Authenticator>>) -> Self {
         Self {
             bearer,
-            api_key: None,
+            ..Self::default()
         }
     }
 }
@@ -147,6 +186,15 @@ impl From<Option<Arc<dyn Authenticator>>> for AuthConfig {
 /// `authn_state` is an [`Authn`]. [`router_with_auth`](crate::router_with_auth)
 /// does this for the whole app.
 pub async fn authn(State(authn): State<Authn>, mut request: Request, next: Next) -> Response {
+    // 0. The verified client certificate (feature `mtls`), when a certificate
+    //    authenticator is configured and the connection presented one.
+    #[cfg(feature = "mtls")]
+    if let Some(certificates) = authn.client_cert.as_ref() {
+        if let Some(peer) = request.extensions().get::<PeerCertificate>().cloned() {
+            return certificate_authn(Arc::clone(certificates), peer, request, next).await;
+        }
+    }
+
     // 1. `X-API-Key` takes precedence, but only when an API-key authenticator is
     //    configured — otherwise the header is unknown and we fall through.
     if let Some(api_key_auth) = authn.api_key.as_ref() {
@@ -212,6 +260,41 @@ pub async fn authn(State(authn): State<Authn>, mut request: Request, next: Next)
         Err(_) => auth_unavailable(request),
     }
 }
+
+/// The client-certificate path of [`authn`] (ADR 0047).
+#[cfg(feature = "mtls")]
+async fn certificate_authn(
+    certificates: Arc<dyn CertificateAuthenticator>,
+    peer: PeerCertificate,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let PeerCertificate::Verified(certificate) = peer else {
+        return unauthorized(request, CERTIFICATE_SCHEME);
+    };
+    // One request, one identity: a header credential next to a verified
+    // certificate is ambiguous (which caller is this?), so refuse it rather
+    // than silently pick one.
+    if request.headers().contains_key(AUTHORIZATION) || request.headers().contains_key(&X_API_KEY) {
+        return unauthorized(request, CERTIFICATE_SCHEME);
+    }
+    // The application's mapping may consult a store (enrolment, revocation):
+    // keep it off the async executor, like the bearer path.
+    match tokio::task::spawn_blocking(move || certificates.authenticate(&certificate)).await {
+        Ok(Ok(principal)) => {
+            request.extensions_mut().insert(Arc::new(principal));
+            next.run(request).await
+        }
+        Ok(Err(_)) => unauthorized(request, CERTIFICATE_SCHEME),
+        Err(_) => auth_unavailable(request),
+    }
+}
+
+/// The `WWW-Authenticate` hint on a refused client certificate. HTTP has no
+/// registered scheme for TLS client authentication; this names the mechanism
+/// the caller must fix (its certificate), not a header to send.
+#[cfg(feature = "mtls")]
+const CERTIFICATE_SCHEME: &str = "Certificate";
 
 /// Build the `500` RFC 9457 response for an authentication task that failed to
 /// run to completion (e.g. a panic inside the verifier). Deny by default: a

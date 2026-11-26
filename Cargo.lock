@@ -2659,6 +2659,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
 name = "redis"
 version = "0.27.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2828,6 +2841,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -3131,6 +3145,8 @@ dependencies = [
  "async-trait",
  "axum",
  "metrics",
+ "rcgen",
+ "rustls",
  "seiva",
  "seiva-contract",
  "seiva-cqrs",
@@ -3143,9 +3159,12 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tower-http",
+ "tower-service",
  "tracing",
+ "x509-parser",
 ]
 
 [[package]]
@@ -3256,6 +3275,8 @@ dependencies = [
  "accounts-infrastructure",
  "accounts-interface",
  "axum",
+ "rcgen",
+ "rustls",
  "seiva",
  "seiva-config",
  "seiva-http",
@@ -3263,6 +3284,7 @@ dependencies = [
  "seiva-testing",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -4943,6 +4965,15 @@ dependencies = [
  "oid-registry",
  "rusticata-macros",
  "thiserror 2.0.21",
+ "time",
+]
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
  "time",
 ]
 

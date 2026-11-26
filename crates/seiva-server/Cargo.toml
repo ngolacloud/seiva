@@ -37,6 +37,10 @@ categories = ["web-programming::http-server"]
 default = []
 metrics = ["dep:seiva-observability", "seiva-observability/metrics"]
 tracing-otlp = ["dep:seiva-observability", "seiva-observability/tracing"]
+# Mutual TLS terminated by the service itself (ADR 0047): `serve_router_mtls`
+# and the `SEIVA_TLS_*` configuration. Off by default — a service behind a
+# TLS-terminating proxy keeps `serve_router`.
+mtls = ["seiva-http/mtls"]
 
 [dependencies]
 # The HTTP transport: `router(health)` already merges the controllers, the health
@@ -70,3 +74,7 @@ accounts-interface = { path = "../../examples/accounts/interface" }
 accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
 # In-memory port doubles to drive the idempotency-purge worker without a database.
 seiva-testing = { version = "0.2.0", path = "../seiva-testing" }
+# `serve_router_mtls` end to end (feature `mtls`): throwaway PKI and a TLS client.
+rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
