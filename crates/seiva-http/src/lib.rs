@@ -38,6 +38,8 @@ pub mod guard;
 pub mod health;
 pub mod idempotency;
 pub mod metrics;
+#[cfg(feature = "mtls")]
+pub mod mtls;
 pub mod problem;
 pub mod rate_limit;
 pub mod request_id;
