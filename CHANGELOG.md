@@ -8,6 +8,28 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ## [Unreleased]
 
+### Added
+
+- CLI: dynamic shell completion — `seiva completion <bash|zsh|fish|elvish|powershell>`
+  prints a script that calls back into `seiva` on every TAB, completing commands,
+  flags and values: `--kind`, `--data`, `--backend`, the known extensions, and
+  the current project's modules (`module split` offers the modules not yet split,
+  `module merge` the split ones).
+- CLI: `seiva --version` (and the new `seiva version`) is a build card — commit
+  and distance from the last release tag, build date, rustc, the linked data
+  layer and demo commands, the framework version new projects are scaffolded on,
+  how a project is shaped, and a get-started list. `-V` / `version --short` keep
+  the one-line `seiva <version>` for scripts.
+
+### Changed
+
+- CLI help is grouped and semantic, the same mechanism as the `delonix` CLI:
+  `seiva --help` lists Project / Development / Contract / Quality / Tooling
+  sections and ends with the usual workflow; groups are sectioned too (`seiva db
+  --help`: Setup / Migration / Data). One-line summaries on `-h`; `--help` adds
+  EXAMPLES and SEE ALSO for every command, from one tested table.
+- `seiva::scaffold` exposes `FRAMEWORK_VERSION` and the `EXTENSIONS` list.
+
 ## [0.2.0] - 2026-11-26
 
 Tagged and released on GitHub; the crates are not yet republished on crates.io
