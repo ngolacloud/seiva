@@ -4,6 +4,18 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — gateway de IA e harness de LLM (ADR 0048, Proposto)
+
+[ADR 0048](adr/0048-ai-gateway-and-llm-harness.md) propõe um só caminho controlado
+entre um produto e qualquer modelo: port `seiva-llm` neutro quanto ao fornecedor
+(rotas com residência, adaptadores pelo cliente de egress do ADR 0045), gateway
+`seiva-ai-gateway` como pipeline de behaviors fail-closed (identidade → autorização
+→ orçamento → mascaramento → guardrails → modelo → auditoria), in-process ou como
+servidor compatível com OpenAI/Anthropic, ferramentas MCP geradas das facades
+(`#[tool(effect = …)]`, em nome da pessoa, escritas aprovadas) e o harness
+`seiva-agent`. O LiteLLM é só a inspiração, nunca dependência. Aceitação: OWASP Top 10
+for LLM Applications (2025), um teste por risco. **Falta:** fases G1–G6 (ver o ADR).
+
 ## Estado (2026-11-16) — aceitação da comunidade: contrato estável + scope fail-closed
 
 Re-avaliação contra os 6 pontos de [COMMUNITY_ACCEPTANCE](audits/rust-engineering/2026-11/seiva/COMMUNITY_ACCEPTANCE.md).
