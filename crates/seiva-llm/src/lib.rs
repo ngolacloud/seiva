@@ -66,11 +66,13 @@
 //! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(demo()).unwrap();
 //! ```
 //!
-//! # What is not here (yet)
+//! # The gateway
 //!
 //! Identity, authorization, budget, masking, guardrails and audit are the
-//! gateway stages of ADR 0048 §2 (phase G2). This crate gives them the route's
-//! permission and residency to check, and the usage to meter.
+//! gateway stages of ADR 0048 §2, in the `seiva-ai-gateway` crate. This crate
+//! gives them the route's permission and residency to check, and the usage to
+//! meter; a product that calls a model on behalf of people goes through the
+//! gateway, not the router.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

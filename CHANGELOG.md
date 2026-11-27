@@ -32,6 +32,16 @@ While the project is pre-1.0, the public API may change in a minor release.
   the new `seiva-llm-reqwest` crate (excluded from the workspace, own CI job).
   `seiva-testing` gains `llm::ScriptedModel` and `llm::HashEmbedder` behind the
   `llm` feature.
+- **AI gateway** (ADR 0048, phase G2): the new `seiva-ai-gateway` crate runs every model
+  call through the same stages, in a fixed order, each failing closed — identity, the
+  route's permission and residency per area, the tools offered checked against the
+  caller's permissions, a token budget per principal, tenant and area (a store outage
+  stops the call), masking of personal data into typed placeholders (built-in detectors
+  for the Angolan identity card and NIF, IBANs, payment cards, e-mail, phones), refusal of
+  credentials, tool output labelled as untrusted, input and output guardrails (`JsonOutput`,
+  `SizeLimit`, and built-in credential and tool-policy checks), unmasking by a reveal
+  policy, and one audit record per call — refusals included — that never carries a value.
+  `stream(..)` holds text back so a credential is caught before it is released.
 
 ### Changed
 

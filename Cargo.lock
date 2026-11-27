@@ -3061,6 +3061,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-ai-gateway"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "futures-core",
+ "futures-util",
+ "regex",
+ "seiva-identity",
+ "seiva-llm",
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-auth"
 version = "0.2.1"
 dependencies = [

@@ -61,10 +61,11 @@ let answer = chat.complete(&ChatRequest::new(512).user("Olá")).await?;
 In tests, `seiva-testing` (feature `llm`) provides `ScriptedModel` — a provider that plays
 a script and records every request — and a deterministic `HashEmbedder`.
 
-## Not here yet
+## The gateway
 
 Identity, authorization of the route's permission, budget, masking, guardrails and audit
-are the gateway stages of ADR 0048 §2 (phase G2).
+are the gateway stages of ADR 0048 §2, in [`seiva-ai-gateway`](../seiva-ai-gateway). A
+product that calls a model on behalf of people goes through the gateway, not the router.
 
 ## License
 
