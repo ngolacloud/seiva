@@ -168,6 +168,28 @@ impl ToolSet {
         self.tools.is_empty()
     }
 
+    /// Call `name` in-process as `principal` — for an agent in the same process
+    /// (`seiva-agent`). The tool's `#[requires]` is checked here: a tool the
+    /// principal may not use fails as unknown. Approving a write is the caller's
+    /// job (the agent's approver); nothing here asks a person.
+    pub async fn invoke(
+        &self,
+        name: &str,
+        principal: &seiva_identity::Principal,
+        args: Value,
+    ) -> Result<Value, ToolFailure> {
+        let permitted = self
+            .get(name)
+            .is_some_and(|t| t.requires.is_empty() || principal.has(t.requires));
+        if !permitted {
+            return Err(ToolFailure::new(format!("unknown tool `{name}`")));
+        }
+        match self.call(name, Ctx::new(principal.clone()), args) {
+            Some(future) => future.await,
+            None => Err(ToolFailure::new(format!("unknown tool `{name}`"))),
+        }
+    }
+
     /// Call `name` with `args` as the caller of `ctx`. The caller's permission is
     /// the server's to check before this.
     pub(crate) fn call(&self, name: &str, ctx: Ctx, args: Value) -> Option<ToolFuture> {

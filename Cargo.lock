@@ -3061,6 +3061,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-agent"
+version = "0.2.2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "futures-util",
+ "seiva",
+ "seiva-ai-gateway",
+ "seiva-contract",
+ "seiva-http",
+ "seiva-identity",
+ "seiva-llm",
+ "seiva-mcp-server",
+ "seiva-testing",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-ai-gateway"
 version = "0.2.2"
 dependencies = [
