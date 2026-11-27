@@ -3220,6 +3220,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-llm"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "futures-core",
+ "futures-util",
+ "seiva-resilience",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-macros"
 version = "0.2.1"
 dependencies = [
@@ -3357,7 +3372,9 @@ name = "seiva-testing"
 version = "0.2.1"
 dependencies = [
  "async-trait",
+ "seiva-llm",
  "seiva-ports",
+ "serde_json",
  "tokio",
 ]
 

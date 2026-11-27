@@ -35,6 +35,9 @@ jobs:
       # (ADR 0047) runs real TLS 1.3 handshakes against a throwaway PKI.
       - name: Test (feature mtls)
         run: cargo test -p seiva-http -p seiva-server --features seiva-http/mtls,seiva-server/mtls
+      # The model doubles (ADR 0048) sit behind seiva-testing's `llm` feature.
+      - name: Test (seiva-testing feature llm)
+        run: cargo test -p seiva-testing --features llm
       - name: Smoke-test the CLI
         run: cargo run -q -p seiva-cli --bin seiva -- doctor
 
@@ -159,6 +162,37 @@ jobs:
         run: cargo clippy --manifest-path "$MANIFEST" --all-targets --all-features -- -D warnings
       - name: Test (sign + POST over a local HTTPS server → Delivered)
         run: cargo test --manifest-path "$MANIFEST" --all-features
+
+  # The real reqwest/rustls `HttpTransport` for `seiva-llm` (ADR 0048, G1) and its
+  # end-to-end proof: the codecs and the router over real HTTP against a local
+  # axum server (whole and streamed answers, a 401, a redirect that is not
+  # followed, a fallback from an overloaded upstream). DORM-free, but EXCLUDED
+  # from the workspace because reqwest + rustls are heavy — the `check` gate above
+  # stays http-client-free. Its own lockfile is audited here.
+  llm-reqwest:
+    name: llm-reqwest
+    runs-on: ubuntu-latest
+    env:
+      MANIFEST: crates/seiva-llm-reqwest/Cargo.toml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/seiva-llm-reqwest
+      - name: Format
+        run: cargo fmt --manifest-path "$MANIFEST" --all --check
+      - name: Lint
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --all-features -- -D warnings
+      - name: Test (real HTTP round trips against a local server)
+        run: cargo test --manifest-path "$MANIFEST" --all-features
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo-deny — the excluded lockfile
+        run: cargo deny --manifest-path "$MANIFEST" check advisories bans licenses sources
 
   # The git-coupled crates (the DORM data-layer gateway and its relay/RAG/MCP
   # companions) are EXCLUDED from the workspace, so the jobs above stay DORM-free
