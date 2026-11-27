@@ -3062,7 +3062,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-ai-gateway"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -3245,7 +3245,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-llm"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -3269,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-mcp-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "axum",

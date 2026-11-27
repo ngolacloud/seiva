@@ -10,11 +10,10 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ## [0.2.2] - 2026-11-27
 
-Tagged and released on GitHub; the crates are not republished on crates.io. A
-project that pins the framework by git tag moves from `tag = "v0.2.1"` to
-`tag = "v0.2.2"`; the `"0.2"` version requirements are unchanged. Install the
-CLI from the tag:
-`cargo install --git https://github.com/ngolacloud/seiva --tag v0.2.2 seiva-cli`.
+Published on crates.io — every framework crate at 0.2.2, including the CLI and
+the umbrella crate `seiva` (the successor of `delonix-seiva`) for the first time.
+Install the CLI with `cargo install seiva-cli`; generated projects resolve their
+`"0.2"` requirements from crates.io.
 
 ### Added
 

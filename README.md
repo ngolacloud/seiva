@@ -68,23 +68,22 @@ The library crates are on **crates.io** (dual MIT/Apache, MSRV 1.75). Add the
 pieces a service needs — the framework core, the HTTP transport and the runtime:
 
 ```sh
-cargo add delonix-seiva seiva-http seiva-server
+cargo add seiva seiva-http seiva-server
 # the trait-only data boundary + in-memory doubles for tests
 cargo add seiva-ports --dev seiva-testing
 ```
 
 The **`seiva` CLI** (scaffolds projects/modules, runs the dev loop, lints the
-architecture) is not yet on crates.io — its demo commands depend on in-tree
-example modules. Install it from git meanwhile:
+architecture) is on crates.io too:
 
 ```sh
-cargo install --git https://github.com/ngolacloud/seiva seiva-cli
+cargo install seiva-cli
 seiva project new shop && cd shop   # scaffold a project
+echo 'source <(seiva completion bash)' >> ~/.bashrc   # TAB completion (zsh/fish: seiva completion --help)
 ```
 
 Generated projects depend only on the published library crates, never on the
-CLI, so this does not affect them. See [docs/publishing.md](docs/publishing.md)
-for the per-crate publish status.
+CLI. See [docs/publishing.md](docs/publishing.md) for the per-crate publish status.
 
 ## Bring your own data layer — DORM is the default, not a requirement
 
