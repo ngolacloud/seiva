@@ -293,6 +293,11 @@ the companion list for agents that plan and use tools.
   is an out-of-band confirmation: the host app calls `POST /mcp/approvals/{id}` with the
   person's token after showing them the exact arguments, and the model's retry carries the
   approval id; MCP elicitation, which needs a server-initiated stream, is not used.
+- **G6 (2026-11-27).** Retrieval lives in the DORM-free `seiva-rag` crate behind a
+  `VectorIndex` port whose only search takes the caller's access filter; the in-memory
+  index ships, and the DORM/pgvector adapter (`seiva-rag-worker`) is to implement the same
+  port. Embedding calls do not go through the gateway stages yet: the guide recommends an
+  in-country embedder for personal data until they do.
 
 ## Related
 

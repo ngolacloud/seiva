@@ -146,6 +146,7 @@ plugins:
             Language models: Modelos de linguagem
             Agent tools (MCP): Ferramentas para agentes (MCP)
             Agents: Agentes
+            Retrieval (RAG): Recuperação (RAG)
             Sessions: Sessões
             Serialization: Serialização
             Configuration: Configuração
@@ -254,6 +255,7 @@ nav:
       - Language models: topics/language-models.md
       - Agent tools (MCP): topics/agent-tools.md
       - Agents: topics/agents.md
+      - Retrieval (RAG): topics/retrieval.md
       - Sessions: topics/sessions.md
       - Serialization: topics/serialization.md
       - Configuration: topics/configuration.md

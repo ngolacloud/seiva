@@ -10,6 +10,15 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ### Added
 
+- **Retrieval with permissions** (ADR 0048, phase G6): the new `seiva-rag` crate — a
+  `VectorIndex` port whose only search takes an `AccessFilter` built from the caller's
+  principal (tenant and permissions, applied in the query, so `k` counts visible chunks),
+  an `Ingestor` that refuses a document without a source and a writer and keeps both on
+  every chunk, a `Retriever`, and `answer`, which asks through the gateway with the chunks
+  numbered and labelled as untrusted and checks the reply's `[n]` citations (`uncited`,
+  `unknown_markers`). `InMemoryIndex` ships; `SearchTool` (feature `agent`) is a
+  `search_documents` tool for `seiva-agent`.
+
 - **Agent harness** (ADR 0048, phase G5): the new `seiva-agent` crate — a bounded loop
   (steps, tokens, wall time, per-tool timeout, `Cancel`) whose every model call goes
   through the AI gateway; tools from functions (`FnTool`), module facades in-process
