@@ -306,6 +306,11 @@ companheira para agentes que planeiam e usam ferramentas.
   `POST /mcp/approvals/{id}` com o token da pessoa depois de lhe mostrar os argumentos
   exactos, e a nova chamada do modelo leva o id da aprovação; não se usa a elicitation do
   MCP, que precisa de um stream aberto pelo servidor.
+- **G6 (2026-11-27).** A recuperação vive no crate `seiva-rag`, sem DORM, atrás de um port
+  `VectorIndex` cuja única pesquisa recebe o filtro de acesso de quem chama; vem o índice em
+  memória, e o adaptador DORM/pgvector (`seiva-rag-worker`) vai implementar o mesmo port. As
+  chamadas de embeddings ainda não passam pelas etapas do gateway: até lá, o guia recomenda
+  um modelo de embeddings no país para dados pessoais.
 
 ## Relacionadas
 

@@ -4,6 +4,18 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — ADR 0048 G6: recuperação com permissões e citações (`seiva-rag`)
+
+Crate novo `seiva-rag` (membro, sem DORM): o port `VectorIndex` com uma só pesquisa, que
+recebe o `AccessFilter` do principal (tenant e permissões, dentro da consulta: os `k` contam-se
+entre os visíveis); o `Ingestor` recusa um documento sem fonte e autor e guarda-os em cada
+pedaço; o `Retriever` pesquisa como quem chama; o `answer` numera os pedaços, marca-os como não
+confiáveis, pergunta pelo gateway e verifica as citações `[n]` (`uncited`, `unknown_markers`); o
+`SearchTool` é a ferramenta `search_documents` do `seiva-agent`. Prova por linha OWASP: LLM04,
+LLM08, LLM09. Com isto, as seis fases do ADR 0048 estão feitas. **Falta:** o adaptador
+DORM/pgvector do `VectorIndex` no `seiva-rag-worker`; as chamadas de embeddings pelas etapas
+do gateway.
+
 ## Estado (2026-11-27) — ADR 0048 G5: o harness de agentes (`seiva-agent`)
 
 Crate novo `seiva-agent` (membro, sem DORM e sem cliente HTTP): o ciclo com limites (passos,

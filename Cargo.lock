@@ -3357,6 +3357,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-rag"
+version = "0.2.2"
+dependencies = [
+ "async-trait",
+ "regex",
+ "seiva",
+ "seiva-agent",
+ "seiva-ai-gateway",
+ "seiva-identity",
+ "seiva-llm",
+ "seiva-testing",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "seiva-ratelimit-redis"
 version = "0.2.2"
 dependencies = [
