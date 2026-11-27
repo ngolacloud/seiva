@@ -14,6 +14,9 @@ Published on crates.io — every framework crate at 0.2.2, including the CLI and
 the umbrella crate `seiva` (the successor of `delonix-seiva`) for the first time.
 Install the CLI with `cargo install seiva-cli`; generated projects resolve their
 `"0.2"` requirements from crates.io.
+`seiva-mcp-server` 0.2.2 is published from the follow-up commit that shortens one
+of its crates.io keywords (`model-context-protocol` is over the 20-character
+limit) — metadata only, the same code as the `v0.2.2` tag.
 
 ### Added
 
