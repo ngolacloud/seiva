@@ -144,6 +144,11 @@ members = [
     # failing closed. In-process (the server shape is G3). DORM-free and
     # http-client-free, so a default member.
     "crates/seiva-ai-gateway",
+    # Module facades as MCP tools (ADR 0048, G4): `#[tool]` + `#[seiva::tools]`
+    # give the tools; this crate serves them over MCP's Streamable HTTP with the
+    # person's own identity, permission checks, human approval for writes and
+    # audit. DORM-free (unlike `seiva-mcp`, DORM's database tools, excluded).
+    "crates/seiva-mcp-server",
     # The inter-service client: how one module calls another module's service once
     # split into microservices, wrapping every call in seiva-resilience's breaker +
     # retry + timeout over an injected transport. The first real consumer of the

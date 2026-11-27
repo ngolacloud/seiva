@@ -4,6 +4,19 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — ADR 0048 G4: ferramentas MCP a partir das facades (`seiva-mcp-server`)
+
+`#[tool(effect = "read" | "write")]` nos métodos da facade (efeito e descrição obrigatórios,
+escrita nunca `#[public]`, erros de compilação), `Facade::TOOLS` com valor por omissão (não
+parte nenhuma facade) e `#[seiva::tools]` no impl, que gera o despacho como o
+`#[seiva::controller]` gera as rotas. Crate novo `seiva-mcp-server` (membro, sem DORM):
+Streamable HTTP com respostas JSON (`initialize`, `ping`, `tools/list`, `tools/call`), o
+token da própria pessoa pelo `Authenticator` do framework, `#[requires]` verificado e o `Ctx`
+da pessoa (o scope do tenant aplica-se), aprovação humana das escritas fora de banda
+(`/mcp/approvals/{id}`, uso único, argumentos fixados por digest), `auto_approve` explícito,
+auditoria (a escrita antes de correr), `Origin` verificado e metadados RFC 9728. A troca de
+tokens (RFC 8693) espera pelo ADR 0038. **Falta:** G5 (`seiva-agent` e o cliente MCP), G6.
+
 ## Estado (2026-11-27) — ADR 0048 G3: o gateway como servidor (`apps/ai-gateway`)
 
 `seiva-ai-gateway` ganha a feature `server`: `POST /v1/chat/completions` (OpenAI),

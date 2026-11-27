@@ -3265,6 +3265,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-mcp-server"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "seiva",
+ "seiva-contract",
+ "seiva-http",
+ "seiva-identity",
+ "seiva-ports",
+ "seiva-testing",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-messaging"
 version = "0.2.1"
 dependencies = [

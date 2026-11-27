@@ -284,6 +284,16 @@ the companion list for agents that plan and use tools.
   client; a check that a facade with `#[tool]` declares `effect`; the gateway's
   stage order is asserted by a test, like the transaction boundary in ADR 0020.
 
+## Implementation notes
+
+- **G4 (2026-11-27).** The MCP server authenticates the person's own token with the
+  framework's `Authenticator` and runs each tool with that person's `Ctx`. Token exchange
+  (RFC 8693) waits for the OAuth server of ADR 0038; until then the client presents the
+  person's token directly — still never a broad agent token. The human approval of a write
+  is an out-of-band confirmation: the host app calls `POST /mcp/approvals/{id}` with the
+  person's token after showing them the exact arguments, and the model's retry carries the
+  approval id; MCP elicitation, which needs a server-initiated stream, is not used.
+
 ## Related
 
 - [ADR 0005](0005-object-level-authorization-bola.md) · [ADR 0006](0006-identity-and-authentication.md) · [ADR 0013](0013-admin-mutation-audit.md) · [ADR 0015](0015-distributed-rate-limit.md) · [ADR 0019](0019-fail-closed-authorization.md) · [ADR 0020](0020-command-bus-and-pipeline-behaviors.md) · [ADR 0025](0025-wire-schema-serde-fidelity.md) · [ADR 0027](0027-native-observability.md) · [ADR 0038](0038-oauth-authz-server.md) · [ADR 0043](0043-append-only-audit.md) · [ADR 0045](0045-egress-ssrf-guard.md)
