@@ -42,6 +42,14 @@ While the project is pre-1.0, the public API may change in a minor release.
   `SizeLimit`, and built-in credential and tool-policy checks), unmasking by a reveal
   policy, and one audit record per call — refusals included — that never carries a value.
   `stream(..)` holds text back so a credential is caught before it is released.
+- **AI gateway server** (ADR 0048, phase G3): `seiva-ai-gateway`'s `server` feature serves
+  OpenAI-compatible `POST /v1/chat/completions`, Anthropic-compatible `POST /v1/messages`
+  and `/v1/messages/count_tokens`, and `GET /v1/models` (the routes the caller may use),
+  whole or streamed, authenticated by gateway keys stored only as SHA-256; errors in each
+  client's own shape. The gateway gains `any_tool(permission)` for coding agents whose
+  tools run on the client. The new `apps/ai-gateway` app is the runnable binary
+  (`seiva-ai-gateway serve | check | hash-key`): one TOML file, `seiva-server` with health
+  probes, a JSON-lines audit record, model calls over `seiva-llm-reqwest`.
 
 ### Changed
 

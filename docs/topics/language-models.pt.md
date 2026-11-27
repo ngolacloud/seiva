@@ -1,9 +1,10 @@
 # Modelos de linguagem
 
-> **Estado: fases G1–G2 do [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** O port
+> **Estado: fases G1–G3 do [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** O port
 > do modelo, as rotas e os codecs dos fornecedores estão no `seiva-llm`; as etapas do gateway
 > (identidade, orçamento, mascaramento, guardrails, auditoria) no `seiva-ai-gateway`,
-> in-process. A forma servidor (endpoints compatíveis com OpenAI e Anthropic) é a G3.
+> in-process ou atrás de endpoints compatíveis com OpenAI e Anthropic (o binário
+> `apps/ai-gateway`).
 
 Um caso de uso que precisa de um modelo depende de uma **rota**, nunca de um fornecedor. A
 rota diz que upstreams a podem servir, por ordem de fallback, e para onde os dados podem ir.
@@ -122,6 +123,26 @@ rota `abroad` corre sempre.
 
 O `stream(..)` retém o texto até 256 caracteres para apanhar uma credencial antes de ela
 chegar ao chamador, e nunca liberta meio marcador.
+
+## O gateway como servidor
+
+O mesmo gateway serve endpoints compatíveis com OpenAI e Anthropic (`seiva-ai-gateway`,
+feature `server`): um chat corporativo, uma interface de RAG ou um agente de programação
+apontam o seu URL base para ele e herdam todas as etapas. O binário é a app
+`apps/ai-gateway`: um ficheiro TOML declara os fornecedores, as rotas, as chaves do gateway
+(só o seu SHA-256) e o orçamento.
+
+| Endpoint | Para |
+|---|---|
+| `POST /v1/chat/completions` | clientes OpenAI, resposta inteira ou em stream |
+| `POST /v1/messages`, `/v1/messages/count_tokens` | clientes Anthropic, inteira ou em stream |
+| `GET /v1/models` | as rotas que este chamador pode usar |
+
+O cliente envia uma **rota** como `model` e uma **chave do gateway** — nunca a de um
+fornecedor — como `Authorization: Bearer` ou `x-api-key`; a chave diz quem é o chamador e
+de que área. As chaves dos fornecedores ficam no ambiente do gateway. Um agente de
+programação (Claude Code, um IDE) oferece as ferramentas que ele próprio corre: dá à sua
+chave a permissão `any_tool` do gateway.
 
 ## Testes
 

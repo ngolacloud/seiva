@@ -167,6 +167,7 @@ struct Inner {
     budget: Arc<dyn BudgetStore>,
     audit: Arc<dyn AuditSink>,
     tools: HashMap<String, String>,
+    any_tool: Option<String>,
     in_country_areas: HashSet<String>,
     mask_in_country: bool,
     credentials: CredentialPolicy,
@@ -190,6 +191,7 @@ pub struct GatewayBuilder {
     budget: Option<Arc<dyn BudgetStore>>,
     audit: Option<Arc<dyn AuditSink>>,
     tools: HashMap<String, String>,
+    any_tool: Option<String>,
     in_country_areas: HashSet<String>,
     mask_in_country: bool,
     credentials: CredentialPolicy,
@@ -240,6 +242,17 @@ impl GatewayBuilder {
     #[must_use]
     pub fn tool(mut self, name: impl Into<String>, permission: impl Into<String>) -> Self {
         self.tools.insert(name.into(), permission.into());
+        self
+    }
+
+    /// A caller holding `permission` may offer the model **any** tool, registered
+    /// or not — for a coding agent (Claude Code, an IDE) whose tools run on the
+    /// client and cannot all be listed here. An explicit, audited choice: the
+    /// tools offered still go to the audit record, and the model may still only
+    /// call a tool it was offered.
+    #[must_use]
+    pub fn any_tool(mut self, permission: impl Into<String>) -> Self {
+        self.any_tool = Some(permission.into());
         self
     }
 
@@ -298,6 +311,13 @@ impl GatewayBuilder {
         if let Some((tool, _)) = self.tools.iter().find(|(_, p)| p.trim().is_empty()) {
             return Err(BuildError(format!("tool `{tool}` has an empty permission")));
         }
+        if self
+            .any_tool
+            .as_deref()
+            .is_some_and(|p| p.trim().is_empty())
+        {
+            return Err(BuildError("`any_tool` needs a permission".into()));
+        }
         let masker = Masker::new(self.detectors);
         let mut guards: Vec<Arc<dyn Guardrail>> = vec![Arc::new(CredentialLeak {
             masker: masker.clone(),
@@ -311,6 +331,7 @@ impl GatewayBuilder {
                 budget,
                 audit,
                 tools: self.tools,
+                any_tool: self.any_tool,
                 in_country_areas: self.in_country_areas,
                 mask_in_country: self.mask_in_country,
                 credentials: self.credentials,
@@ -339,6 +360,7 @@ impl Gateway {
             budget: None,
             audit: None,
             tools: HashMap::new(),
+            any_tool: None,
             in_country_areas: HashSet::new(),
             mask_in_country: true,
             credentials: CredentialPolicy::Refuse,
@@ -346,6 +368,24 @@ impl Gateway {
             audit_mode: AuditMode::Required,
             store_masked_text: false,
         }
+    }
+
+    /// The routes `caller` may use: those whose permission the principal holds
+    /// (or public ones), minus `abroad` routes for an area that keeps its data in
+    /// the country. Sorted by name.
+    pub fn routes_for(&self, caller: &Caller) -> Vec<String> {
+        let in_country_only = caller
+            .area
+            .as_ref()
+            .is_some_and(|a| self.inner.in_country_areas.contains(a));
+        self.inner
+            .router
+            .routes()
+            .into_iter()
+            .filter(|r| r.permission().map_or(true, |p| caller.principal.has(p)))
+            .filter(|r| !(in_country_only && r.residency() == Residency::Abroad))
+            .map(|r| r.name().to_owned())
+            .collect()
     }
 
     /// A whole answer from `route`, through every stage.
@@ -479,7 +519,7 @@ impl Gateway {
             }
         }
         for tool in &request.tools {
-            match inner.tools.get(&tool.name) {
+            match inner.tools.get(&tool.name).or(inner.any_tool.as_ref()) {
                 Some(p) if principal.has(p) => {}
                 _ => {
                     return Err(GatewayError::ToolNotAllowed {

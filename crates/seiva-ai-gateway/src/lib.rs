@@ -53,8 +53,9 @@
 //! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(demo());
 //! ```
 //!
-//! In-process only in this phase; the server shape (OpenAI- and
-//! Anthropic-compatible endpoints) is G3.
+//! With the `server` feature, `server::router` puts the same gateway behind
+//! OpenAI- and Anthropic-compatible endpoints (G3); the runnable binary is the
+//! `apps/ai-gateway` app.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -65,6 +66,8 @@ mod error;
 mod gateway;
 mod guard;
 mod mask;
+#[cfg(feature = "server")]
+pub mod server;
 
 pub use budget::{BudgetError, BudgetKey, BudgetScope, BudgetStore, InMemoryBudget, Reservation};
 pub use detect::{Detector, PatternDetector};

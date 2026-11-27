@@ -27,8 +27,15 @@ Built-in detectors: the Angolan identity card and NIF, IBANs (mod-97), payment c
 (Luhn), e-mail, phone numbers, credentials. A gateway is not built without a budget store
 and an audit sink.
 
-In-process only in this phase; the server shape (OpenAI- and Anthropic-compatible
-endpoints) is G3. See the guide: `docs/topics/language-models.md`.
+## The server shape (feature `server`)
+
+`server::router(ServerState)` serves `POST /v1/chat/completions` (OpenAI),
+`POST /v1/messages` and `/v1/messages/count_tokens` (Anthropic) and `GET /v1/models`
+(the routes the caller may use, readable by both clients), whole or streamed. The
+client's `model` is a route; the client authenticates with a gateway key
+(`Authorization: Bearer` or `x-api-key`) stored only as its SHA-256 (`GatewayKeys`),
+which decides the principal and the area. Errors come back in the client's own shape.
+The runnable binary is `apps/ai-gateway`. See the guide: `docs/topics/language-models.md`.
 
 ## License
 

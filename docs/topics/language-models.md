@@ -1,9 +1,9 @@
 # Language models
 
-> **Status: phases G1–G2 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** The
+> **Status: phases G1–G3 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** The
 > model port, routes and provider codecs ship in `seiva-llm`; the gateway stages
-> (identity, budget, masking, guardrails, audit) in `seiva-ai-gateway`, in-process. The
-> server shape (OpenAI- and Anthropic-compatible endpoints) is G3.
+> (identity, budget, masking, guardrails, audit) in `seiva-ai-gateway`, in-process or
+> behind OpenAI- and Anthropic-compatible endpoints (the `apps/ai-gateway` binary).
 
 A use case that needs a model depends on a **route**, never on a provider. The route
 says which upstreams may serve it, in fallback order, and where the data may go.
@@ -121,6 +121,24 @@ it does not make a prompt anonymous. On an `abroad` route it always runs.
 
 `stream(..)` holds text back by up to 256 characters so a credential is caught before it
 reaches the caller, and never releases half a placeholder.
+
+## The gateway as a server
+
+The same gateway serves OpenAI- and Anthropic-compatible endpoints (`seiva-ai-gateway`,
+feature `server`), so a corporate chat, a RAG front end or a coding agent points its base
+URL at it and inherits every stage. The runnable binary is `apps/ai-gateway`: one TOML
+file declares providers, routes, the gateway keys (only their SHA-256) and the budget.
+
+| Endpoint | For |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI clients, whole or streamed |
+| `POST /v1/messages`, `/v1/messages/count_tokens` | Anthropic clients, whole or streamed |
+| `GET /v1/models` | the routes this caller may use |
+
+The client sends a **route** as `model` and a **gateway key** — never a provider key — as
+`Authorization: Bearer` or `x-api-key`; the key decides who the caller is and in which
+area. Provider keys stay in the gateway's environment. A coding agent (Claude Code, an
+IDE) offers the tools it runs itself: give its key the gateway's `any_tool` permission.
 
 ## Testing
 

@@ -20,6 +20,12 @@ readme = "README.md"
 keywords = ["llm", "ai-gateway", "owasp", "guardrails", "seiva"]
 categories = ["asynchronous", "web-programming"]
 
+[features]
+# The server shape (G3): OpenAI- and Anthropic-compatible endpoints over axum, so
+# a corporate chat, a RAG front end or a coding agent points its base URL at the
+# gateway. Off by default: an in-process product links no HTTP server here.
+server = ["dep:axum", "dep:sha2"]
+
 [dependencies]
 seiva-llm = { version = "0.2.1", path = "../seiva-llm", default-features = false }
 # The caller is the framework's one identity model (ADR 0006).
@@ -36,7 +42,17 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case"] }
 # One span per call with the OpenTelemetry GenAI attribute names (ADR 0027).
 tracing = { version = "0.1" }
+# The server shape, behind the `server` feature: the same axum as seiva-http, and
+# SHA-256 for gateway keys, stored only as digests.
+axum = { version = "0.8", optional = true, default-features = false, features = ["json", "query", "tokio", "http1"] }
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 seiva-testing = { workspace = true, features = ["llm"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+
+# The server endpoints, request by request.
+[[test]]
+name = "server"
+required-features = ["server"]

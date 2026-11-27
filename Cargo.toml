@@ -50,6 +50,11 @@ exclude = [
     # excluded and built by its own CI job via `--manifest-path`; the default
     # `cargo check --workspace` stays http-client-free.
     "crates/seiva-llm-reqwest",
+    # The runnable AI gateway (ADR 0048, G3): one TOML file → the OpenAI- and
+    # Anthropic-compatible endpoints on seiva-server, model calls over
+    # seiva-llm-reqwest. Excluded for the same reason (reqwest + rustls); its own
+    # CI job builds and tests it end to end over real HTTP.
+    "apps/ai-gateway",
 ]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,

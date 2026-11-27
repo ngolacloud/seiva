@@ -1,0 +1,41 @@
+# ai-gateway — the runnable AI gateway (ADR 0048, G3).
+#
+# Reads one TOML file (providers, routes, gateway keys stored as SHA-256, budget,
+# residency, tools) and serves the OpenAI- and Anthropic-compatible endpoints of
+# `seiva-ai-gateway`'s `server` feature on `seiva-server`, with `/health/live` and
+# `/health/ready`. Model calls go out through `seiva-llm-reqwest`.
+#
+# reqwest + rustls are heavy, so — like `webhook-delivery-e2e` and
+# `seiva-llm-reqwest` — this app is EXCLUDED from the default workspace and built
+# by its own CI job via `--manifest-path`.
+[package]
+name = "ai-gateway"
+version = "0.2.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+rust-version = "1.75"
+
+[[bin]]
+name = "seiva-ai-gateway"
+path = "src/main.rs"
+
+[dependencies]
+seiva-ai-gateway = { path = "../../crates/seiva-ai-gateway", features = ["server"] }
+seiva-llm = { path = "../../crates/seiva-llm" }
+seiva-llm-reqwest = { path = "../../crates/seiva-llm-reqwest" }
+seiva-identity = { path = "../../crates/seiva-identity" }
+seiva-ports = { path = "../../crates/seiva-ports" }
+seiva-http = { path = "../../crates/seiva-http" }
+seiva-server = { path = "../../crates/seiva-server" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "io-std", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+async-trait = "0.1"
+
+[dev-dependencies]
+seiva-testing = { path = "../../crates/seiva-testing" }
+# A real HTTP client for the end-to-end test.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

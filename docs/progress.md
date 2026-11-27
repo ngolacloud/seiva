@@ -4,6 +4,18 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — ADR 0048 G3: o gateway como servidor (`apps/ai-gateway`)
+
+`seiva-ai-gateway` ganha a feature `server`: `POST /v1/chat/completions` (OpenAI),
+`POST /v1/messages` e `/v1/messages/count_tokens` (Anthropic) e `GET /v1/models`, inteiros e
+em stream; chaves do gateway guardadas só em SHA-256 (`GatewayKeys`), que decidem o principal
+e a área; erros no formato de cada cliente; `any_tool(permissão)` para agentes de programação.
+App nova `apps/ai-gateway` (excluída, job de CI próprio): `seiva-ai-gateway serve | check |
+hash-key`, um TOML com `deny_unknown_fields`, `seiva-server` com as sondas de saúde, auditoria
+em JSON lines (0600), chamadas pelo `seiva-llm-reqwest`; teste ponta a ponta com HTTP real e
+clientes dos dois formatos. **Falta:** G4 (`#[tool]`, `seiva-mcp-server`), G5, G6; revogar
+chaves sem reiniciar; um `BudgetStore` partilhado.
+
 ## Estado (2026-11-27) — ADR 0048 G2: o gateway in-process (`seiva-ai-gateway`)
 
 Crate novo `seiva-ai-gateway` (membro, sem DORM e sem cliente HTTP): as etapas Identify →
