@@ -60,7 +60,9 @@ thin runtime counterpart in `seiva-server` (feature `mtls`).
   check the leaf only, for a PKI whose offline root publishes no CRL), and
   `ClientAuth::Required` (default) or `ClientAuth::Optional`. It is
   **TLS 1.3 only**, with the rustls `ring` provider and ALPN `h2` + `http/1.1`.
-  `Debug` never prints key material.
+  Both protocols are served: the `mtls` feature turns on axum's `http2`, so a
+  client that negotiates `h2` (reqwest does) gets HTTP/2, not a closed
+  connection (fixed in 0.2.2). `Debug` never prints key material.
 - **`MtlsListener`**, an `axum::serve::Listener`. TCP accepts run on a background
   task. Each handshake runs on its own task under a **timeout** (10 s by default),
   and at most **N handshakes** (1024 by default) are in flight. A slot is taken

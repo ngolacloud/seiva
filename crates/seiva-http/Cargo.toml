@@ -94,7 +94,10 @@ tower-service = { version = "0.3", optional = true }
 [features]
 # Mutual TLS: `seiva_http::mtls` (listener, config, client certificate,
 # `CertificateAuthenticator`) and the client-certificate path of `authn`.
-mtls = ["dep:rustls", "dep:tokio-rustls", "dep:x509-parser", "dep:tower-service", "tokio/net", "tokio/io-util"]
+# `axum/http2`: the listener advertises ALPN `h2` + `http/1.1`, so `axum::serve`
+# must speak HTTP/2 too; without it a client that negotiates `h2` (reqwest
+# does) completes the handshake and is then dropped with no response.
+mtls = ["axum/http2", "dep:rustls", "dep:tokio-rustls", "dep:x509-parser", "dep:tower-service", "tokio/net", "tokio/io-util"]
 
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.
@@ -110,3 +113,8 @@ async-trait = { workspace = true }
 rcgen = "0.13"
 # `tls12` only here, so a test can prove a TLS 1.2 client is refused.
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# An HTTP/2 client for the mTLS test that negotiates `h2` by ALPN, as reqwest
+# does: proves the listener speaks the protocol it advertises.
+hyper = { version = "1", features = ["client", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"

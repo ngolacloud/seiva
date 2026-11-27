@@ -30,6 +30,15 @@ While the project is pre-1.0, the public API may change in a minor release.
   EXAMPLES and SEE ALSO for every command, from one tested table.
 - `seiva::scaffold` exposes `FRAMEWORK_VERSION` and the `EXTENSIONS` list.
 
+### Fixed
+
+- `seiva-http` (`mtls`): the listener advertised ALPN `h2` but `axum::serve` was
+  built without HTTP/2, so a client that negotiated `h2` — reqwest does by
+  default — completed the TLS handshake and was then dropped with no response.
+  The `mtls` feature now turns on `axum/http2`; both advertised protocols are
+  served, and a test drives a request over a negotiated `h2` connection. A
+  service that worked around it by enabling axum's `http2` itself can drop that.
+
 ## [0.2.1] - 2026-11-26
 
 Tagged and released on GitHub; the crates are not republished on crates.io. A

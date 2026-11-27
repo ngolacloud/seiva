@@ -11,7 +11,8 @@
 //!
 //! 1. [`MtlsConfig`] — the server identity, the client CA roots, optional CRLs
 //!    and the [`ClientAuth`] mode. **TLS 1.3 only**, `ring` provider, ALPN
-//!    `h2` + `http/1.1`.
+//!    `h2` + `http/1.1` — and the feature turns on axum's `http2`, so a client
+//!    that negotiates `h2` is actually served over HTTP/2.
 //! 2. [`MtlsListener`] — an [`axum::serve::Listener`] that accepts TCP and runs
 //!    each handshake on its own task, bounded by a timeout and a cap on pending
 //!    handshakes, so a slow or hostile client never stalls the accept loop.
@@ -312,6 +313,7 @@ impl MtlsConfigBuilder {
             .with_protocol_versions(&[&rustls::version::TLS13])?
             .with_client_cert_verifier(verifier)
             .with_single_cert(chain, key)?;
+        // Both are served: the `mtls` feature turns on `axum/http2`.
         tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         Ok(MtlsConfig {
