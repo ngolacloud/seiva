@@ -145,6 +145,7 @@ plugins:
             Sending email: Enviar email
             Language models: Modelos de linguagem
             Agent tools (MCP): Ferramentas para agentes (MCP)
+            Agents: Agentes
             Sessions: Sessões
             Serialization: Serialização
             Configuration: Configuração
@@ -252,6 +253,7 @@ nav:
       - Sending email: topics/sending-email.md
       - Language models: topics/language-models.md
       - Agent tools (MCP): topics/agent-tools.md
+      - Agents: topics/agents.md
       - Sessions: topics/sessions.md
       - Serialization: topics/serialization.md
       - Configuration: topics/configuration.md

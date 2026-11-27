@@ -8,6 +8,23 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ## [Unreleased]
 
+### Added
+
+- **Agent harness** (ADR 0048, phase G5): the new `seiva-agent` crate — a bounded loop
+  (steps, tokens, wall time, per-tool timeout, `Cancel`) whose every model call goes
+  through the AI gateway; tools from functions (`FnTool`), module facades in-process
+  (`facades::tools`, the person's `#[requires]` checked) and allowlisted MCP servers
+  (`mcp::tools`: JSON or SSE responses, sessions, each tool's description and schema
+  pinned by hash — a new or changed tool is withheld until approved); writes only through
+  an `Approver` (`DenyWrites` by default); `Hook`s before and after each call; `Memory`
+  kept per principal. `seiva-mcp-server`'s `ToolSet` gains `invoke` for in-process calls.
+
+### Changed
+
+- `seiva_llm::HttpResponse` carries the response headers (`headers`, `header(..)`,
+  `with_header(..)`) and is `#[non_exhaustive]`: build it with `new`/`from_bytes`. The
+  reqwest transport fills them in.
+
 ## [0.2.2] - 2026-11-27
 
 Published on crates.io — every framework crate at 0.2.2, including the CLI and

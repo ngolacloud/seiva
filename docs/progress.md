@@ -4,6 +4,19 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — ADR 0048 G5: o harness de agentes (`seiva-agent`)
+
+Crate novo `seiva-agent` (membro, sem DORM e sem cliente HTTP): o ciclo com limites (passos,
+tokens, tempo, timeout por ferramenta, `Cancel`) em que cada chamada ao modelo passa pelo
+gateway; ferramentas de funções (`FnTool`), de facades no processo (`facades::tools`, com o
+`#[requires]` da pessoa) e de servidores MCP na allowlist (`mcp::tools`: JSON ou SSE, sessão,
+descrição e esquema fixados por hash — uma ferramenta nova ou alterada não é oferecida até ser
+aprovada; sem `readOnlyHint` é escrita); escritas só pelo `Approver` (`DenyWrites` por
+omissão); `Hook` antes e depois; `Memory` por principal. O `HttpResponse` do `seiva-llm` ganha
+os cabeçalhos (sessão MCP, `retry-after`). Lockfiles dos crates excluídos actualizados para a
+0.2.2. **Falta:** G6 (recuperação com permissões e citações); repetir automaticamente uma
+escrita depois de aprovada no servidor MCP.
+
 ## Estado (2026-11-27) — ADR 0048 G4: ferramentas MCP a partir das facades (`seiva-mcp-server`)
 
 `#[tool(effect = "read" | "write")]` nos métodos da facade (efeito e descrição obrigatórios,

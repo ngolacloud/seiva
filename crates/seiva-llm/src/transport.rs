@@ -115,18 +115,43 @@ impl HttpRequest {
     }
 }
 
-/// The response the transport got back: any status, with its body as a stream.
+/// The response the transport got back: any status, its headers, and its body
+/// as a stream.
+#[non_exhaustive]
 pub struct HttpResponse {
     /// The HTTP status.
     pub status: u16,
+    /// The response headers (names in lower case), for the few a client reads:
+    /// `retry-after`, `mcp-session-id`, `content-type`.
+    pub headers: Vec<(String, String)>,
     /// The body.
     pub body: BodyStream,
 }
 
 impl HttpResponse {
-    /// A response from a status and a body stream.
+    /// A response from a status and a body stream, with no headers.
     pub fn new(status: u16, body: BodyStream) -> Self {
-        Self { status, body }
+        Self {
+            status,
+            headers: Vec::new(),
+            body,
+        }
+    }
+
+    /// Add a response header (the name is stored in lower case).
+    #[must_use]
+    pub fn with_header(mut self, name: impl AsRef<str>, value: impl Into<String>) -> Self {
+        self.headers
+            .push((name.as_ref().to_ascii_lowercase(), value.into()));
+        self
+    }
+
+    /// The first header called `name` (case-insensitive).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
     }
 
     /// A response with a body known up front (test transports).

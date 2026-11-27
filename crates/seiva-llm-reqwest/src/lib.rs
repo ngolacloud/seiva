@@ -93,11 +93,27 @@ impl HttpTransport for ReqwestTransport {
             .await
             .map_err(|e| LlmError::Transport(e.without_url().to_string()))?;
         let status = response.status().as_u16();
+        // The headers a client reads (retry-after, mcp-session-id, content-type).
+        // Values that are not visible ASCII are dropped rather than guessed.
+        let headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_owned(), v.to_owned()))
+            })
+            .collect();
         let body = response.bytes_stream().map(|chunk| {
             chunk
                 .map(|b| b.to_vec())
                 .map_err(|e| LlmError::Transport(e.without_url().to_string()))
         });
-        Ok(HttpResponse::new(status, Box::pin(body)))
+        let mut out = HttpResponse::new(status, Box::pin(body));
+        for (name, value) in headers {
+            out = out.with_header(name, value);
+        }
+        Ok(out)
     }
 }
