@@ -8,6 +8,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "llm")]
+pub mod llm;
+
 use async_trait::async_trait;
 use seiva_ports::{
     AuditEntry, AuditLog, AuditQuery, AuditSink, Clock, EventPublisher, Id, IdGenerator,

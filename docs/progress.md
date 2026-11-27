@@ -4,6 +4,21 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — ADR 0048 G1: o port do modelo (`seiva-llm`)
+
+Crate novo `seiva-llm` (membro do workspace, sem DORM e sem cliente HTTP): tipos neutros
+(mensagens, ferramentas, streaming, uso com a cache à parte), traits `ChatProvider` /
+`ChatModel` / `Embedder`, `Router` com rotas verificadas no `build()` (fornecedor
+desconhecido, rota `in_country` com upstream `abroad`, rota sem `.requires(..)` nem
+`.public()` são recusados), retry com o backoff do framework, timeout por tentativa e
+fallback; `CredentialSource` com `Secret` que nunca se imprime (e a chave apagada dos erros
+mesmo quando o fornecedor a ecoa); codecs Anthropic e OpenAI-compatível (OpenAI, Azure, vLLM,
+Ollama, Gemini) pelo port `HttpTransport`. O transporte reqwest/rustls é o crate excluído
+`seiva-llm-reqwest` (job de CI próprio, teste ponta a ponta com HTTP real e `cargo deny` do
+seu lockfile). `seiva-testing` ganha `llm::ScriptedModel` e `llm::HashEmbedder` (feature
+`llm`, passo próprio no `check`). Guia: `docs/topics/language-models.md`. **Falta:** G2 (as
+etapas do gateway) e a ligação do `Embedder` ao do DORM no `seiva-rag-worker`.
+
 ## Estado (2026-11-27) — gateway de IA e harness de LLM (ADR 0048, Proposto)
 
 [ADR 0048](adr/0048-ai-gateway-and-llm-harness.md) propõe um só caminho controlado

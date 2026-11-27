@@ -20,6 +20,18 @@ While the project is pre-1.0, the public API may change in a minor release.
   layer and demo commands, the framework version new projects are scaffolded on,
   how a project is shaped, and a get-started list. `-V` / `version --short` keep
   the one-line `seiva <version>` for scripts.
+- **Language models** (ADR 0048, phase G1): the new `seiva-llm` crate — a
+  provider-neutral model port (`ChatProvider`, `ChatModel`, `Embedder`; messages,
+  tool use, streaming, normalised usage), routes with data residency that are
+  checked when the router is built (an `in_country` route cannot reach an
+  `abroad` upstream; a route needs `.requires(..)` or `.public()`), retry,
+  per-attempt timeouts and fallback, a `CredentialSource` whose `Secret` never
+  prints, and the Anthropic and OpenAI-compatible codecs (OpenAI, Azure, vLLM,
+  Ollama, Gemini's compatible endpoint). The codecs talk through an
+  `HttpTransport` port and link no HTTP client; the reqwest/rustls transport is
+  the new `seiva-llm-reqwest` crate (excluded from the workspace, own CI job).
+  `seiva-testing` gains `llm::ScriptedModel` and `llm::HashEmbedder` behind the
+  `llm` feature.
 
 ### Changed
 

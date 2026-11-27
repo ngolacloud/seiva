@@ -1,0 +1,57 @@
+# seiva-llm — the provider-neutral model port of the AI gateway (ADR 0048, G1).
+#
+# Types, the `ChatProvider` / `ChatModel` / `Embedder` traits, routes with data
+# residency and fallback, a `CredentialSource`, and the Anthropic and
+# OpenAI-compatible codecs (the Gemini preset rides on the latter). The codecs are
+# pure: they build the request and parse the response or the SSE stream, and talk
+# to the network only through the injected `HttpTransport` port. No HTTP client is
+# linked here — like the webhook engine (ADR 0033), the real reqwest/TLS transport
+# lives in the excluded `seiva-llm-reqwest` crate, so `cargo test --workspace`
+# stays http-client-free. DORM-free.
+[package]
+name = "seiva-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The provider-neutral language-model port of Delonix Seiva: messages, tools, streaming, routes with data residency and fallback, and Anthropic / OpenAI-compatible codecs over an injected HTTP transport."
+readme = "README.md"
+keywords = ["llm", "ai-gateway", "anthropic", "openai", "seiva"]
+categories = ["api-bindings", "asynchronous", "web-programming"]
+
+[features]
+default = ["anthropic", "openai-compatible", "gemini"]
+# The Anthropic Messages API codec (`/v1/messages`).
+anthropic = []
+# The OpenAI Chat Completions codec — OpenAI, Azure OpenAI, vLLM, Ollama, or any
+# OpenAI-compatible gateway already on the network (a LiteLLM proxy, say).
+openai-compatible = []
+# Google Gemini through its OpenAI-compatible endpoint: a preset of the above.
+gemini = ["openai-compatible"]
+
+[dependencies]
+# The traits are object-safe (`Arc<dyn ChatProvider>` in a route table).
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+# `Stream` for the streaming API and the transport body; only the alloc/std
+# combinators, no executor.
+futures-core = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Retry with the framework-wide backoff and a per-attempt timeout (ADR 0048 §1).
+seiva-resilience = { version = "0.2.1", path = "../seiva-resilience" }
+# Route/upstream decisions as near-free events until a subscriber is installed.
+# Never the prompt, the answer or a credential.
+tracing = { version = "0.1" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
+
+# The end-to-end codec tests use every codec.
+[[test]]
+name = "codecs"
+required-features = ["anthropic", "openai-compatible", "gemini"]

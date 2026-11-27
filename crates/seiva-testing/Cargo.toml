@@ -16,9 +16,17 @@ homepage.workspace = true
 rust-version.workspace = true
 description = "In-memory reference doubles for the Delonix Seiva core ports (Clock, IdGenerator, EventPublisher, UnitOfWork)."
 
+[features]
+# A scripted model provider and a deterministic embedder for use cases that call
+# a language model (ADR 0048). Off by default: a module that never calls a model
+# does not pull `seiva-llm`.
+llm = ["dep:seiva-llm", "dep:serde_json"]
+
 [dependencies]
 seiva-ports = { workspace = true }
 async-trait = { workspace = true }
+seiva-llm = { version = "0.2.1", path = "../seiva-llm", optional = true, default-features = false }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 # Only the doubles' own tests need an executor; downstream modules bring their

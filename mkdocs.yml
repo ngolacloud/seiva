@@ -143,6 +143,7 @@ plugins:
             Caching: Cache
             Pagination: Paginação
             Sending email: Enviar email
+            Language models: Modelos de linguagem
             Sessions: Sessões
             Serialization: Serialização
             Configuration: Configuração
@@ -248,6 +249,7 @@ nav:
       - Caching: topics/caching.md
       - Pagination: topics/pagination.md
       - Sending email: topics/sending-email.md
+      - Language models: topics/language-models.md
       - Sessions: topics/sessions.md
       - Serialization: topics/serialization.md
       - Configuration: topics/configuration.md

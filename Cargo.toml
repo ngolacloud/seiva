@@ -45,6 +45,11 @@ exclude = [
     # it is excluded from the default workspace and built by its own job via
     # `--manifest-path`. Nothing in `cargo check --workspace` links it.
     "apps/seiva-jobs",
+    # The real reqwest/TLS `HttpTransport` for `seiva-llm` (ADR 0048, G1). DORM-free,
+    # but reqwest + rustls are heavy, so — like `webhook-delivery-e2e` — it is
+    # excluded and built by its own CI job via `--manifest-path`; the default
+    # `cargo check --workspace` stays http-client-free.
+    "crates/seiva-llm-reqwest",
 ]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,
@@ -123,6 +128,12 @@ members = [
     # a retry policy with exponential backoff (the SAME schedule as the outbox
     # relay's RelayPolicy) and a timeout wrapper. Data-layer-free, so a member.
     "crates/seiva-resilience",
+    # The provider-neutral language-model port of the AI gateway (ADR 0048, G1):
+    # types, routes with data residency and fallback, credentials, and the
+    # Anthropic / OpenAI-compatible codecs over an injected HttpTransport. Links no
+    # HTTP client (the reqwest transport is the excluded `seiva-llm-reqwest`), so
+    # a default member. DORM-free.
+    "crates/seiva-llm",
     # The inter-service client: how one module calls another module's service once
     # split into microservices, wrapping every call in seiva-resilience's breaker +
     # retry + timeout over an injected transport. The first real consumer of the
