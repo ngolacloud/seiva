@@ -30,6 +30,25 @@ While the project is pre-1.0, the public API may change in a minor release.
   EXAMPLES and SEE ALSO for every command, from one tested table.
 - `seiva::scaffold` exposes `FRAMEWORK_VERSION` and the `EXTENSIONS` list.
 
+## [0.2.1] - 2026-11-26
+
+Tagged and released on GitHub; the crates are not republished on crates.io. A
+project that pins the framework by git tag moves from `tag = "v0.2.0"` to
+`tag = "v0.2.1"`; the `"0.2"` version requirements are unchanged. Install the
+CLI from the tag:
+`cargo install --git https://github.com/ngolacloud/seiva --tag v0.2.1 seiva-cli`.
+
+### Added
+
+- **Mutual TLS** (ADR 0047), opt-in behind the `mtls` feature of `seiva-http`
+  and `seiva-server`. `MtlsListener` terminates TLS 1.3 and verifies client
+  certificates against the deployment's CA, with optional CRLs, a handshake
+  timeout and a cap on pending handshakes. `AuthConfig::with_client_certificates`
+  maps the verified certificate to a `Principal` through the existing `authn`
+  middleware: it is checked first, and a certificate sent together with a header
+  credential gets `401`. `serve_router_mtls` and `MtlsFiles` (`SEIVA_TLS_*`)
+  wire it into the runtime. The default build is unchanged.
+
 ## [0.2.0] - 2026-11-26
 
 Tagged and released on GitHub; the crates are not yet republished on crates.io
@@ -106,6 +125,7 @@ dual MIT/Apache licence.
   store, in-process event choreography.
 - Two reference five-layer modules (`notes`, `accounts`) and a shop tutorial.
 
-[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ngolacloud/seiva/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ngolacloud/seiva/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ngolacloud/seiva/releases/tag/v0.1.0

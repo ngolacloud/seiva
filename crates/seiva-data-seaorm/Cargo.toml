@@ -14,7 +14,7 @@
 # in the dedicated `adapters` matrix job.
 [package]
 name = "seiva-data-seaorm"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false

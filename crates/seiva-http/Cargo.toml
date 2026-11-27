@@ -12,7 +12,7 @@
 
 [package]
 name = "seiva-http"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["NgolaCloud <angolar.devops@gmail.com>"]
@@ -26,24 +26,24 @@ categories = ["web-programming::http-server"]
 [dependencies]
 # The contract crate, data-layer OFF: we read `FacadeDescriptor` to drive routing
 # and the permission guard. default-features = false keeps the `dorm` toggle off.
-seiva = { version = "0.2.0", path = "../seiva", default-features = false }
+seiva = { version = "0.2.1", path = "../seiva", default-features = false }
 # The trait-only ports: we map their opaque `BoxError` into an RFC 9457 problem.
-seiva-ports = { version = "0.2.0", path = "../seiva-ports" }
+seiva-ports = { version = "0.2.1", path = "../seiva-ports" }
 # The transport-neutral contract types: `Validate`/`ValidationError` live here so
 # the `facade` layer validates without naming this transport crate (ADR 0003). We
 # re-export them (`seiva_http::{Validate, ValidationError}`) and the `Valid<T>`
 # extractor runs the check.
-seiva-contract = { version = "0.2.0", path = "../seiva-contract" }
+seiva-contract = { version = "0.2.1", path = "../seiva-contract" }
 # The CQRS dispatch core: the `CommandHandler`/`QueryHandler` traits the pipeline
 # behaviors (`bus`) implement, so `Authorize`/`Idempotent` compose with the
 # transport-free `Validate`/`Transactional` behaviors that live there (ADR 0020).
-seiva-cqrs = { version = "0.2.0", path = "../seiva-cqrs" }
+seiva-cqrs = { version = "0.2.1", path = "../seiva-cqrs" }
 # The verified caller: `Principal` and the `Authenticator` the authn middleware
 # runs. Transport-free, so the same identity model serves HTTP and MCP (ADR 0006).
-seiva-identity = { version = "0.2.0", path = "../seiva-identity" }
+seiva-identity = { version = "0.2.1", path = "../seiva-identity" }
 # The OpenAPI 3.1 generator: `/openapi.json` is generated from the facades
 # linked into the binary, not hand-written. Data-layer-free like this crate.
-seiva-openapi = { version = "0.2.0", path = "../seiva-openapi" }
+seiva-openapi = { version = "0.2.1", path = "../seiva-openapi" }
 
 axum = "0.8"
 # The metrics FACADE only (ADR 0027): the request middleware records a counter,
@@ -75,12 +75,38 @@ tower-http = { version = "0.6", features = ["cors", "timeout"] }
 # executor/reactor is pulled into the DORM-free library beyond these leaves.
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
 
+# --- Optional: mutual TLS (`mtls` feature, ADR 0047) -------------------------
+# The listener terminates TLS 1.3 itself and verifies each client certificate
+# against the deployment's own CA, so a device/service identity becomes a
+# `Principal` through the same `authn` middleware as a bearer token. OFF by
+# default: a service behind a TLS-terminating proxy links none of this.
+# rustls with the `ring` provider (no C toolchain, the provider the rest of the
+# workspace's TLS tests already use); `tokio-rustls` drives the handshake.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"], optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"], optional = true }
+# Reads the verified leaf's subject, SANs, serial and validity — the fields a
+# `CertificateAuthenticator` maps to a `Principal`. Parsing only: the chain was
+# already verified by rustls/webpki before this runs.
+x509-parser = { version = "0.18", optional = true }
+# The per-connection service the listener hands to `axum::serve`.
+tower-service = { version = "0.3", optional = true }
+
+[features]
+# Mutual TLS: `seiva_http::mtls` (listener, config, client certificate,
+# `CertificateAuthenticator`) and the client-certificate path of `authn`.
+mtls = ["dep:rustls", "dep:tokio-rustls", "dep:x509-parser", "dep:tower-service", "tokio/net", "tokio/io-util"]
+
 [dev-dependencies]
 # Drives the router without a live server: `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util"] }
 # A controllable `Clock` so the rate-limiter's window is tested without sleeping.
-seiva-testing = { version = "0.2.0", path = "../seiva-testing" }
+seiva-testing = { version = "0.2.1", path = "../seiva-testing" }
 # A test double of `RateLimitStore` that errors, to exercise the fail-open /
 # fail-closed policy on a store outage.
 async-trait = { workspace = true }
+# mTLS tests (feature `mtls`): rcgen mints a throwaway CA, server and client
+# certificates; a real TCP listener and a tokio-rustls client drive the handshake.
+rcgen = "0.13"
+# `tls12` only here, so a test can prove a TLS 1.2 client is refused.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
