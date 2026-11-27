@@ -134,6 +134,11 @@ members = [
     # HTTP client (the reqwest transport is the excluded `seiva-llm-reqwest`), so
     # a default member. DORM-free.
     "crates/seiva-llm",
+    # The AI gateway (ADR 0048, G2): identity, authorization, budget, masking,
+    # guardrails and audit around every `seiva-llm` call, in a fixed order, each
+    # failing closed. In-process (the server shape is G3). DORM-free and
+    # http-client-free, so a default member.
+    "crates/seiva-ai-gateway",
     # The inter-service client: how one module calls another module's service once
     # split into microservices, wrapping every call in seiva-resilience's breaker +
     # retry + timeout over an injected transport. The first real consumer of the

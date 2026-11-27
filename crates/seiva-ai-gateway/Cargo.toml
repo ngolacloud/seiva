@@ -1,0 +1,42 @@
+# seiva-ai-gateway — the controlled path between a product and any model (ADR 0048, G2).
+#
+# The gateway stages around a `seiva-llm` route, in a fixed order: identify →
+# authorize → budget → mask → input guards → model → output guards → unmask →
+# settle → audit. Every stage fails closed. What each stage does is pluggable
+# (detectors, guardrails, the budget store, the audit sink); the order is not.
+# In-process only in this phase (the server shape is G3). DORM-free and
+# http-client-free, so a default member.
+[package]
+name = "seiva-ai-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The AI gateway of Delonix Seiva: identity, authorization, budget, masking of personal data, guardrails and audit around every model call, failing closed."
+readme = "README.md"
+keywords = ["llm", "ai-gateway", "owasp", "guardrails", "seiva"]
+categories = ["asynchronous", "web-programming"]
+
+[dependencies]
+seiva-llm = { version = "0.2.1", path = "../seiva-llm", default-features = false }
+# The caller is the framework's one identity model (ADR 0006).
+seiva-identity = { version = "0.2.1", path = "../seiva-identity" }
+# The audit port (ADR 0013/0043) and the clock the budget windows read.
+seiva-ports = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde_json = "1"
+futures-core = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The built-in detectors (identity cards, tax ids, IBANs, cards, e-mail, phones,
+# credentials). No look-around needed; validators (mod-97, Luhn) run on the match.
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case"] }
+# One span per call with the OpenTelemetry GenAI attribute names (ADR 0027).
+tracing = { version = "0.1" }
+
+[dev-dependencies]
+seiva-testing = { workspace = true, features = ["llm"] }
+tokio = { workspace = true, features = ["rt", "macros"] }

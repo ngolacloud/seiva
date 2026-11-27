@@ -1,8 +1,9 @@
 # Language models
 
-> **Status: phase G1 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** The
+> **Status: phases G1–G2 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** The
 > model port, routes and provider codecs ship in `seiva-llm`; the gateway stages
-> (identity, budget, masking, guardrails, audit) are phase G2.
+> (identity, budget, masking, guardrails, audit) in `seiva-ai-gateway`, in-process. The
+> server shape (OpenAI- and Anthropic-compatible endpoints) is G3.
 
 A use case that needs a model depends on a **route**, never on a provider. The route
 says which upstreams may serve it, in fallback order, and where the data may go.
@@ -77,6 +78,49 @@ The codecs link no HTTP client: they send through the `HttpTransport` port. In p
 use `seiva-llm-reqwest`, which never follows a redirect (it would carry the key to another
 host). That port is also where the guarded outbound client of
 [ADR 0045](../adr/0045-egress-ssrf-guard.md) plugs in.
+
+## The gateway: every call through the same stages
+
+A product that calls a model **on behalf of people** goes through `seiva-ai-gateway`, not
+straight to the router. The stages run in a fixed order and each one fails closed; every
+outcome, refusals included, is audited.
+
+```text
+Identify → Authorize → Budget.reserve → Mask → Guard.input
+        → model → Guard.output → Unmask → Budget.settle → Audit
+```
+
+```rust
+use seiva_ai_gateway::{BudgetScope, Caller, Gateway, InMemoryBudget};
+
+let gateway = Gateway::builder(router)
+    .budget(Arc::new(InMemoryBudget::new(clock, Duration::from_secs(86_400)).per(BudgetScope::Principal, 200_000)))
+    .audit(audit_sink)                              // the AuditSink of ADR 0013/0043
+    .tool("customer_lookup", "customers.read")     // a tool the model may be offered, and who may offer it
+    .area_in_country("hr")                         // HR data never goes to an abroad route
+    .build()?;
+
+let caller = Caller::new(principal).in_area("support").with_request_id(request_id);
+let gated = gateway.complete(&caller, "support-chat", request).await?;
+```
+
+| Stage | What it does |
+|---|---|
+| Identify | refuses an anonymous principal |
+| Authorize | the route's permission; an `in_country` area cannot use an `abroad` route; every tool offered must be registered and the caller must hold its permission |
+| Budget | holds the request's size plus `max_tokens` in the principal's, the tenant's and the area's budget; a store outage stops the call |
+| Mask | personal data becomes `‹TAX_ID_1›`, `‹EMAIL_1›`…; a credential refuses the request; tool output is wrapped in `<untrusted_data>` and the model told it is data |
+| Guard (in/out) | your `Guardrail`s; built in: no credential in the answer, no call to a tool the model was not offered; `JsonOutput` and `SizeLimit` ship ready |
+| Unmask | the placeholders come back for a caller entitled to them (`RevealPolicy`) |
+| Settle, Audit | the real usage is counted; one record per call with counts and names, never values |
+
+The built-in detectors cover the Angolan identity card, the NIF (after the word NIF),
+IBANs (mod-97), payment cards (Luhn), e-mail, phone numbers and credentials; add your own
+identifiers with `PatternDetector`. Masking is pattern-based: it reduces what a model sees,
+it does not make a prompt anonymous. On an `abroad` route it always runs.
+
+`stream(..)` holds text back by up to 256 characters so a credential is caught before it
+reaches the caller, and never releases half a placeholder.
 
 ## Testing
 

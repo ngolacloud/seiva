@@ -1,8 +1,9 @@
 # Modelos de linguagem
 
-> **Estado: fase G1 do [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** O port do
-> modelo, as rotas e os codecs dos fornecedores estão no `seiva-llm`; as etapas do gateway
-> (identidade, orçamento, mascaramento, guardrails, auditoria) são a fase G2.
+> **Estado: fases G1–G2 do [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** O port
+> do modelo, as rotas e os codecs dos fornecedores estão no `seiva-llm`; as etapas do gateway
+> (identidade, orçamento, mascaramento, guardrails, auditoria) no `seiva-ai-gateway`,
+> in-process. A forma servidor (endpoints compatíveis com OpenAI e Anthropic) é a G3.
 
 Um caso de uso que precisa de um modelo depende de uma **rota**, nunca de um fornecedor. A
 rota diz que upstreams a podem servir, por ordem de fallback, e para onde os dados podem ir.
@@ -77,6 +78,50 @@ Os codecs não ligam nenhum cliente HTTP: enviam pelo port `HttpTransport`. Em p
 o `seiva-llm-reqwest`, que nunca segue um redirect (levaria a chave para outro host). É
 também nesse port que entra o cliente de saída guardado do
 [ADR 0045](../adr/0045-egress-ssrf-guard.md).
+
+## O gateway: cada chamada pelas mesmas etapas
+
+Um produto que chama um modelo **em nome de pessoas** passa pelo `seiva-ai-gateway`, não
+directamente pelo router. As etapas correm por uma ordem fixa e cada uma falha fechado;
+todos os resultados, recusas incluídas, vão para a auditoria.
+
+```text
+Identify → Authorize → Budget.reserve → Mask → Guard.input
+        → model → Guard.output → Unmask → Budget.settle → Audit
+```
+
+```rust
+use seiva_ai_gateway::{BudgetScope, Caller, Gateway, InMemoryBudget};
+
+let gateway = Gateway::builder(router)
+    .budget(Arc::new(InMemoryBudget::new(clock, Duration::from_secs(86_400)).per(BudgetScope::Principal, 200_000)))
+    .audit(audit_sink)                              // the AuditSink of ADR 0013/0043
+    .tool("customer_lookup", "customers.read")     // a tool the model may be offered, and who may offer it
+    .area_in_country("hr")                         // HR data never goes to an abroad route
+    .build()?;
+
+let caller = Caller::new(principal).in_area("support").with_request_id(request_id);
+let gated = gateway.complete(&caller, "support-chat", request).await?;
+```
+
+| Etapa | O que faz |
+|---|---|
+| Identify | recusa um principal anónimo |
+| Authorize | a permissão da rota; uma área `in_country` não usa uma rota `abroad`; cada ferramenta oferecida tem de estar registada e o chamador tem de ter a sua permissão |
+| Budget | reserva o tamanho do pedido mais o `max_tokens` no orçamento do principal, do tenant e da área; uma falha da base pára a chamada |
+| Mask | os dados pessoais passam a `‹TAX_ID_1›`, `‹EMAIL_1›`…; uma credencial recusa o pedido; o resultado das ferramentas vai dentro de `<untrusted_data>` e o modelo é avisado de que é dado |
+| Guard (entrada/saída) | os teus `Guardrail`; embutidos: nenhuma credencial na resposta, nenhuma chamada a uma ferramenta que não foi oferecida; o `JsonOutput` e o `SizeLimit` vêm prontos |
+| Unmask | os marcadores voltam ao valor original para um chamador com direito a eles (`RevealPolicy`) |
+| Settle, Audit | o uso real é contado; um registo por chamada com contagens e nomes, nunca valores |
+
+Os detectores embutidos cobrem o bilhete de identidade angolano, o NIF (depois da palavra
+NIF), os IBAN (mod-97), os cartões de pagamento (Luhn), o e-mail, os números de telefone e as
+credenciais; os teus próprios identificadores entram com um `PatternDetector`. O
+mascaramento assenta em padrões: reduz o que um modelo vê, não torna um pedido anónimo. Numa
+rota `abroad` corre sempre.
+
+O `stream(..)` retém o texto até 256 caracteres para apanhar uma credencial antes de ela
+chegar ao chamador, e nunca liberta meio marcador.
 
 ## Testes
 

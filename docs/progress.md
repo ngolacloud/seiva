@@ -4,6 +4,19 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — ADR 0048 G2: o gateway in-process (`seiva-ai-gateway`)
+
+Crate novo `seiva-ai-gateway` (membro, sem DORM e sem cliente HTTP): as etapas Identify →
+Authorize → Budget.reserve → Mask → Guard.input → modelo → Guard.output → Unmask →
+Budget.settle → Audit, por ordem fixa (afirmada por teste) e cada uma a falhar fechado; o que
+cada etapa faz entra por trait (`Detector`, `Guardrail`, `BudgetStore`, `AuditSink`). Prova
+por cada linha OWASP desta fase em `tests/gateway.rs`: LLM01 (documento injectado não chega a
+um estorno), LLM02 (o modelo falso recebe `‹TAX_ID_1›`), LLM05 (`JsonOutput`), LLM06
+(ferramentas pelas permissões do chamador), LLM07 (credencial no pedido e na resposta), LLM10
+(orçamento gasto e base em baixo). Streaming com retenção de 256 caracteres. **Falta:** G3
+(forma servidor, chaves do gateway), G4 (`#[tool]`, `seiva-mcp-server`), G5, G6; um
+`BudgetStore` Redis para várias réplicas.
+
 ## Estado (2026-11-27) — ADR 0048 G1: o port do modelo (`seiva-llm`)
 
 Crate novo `seiva-llm` (membro do workspace, sem DORM e sem cliente HTTP): tipos neutros
