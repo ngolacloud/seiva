@@ -8,6 +8,14 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-27
+
+Tagged and released on GitHub; the crates are not republished on crates.io. A
+project that pins the framework by git tag moves from `tag = "v0.2.1"` to
+`tag = "v0.2.2"`; the `"0.2"` version requirements are unchanged. Install the
+CLI from the tag:
+`cargo install --git https://github.com/ngolacloud/seiva --tag v0.2.2 seiva-cli`.
+
 ### Added
 
 - CLI: dynamic shell completion — `seiva completion <bash|zsh|fish|elvish|powershell>`
@@ -134,7 +142,8 @@ dual MIT/Apache licence.
   store, in-process event choreography.
 - Two reference five-layer modules (`notes`, `accounts`) and a shop tutorial.
 
-[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/ngolacloud/seiva/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/ngolacloud/seiva/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ngolacloud/seiva/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ngolacloud/seiva/releases/tag/v0.1.0

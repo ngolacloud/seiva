@@ -11,9 +11,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
-seiva-http = { version = "0.2.1", path = "../../crates/seiva-http" }
-seiva-server = { version = "0.2.1", path = "../../crates/seiva-server" }
-seiva-console-admin = { version = "0.2.1", path = "../../crates/seiva-console-admin" }
+seiva-http = { version = "0.2.2", path = "../../crates/seiva-http" }
+seiva-server = { version = "0.2.2", path = "../../crates/seiva-server" }
+seiva-console-admin = { version = "0.2.2", path = "../../crates/seiva-console-admin" }
 accounts-interface = { path = "../../examples/accounts/interface" }
 accounts-infrastructure = { path = "../../examples/accounts/infrastructure" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }

@@ -11,7 +11,7 @@
 # `tonic` feature; the proto-string generation itself needs nothing but std.
 [package]
 name = "seiva-grpc"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Delonix Seiva — gRPC artefact generation (proto3 + tonic Status) from a facade descriptor. DORM-free."
