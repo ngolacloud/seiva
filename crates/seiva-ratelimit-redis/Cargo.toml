@@ -18,7 +18,7 @@ keywords = ["seiva", "rate-limit", "redis", "distributed"]
 categories = ["web-programming"]
 
 [dependencies]
-seiva-ports = { version = "0.2.1", path = "../seiva-ports" }
+seiva-ports = { version = "0.2.2", path = "../seiva-ports" }
 async-trait = "0.1"
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 

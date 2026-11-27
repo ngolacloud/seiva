@@ -43,7 +43,7 @@ serde_json = "1"
 futures-core = { version = "0.3", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # Retry with the framework-wide backoff and a per-attempt timeout (ADR 0048 §1).
-seiva-resilience = { version = "0.2.1", path = "../seiva-resilience" }
+seiva-resilience = { version = "0.2.2", path = "../seiva-resilience" }
 # Route/upstream decisions as near-free events until a subscriber is installed.
 # Never the prompt, the answer or a credential.
 tracing = { version = "0.1" }

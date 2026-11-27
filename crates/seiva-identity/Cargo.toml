@@ -4,7 +4,7 @@
 # DORM-free and data-layer-free.
 [package]
 name = "seiva-identity"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["NgolaCloud <angolar.devops@gmail.com>"]

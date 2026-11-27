@@ -27,7 +27,7 @@ categories = ["asynchronous", "network-programming"]
 [dependencies]
 # The three guardrails this crate wires together: the breaker, the retry policy
 # (the single framework-wide backoff schedule) and the per-attempt timeout.
-seiva-resilience = { version = "0.2.1", path = "../seiva-resilience" }
+seiva-resilience = { version = "0.2.2", path = "../seiva-resilience" }
 # The `Transport` seam is object-safe (a caller stores the client over
 # `Arc<dyn Transport>` or a concrete adapter), so its async method is erased.
 async-trait = { workspace = true }

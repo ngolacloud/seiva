@@ -17,7 +17,7 @@
 # workspace member and is covered by the core `check` job.
 [package]
 name = "seiva-sql-ambient-tx"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false

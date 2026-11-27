@@ -12,11 +12,10 @@ settings see [Settings and environment](settings.md).
 
 ## Install
 
-The CLI is a global tool — install it with Cargo (until the crates are published,
-from the workspace):
+The CLI is a global tool — install it with Cargo, from crates.io:
 
 ```console
-$ cargo install --path crates/seiva-cli       # or, once published: cargo install seiva-cli
+$ cargo install seiva-cli                    # from a checkout: cargo install --path crates/seiva-cli
 $ seiva --help
 ```
 

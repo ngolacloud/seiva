@@ -60,7 +60,10 @@ Acrescentar TLS mútuo ao `seiva-http` atrás de uma **funcionalidade opcional
   opcionais (com uma opção para verificar só a folha, para uma PKI cuja raiz
   offline não publica CRL) e `ClientAuth::Required` (por omissão) ou
   `ClientAuth::Optional`. É **só TLS 1.3**, com o fornecedor `ring` do rustls e
-  ALPN `h2` + `http/1.1`. O `Debug` nunca mostra material de chave.
+  ALPN `h2` + `http/1.1`. Os dois protocolos são servidos: a feature `mtls`
+  activa o `http2` do axum, para que um cliente que negoceie `h2` (o reqwest
+  fá-lo) receba HTTP/2 e não uma ligação fechada (corrigido na 0.2.2). O `Debug`
+  nunca mostra material de chave.
 - **`MtlsListener`**, um `axum::serve::Listener`. Os accepts TCP correm numa
   tarefa de fundo. Cada handshake corre na sua própria tarefa, com **timeout**
   (10 s por omissão), e há no máximo **N handshakes** (1024 por omissão) em

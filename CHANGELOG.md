@@ -8,6 +8,13 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-27
+
+Published on crates.io — every framework crate at 0.2.2, including the CLI and
+the umbrella crate `seiva` (the successor of `delonix-seiva`) for the first time.
+Install the CLI with `cargo install seiva-cli`; generated projects resolve their
+`"0.2"` requirements from crates.io.
+
 ### Added
 
 - CLI: dynamic shell completion — `seiva completion <bash|zsh|fish|elvish|powershell>`
@@ -68,6 +75,15 @@ While the project is pre-1.0, the public API may change in a minor release.
   --help`: Setup / Migration / Data). One-line summaries on `-h`; `--help` adds
   EXAMPLES and SEE ALSO for every command, from one tested table.
 - `seiva::scaffold` exposes `FRAMEWORK_VERSION` and the `EXTENSIONS` list.
+
+### Fixed
+
+- `seiva-http` (`mtls`): the listener advertised ALPN `h2` but `axum::serve` was
+  built without HTTP/2, so a client that negotiated `h2` — reqwest does by
+  default — completed the TLS handshake and was then dropped with no response.
+  The `mtls` feature now turns on `axum/http2`; both advertised protocols are
+  served, and a test drives a request over a negotiated `h2` connection. A
+  service that worked around it by enabling axum's `http2` itself can drop that.
 
 ## [0.2.1] - 2026-11-26
 
@@ -164,7 +180,8 @@ dual MIT/Apache licence.
   store, in-process event choreography.
 - Two reference five-layer modules (`notes`, `accounts`) and a shop tutorial.
 
-[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/ngolacloud/seiva/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/ngolacloud/seiva/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ngolacloud/seiva/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ngolacloud/seiva/releases/tag/v0.1.0

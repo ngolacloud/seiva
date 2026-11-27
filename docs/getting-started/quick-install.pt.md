@@ -14,7 +14,7 @@ A CLI `seiva` é uma ferramenta global, por isso instala-a com o Cargo (até os
 crates estarem publicados, a partir do workspace):
 
 ```console
-$ cargo install --path crates/seiva-cli        # or, once published: cargo install seiva-cli
+$ cargo install seiva-cli                     # a partir de um checkout: cargo install --path crates/seiva-cli
 $ seiva --version
 ```
 

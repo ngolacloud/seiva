@@ -13,11 +13,10 @@ mostra a shell. Para o aprofundamento da camada de dados ver
 
 ## Instalar
 
-A CLI é uma ferramenta global — instala-a com o Cargo (até os crates serem
-publicados, a partir do workspace):
+A CLI é uma ferramenta global — instala-a com o Cargo, a partir do crates.io:
 
 ```console
-$ cargo install --path crates/seiva-cli       # or, once published: cargo install seiva-cli
+$ cargo install seiva-cli                    # a partir de um checkout: cargo install --path crates/seiva-cli
 $ seiva --help
 ```
 

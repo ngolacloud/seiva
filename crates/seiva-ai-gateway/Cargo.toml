@@ -27,9 +27,9 @@ categories = ["asynchronous", "web-programming"]
 server = ["dep:axum", "dep:sha2"]
 
 [dependencies]
-seiva-llm = { version = "0.2.1", path = "../seiva-llm", default-features = false }
+seiva-llm = { version = "0.2.2", path = "../seiva-llm", default-features = false }
 # The caller is the framework's one identity model (ADR 0006).
-seiva-identity = { version = "0.2.1", path = "../seiva-identity" }
+seiva-identity = { version = "0.2.2", path = "../seiva-identity" }
 # The audit port (ADR 0013/0043) and the clock the budget windows read.
 seiva-ports = { workspace = true }
 async-trait = { workspace = true }

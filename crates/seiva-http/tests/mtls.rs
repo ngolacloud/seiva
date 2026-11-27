@@ -201,14 +201,12 @@ impl<'a> Client<'a> {
         self
     }
 
-    /// `GET path` over a fresh mTLS connection; `Err` when the handshake or
-    /// the exchange is refused. Returns the status code and the body.
-    async fn get(
+    /// A fresh mTLS connection offering `alpn` (empty: no ALPN extension).
+    async fn connect(
         &self,
         addr: SocketAddr,
-        path: &str,
-        headers: &str,
-    ) -> Result<(u16, String), String> {
+        alpn: &[&[u8]],
+    ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let versions: &[&rustls::SupportedProtocolVersion] = if self.tls12_only {
             &[&rustls::version::TLS12]
@@ -223,7 +221,7 @@ impl<'a> Client<'a> {
             .with_protocol_versions(versions)
             .unwrap()
             .with_root_certificates(roots);
-        let config = match self.identity {
+        let mut config = match self.identity {
             Some(leaf) => builder
                 .with_client_auth_cert(
                     vec![CertificateDer::from(leaf.cert.der().to_vec())],
@@ -232,12 +230,24 @@ impl<'a> Client<'a> {
                 .unwrap(),
             None => builder.with_no_client_auth(),
         };
+        config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
         let connector = TlsConnector::from(Arc::new(config));
         let tcp = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
-        let mut tls = connector
+        connector
             .connect(ServerName::try_from("localhost").unwrap(), tcp)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())
+    }
+
+    /// `GET path` over a fresh mTLS connection; `Err` when the handshake or
+    /// the exchange is refused. Returns the status code and the body.
+    async fn get(
+        &self,
+        addr: SocketAddr,
+        path: &str,
+        headers: &str,
+    ) -> Result<(u16, String), String> {
+        let mut tls = self.connect(addr, &[]).await?;
         let request =
             format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n{headers}\r\n");
         tls.write_all(request.as_bytes())
@@ -253,6 +263,34 @@ impl<'a> Client<'a> {
             .ok_or_else(|| format!("no HTTP response: {text:?}"))?;
         let body = text.split("\r\n\r\n").nth(1).unwrap_or_default().to_owned();
         Ok((status, body))
+    }
+
+    /// `GET path` over HTTP/2, offering ALPN `h2` then `http/1.1` as reqwest
+    /// and other HTTP/2-capable clients do. Returns the negotiated ALPN
+    /// protocol, the status code and the body.
+    async fn get_h2(&self, addr: SocketAddr, path: &str) -> Result<(Vec<u8>, u16, String), String> {
+        let tls = self.connect(addr, &[b"h2", b"http/1.1"]).await?;
+        let alpn = tls.get_ref().1.alpn_protocol().unwrap_or_default().to_vec();
+        let (mut sender, connection) = hyper::client::conn::http2::handshake(
+            hyper_util::rt::TokioExecutor::new(),
+            hyper_util::rt::TokioIo::new(tls),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        tokio::spawn(connection);
+        let request = axum::http::Request::get(format!("https://localhost{path}"))
+            .body(http_body_util::Empty::<axum::body::Bytes>::new())
+            .unwrap();
+        let response = sender
+            .send_request(request)
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = response.status().as_u16();
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .map_err(|e| e.to_string())?
+            .to_bytes();
+        Ok((alpn, status, String::from_utf8_lossy(&body).into_owned()))
     }
 }
 
@@ -271,6 +309,23 @@ async fn a_device_certificate_becomes_the_principal() {
 
     // The permission the authenticator granted passes the facade guard.
     let (status, body) = client.get(server.addr, "/v1/report", "").await.unwrap();
+    assert_eq!((status, body.as_str()), (200, "reported"));
+}
+
+/// The listener advertises `h2` by ALPN, so it must also speak HTTP/2: a client
+/// that negotiates `h2` (reqwest does whenever it can) is served, and each
+/// stream still carries the certificate principal and the peer address.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_negotiates_h2_is_served_over_http2() {
+    let server = start(ClientAuth::Required, None).await;
+    let leaf = device(&server.ca, "pc-0042", 7);
+    let client = Client::new(&server.ca).with_identity(&leaf);
+
+    let (alpn, status, body) = client.get_h2(server.addr, "/v1/whoami").await.unwrap();
+    assert_eq!(alpn, b"h2");
+    assert_eq!((status, body.as_str()), (200, "device:pc-0042|127.0.0.1"));
+
+    let (_, status, body) = client.get_h2(server.addr, "/v1/report").await.unwrap();
     assert_eq!((status, body.as_str()), (200, "reported"));
 }
 

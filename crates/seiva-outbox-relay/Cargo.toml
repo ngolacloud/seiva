@@ -8,7 +8,7 @@
 # wired (the owner's call).
 [package]
 name = "seiva-outbox-relay"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
