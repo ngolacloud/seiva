@@ -192,4 +192,92 @@ pub fn registered_facades() -> Vec<FacadeDescriptor> {
 pub trait Facade {
     /// The contract of this facade, known at compile time.
     const DESCRIPTOR: FacadeDescriptor;
+
+    /// The methods exposed as agent tools with `#[tool(..)]` (ADR 0048 §3).
+    /// Empty unless the facade opts methods in: nothing is a tool by default.
+    const TOOLS: &'static [ToolDescriptor] = &[];
+}
+
+/// What calling a tool does — declared on every `#[tool]`, a compile-time fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolEffect {
+    /// Reads; changes nothing.
+    Read,
+    /// Changes something. A write tool waits for a person's approval by default.
+    Write,
+}
+
+impl ToolEffect {
+    /// `"read"` or `"write"`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ToolEffect::Read => "read",
+            ToolEffect::Write => "write",
+        }
+    }
+}
+
+/// A facade method exposed as an agent tool (ADR 0048 §3).
+///
+/// Declared on the facade with `#[tool(effect = "read" | "write")]` next to the
+/// method's `#[requires(..)]`; the tool's description is the method's doc comment
+/// (or `description = ".."`), its input schema is the method parameter's
+/// `WireSchema`, and its permission is the method's `requires`.
+///
+/// ```
+/// #[seiva::facade(version = "v1")]
+/// pub trait Payments {
+///     /// Refund a captured payment, fully or partly.
+///     #[requires("payments.refund")]
+///     #[tool(effect = "write")]
+///     async fn refund(&self, cmd: String) -> Result<String, String>;
+/// }
+/// use seiva::contract::{Facade, ToolEffect};
+/// let tool = &PaymentsFacade::TOOLS[0];
+/// assert_eq!((tool.method, tool.effect), ("refund", ToolEffect::Write));
+/// assert_eq!(tool.description, "Refund a captured payment, fully or partly.");
+/// ```
+///
+/// The effect is required:
+///
+/// ```compile_fail
+/// #[seiva::facade(version = "v1")]
+/// pub trait Payments {
+///     /// Refund a payment.
+///     #[requires("payments.refund")]
+///     #[tool]
+///     async fn refund(&self, cmd: String) -> Result<String, String>;
+/// }
+/// ```
+///
+/// A tool needs a description the model can read:
+///
+/// ```compile_fail
+/// #[seiva::facade(version = "v1")]
+/// pub trait Payments {
+///     #[requires("payments.refund")]
+///     #[tool(effect = "write")]
+///     async fn refund(&self, cmd: String) -> Result<String, String>;
+/// }
+/// ```
+///
+/// And a write tool is never public:
+///
+/// ```compile_fail
+/// #[seiva::facade(version = "v1")]
+/// pub trait Payments {
+///     /// Refund a payment.
+///     #[public]
+///     #[tool(effect = "write")]
+///     async fn refund(&self, cmd: String) -> Result<String, String>;
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolDescriptor {
+    /// The facade method.
+    pub method: &'static str,
+    /// What calling it does.
+    pub effect: ToolEffect,
+    /// What it does, for the model.
+    pub description: &'static str,
 }

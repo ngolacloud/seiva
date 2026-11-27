@@ -50,6 +50,15 @@ While the project is pre-1.0, the public API may change in a minor release.
   tools run on the client. The new `apps/ai-gateway` app is the runnable binary
   (`seiva-ai-gateway serve | check | hash-key`): one TOML file, `seiva-server` with health
   probes, a JSON-lines audit record, model calls over `seiva-llm-reqwest`.
+- **Agent tools over MCP** (ADR 0048, phase G4): `#[tool(effect = "read" | "write")]` on a
+  facade method opts it in as an agent tool (the effect and a description are required,
+  and a write tool cannot be `#[public]` — compile errors otherwise); `Facade::TOOLS`
+  lists them; `#[seiva::tools]` on the impl generates the dispatcher, like
+  `#[seiva::controller]`. The new `seiva-mcp-server` crate serves them over MCP's
+  Streamable HTTP: the caller is the person whose token is presented, each tool's
+  `#[requires]` is enforced and the method runs with their `Ctx`; a write waits for that
+  person's approval (`/mcp/approvals/{id}`) and runs once; every call is audited, a write
+  before it runs; `Origin` is checked and a 401 points to the RFC 9728 metadata.
 
 ### Changed
 

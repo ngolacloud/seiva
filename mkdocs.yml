@@ -144,6 +144,7 @@ plugins:
             Pagination: Paginação
             Sending email: Enviar email
             Language models: Modelos de linguagem
+            Agent tools (MCP): Ferramentas para agentes (MCP)
             Sessions: Sessões
             Serialization: Serialização
             Configuration: Configuração
@@ -250,6 +251,7 @@ nav:
       - Pagination: topics/pagination.md
       - Sending email: topics/sending-email.md
       - Language models: topics/language-models.md
+      - Agent tools (MCP): topics/agent-tools.md
       - Sessions: topics/sessions.md
       - Serialization: topics/serialization.md
       - Configuration: topics/configuration.md

@@ -24,6 +24,42 @@ struct MethodInfo {
     requires: String,
     params: Vec<ParamInfo>,
     output: String,
+    /// `#[tool(..)]`: the effect (`read`/`write`) and the description.
+    tool: Option<(String, String)>,
+}
+
+/// The method's doc comment, one line per `///` line, trimmed and joined.
+fn doc_text(attrs: &[syn::Attribute]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for attr in attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+        if let syn::Meta::NameValue(nv) = &attr.meta {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+            {
+                lines.push(s.value().trim().to_owned());
+            }
+        }
+    }
+    // Paragraphs keep their break; lines inside a paragraph join with a space.
+    let mut out = String::new();
+    for line in lines {
+        if line.is_empty() {
+            if !out.is_empty() && !out.ends_with("\n\n") {
+                out.push_str("\n\n");
+            }
+        } else {
+            if !out.is_empty() && !out.ends_with("\n\n") {
+                out.push(' ');
+            }
+            out.push_str(&line);
+        }
+    }
+    out.trim().to_owned()
 }
 
 /// Renders a type (or any token stream) as a canonical, space-stable string so
@@ -58,8 +94,12 @@ fn render_tokens(tokens: proc_macro2::TokenStream) -> String {
 ///
 /// Applied as `#[seiva::facade(version = "v1")]` (the `version` defaults to
 /// `"v1"` if omitted). The trait is re-emitted unchanged except that the
-/// per-method helper attributes (`#[requires(..)]`, `#[public]`, `#[policy(..)]`,
-/// `#[cached(..)]`) are consumed. Alongside it, the macro generates a
+/// per-method helper attributes (`#[requires(..)]`, `#[public]`, `#[tool(..)]`,
+/// `#[policy(..)]`, `#[cached(..)]`) are consumed. `#[tool(effect = "read" |
+/// "write")]` opts a method in as an agent tool (ADR 0048 §3): the effect is
+/// required, the doc comment (or `description = ".."`) is its description, and a
+/// write tool cannot be `#[public]` — each a compile error otherwise. Alongside
+/// it, the macro generates a
 ///
 /// # Authorization is fail-closed
 ///
@@ -97,7 +137,44 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
         let mut requires = String::new();
         let mut is_public = false;
         let mut errors: Vec<syn::Error> = Vec::new();
+        let doc = doc_text(&method.attrs);
+        let mut tool: Option<(String, String)> = None;
         method.attrs.retain(|attr| {
+            if attr.path().is_ident("tool") {
+                // `#[tool(effect = "read" | "write", description = "..")]` — opts the
+                // method in as an agent tool (ADR 0048 §3). The effect is required.
+                let mut effect = String::new();
+                let mut description = String::new();
+                let parsed = match &attr.meta {
+                    syn::Meta::List(_) => attr.parse_nested_meta(|meta| {
+                        if meta.path.is_ident("effect") {
+                            effect = meta.value()?.parse::<LitStr>()?.value();
+                            Ok(())
+                        } else if meta.path.is_ident("description") {
+                            description = meta.value()?.parse::<LitStr>()?.value();
+                            Ok(())
+                        } else {
+                            Err(meta
+                                .error("unknown `tool` option; expected `effect` or `description`"))
+                        }
+                    }),
+                    _ => Ok(()),
+                };
+                if let Err(err) = parsed {
+                    errors.push(err);
+                } else if effect != "read" && effect != "write" {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "`#[tool]` needs `effect = \"read\"` or `effect = \"write\"`: a tool's \
+                         effect is a compile-time fact, not a guess",
+                    ));
+                } else if tool.is_some() {
+                    errors.push(syn::Error::new_spanned(attr, "`#[tool]` appears twice"));
+                } else {
+                    tool = Some((effect, description));
+                }
+                return false;
+            }
             if attr.path().is_ident("requires") {
                 match attr.parse_args::<LitStr>() {
                     Ok(lit) => requires = lit.value(),
@@ -124,6 +201,36 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
         if let Some(err) = errors.into_iter().next() {
             return err.to_compile_error().into();
+        }
+        if let Some((effect, description)) = &mut tool {
+            if description.trim().is_empty() {
+                *description = doc.clone();
+            }
+            if description.trim().is_empty() {
+                return syn::Error::new_spanned(
+                    &method.sig,
+                    format!(
+                        "tool `{}` has no description: add a doc comment (or \
+                         `description = \"..\"`) — a tool the model cannot understand is \
+                         one it will misuse",
+                        method.sig.ident
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+            if is_public && effect == "write" {
+                return syn::Error::new_spanned(
+                    &method.sig,
+                    format!(
+                        "tool `{}` writes, so it cannot be `#[public]`: an agent acts on behalf \
+                         of a person, who must hold a permission for it",
+                        method.sig.ident
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
         }
 
         // Authorization is fail-CLOSED at compile time (OWASP API5 — broken
@@ -177,6 +284,7 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
             requires,
             params,
             output,
+            tool,
         });
     }
 
@@ -194,6 +302,7 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
             requires,
             params,
             output,
+            ..
         } = method;
         let param_descs = params.iter().map(|ParamInfo { name, ty }| {
             quote! {
@@ -208,6 +317,19 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
                 output: #output,
             }
         }
+    });
+
+    let tool_descs = methods.iter().filter_map(|method| {
+        let (effect, description) = method.tool.as_ref()?;
+        let name = &method.name;
+        let effect = if effect == "write" {
+            quote!(::seiva::contract::ToolEffect::Write)
+        } else {
+            quote!(::seiva::contract::ToolEffect::Read)
+        };
+        Some(quote! {
+            ::seiva::contract::ToolDescriptor { method: #name, effect: #effect, description: #description }
+        })
     });
 
     quote! {
@@ -226,6 +348,7 @@ pub fn facade(attr: TokenStream, item: TokenStream) -> TokenStream {
                     version: #version,
                     methods: &[ #(#method_descs),* ],
                 };
+            const TOOLS: &'static [::seiva::contract::ToolDescriptor] = &[ #(#tool_descs),* ];
         }
 
         // Register the facade in the link-time inventory so the runtime can
@@ -1056,6 +1179,146 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
             let mut __router: ::axum::Router<#self_ty> = ::axum::Router::new();
             #(#route_blocks)*
             __router.with_state(service)
+        }
+    }
+    .into()
+}
+
+/// Generates the agent tools of a facade from an `impl <Facade> for <Service>`
+/// block, the way `#[seiva::controller]` generates its HTTP routes (ADR 0048 §3).
+///
+/// It emits `pub fn <trait_snake>_tools(service) -> seiva_mcp_server::FacadeTools`:
+/// a dispatcher that calls the service method named by a tool call, with the
+/// caller's context (the person's `Principal`, never an agent's) and the tool's
+/// JSON arguments deserialized into the method's parameter. Only the methods the
+/// facade marked `#[tool(..)]` are exposed (`<Trait>Facade::TOOLS`); the
+/// permission each requires, its effect and its input schema come from the
+/// descriptor. Applied next to (or instead of) `#[seiva::controller]`.
+///
+/// The same shapes as the controller: at most one parameter besides an optional
+/// `&Ctx`, a `serde::Deserialize` parameter, a `serde::Serialize` `Ok` type and an
+/// error type that is `Into<seiva_contract::Problem>`. The crate using it depends
+/// on `seiva-mcp-server`.
+#[proc_macro_attribute]
+pub fn tools(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = proc_macro2::TokenStream::from(attr);
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(attr, "`#[seiva::tools]` takes no arguments")
+            .to_compile_error()
+            .into();
+    }
+    let item_impl = syn::parse_macro_input!(item as ItemImpl);
+    let Some((trait_path, _)) = item_impl.trait_.clone() else {
+        return syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "`#[seiva::tools]` expects a trait impl, e.g. `impl Payments for PaymentsService`",
+        )
+        .to_compile_error()
+        .into();
+    };
+    let mut facade_path = trait_path.clone();
+    if let Some(last) = facade_path.segments.last_mut() {
+        last.ident = format_ident!("{}Facade", last.ident);
+        last.arguments = syn::PathArguments::None;
+    }
+    let trait_ident = &trait_path.segments.last().unwrap().ident;
+    let fn_name = format_ident!("{}_tools", to_snake_case(&trait_ident.to_string()));
+    let self_ty = &item_impl.self_ty;
+
+    let mut arms: Vec<proc_macro2::TokenStream> = Vec::new();
+    for impl_item in &item_impl.items {
+        let ImplItem::Fn(method) = impl_item else {
+            continue;
+        };
+        let method_ident = &method.sig.ident;
+        let method_name = method_ident.to_string();
+        let mut ordered_call: Vec<proc_macro2::TokenStream> = Vec::new();
+        let mut primary: Vec<&Type> = Vec::new();
+        for input in &method.sig.inputs {
+            let FnArg::Typed(pat_type) = input else {
+                continue;
+            };
+            if is_ctx_type(&pat_type.ty) {
+                ordered_call.push(match pat_type.ty.as_ref() {
+                    Type::Reference(_) => quote!(&__ctx),
+                    _ => quote!(__ctx.clone()),
+                });
+            } else {
+                primary.push(pat_type.ty.as_ref());
+                ordered_call.push(quote!(__arg));
+            }
+        }
+        if primary.len() > 1 {
+            return syn::Error::new_spanned(
+                &method.sig,
+                "a `#[seiva::tools]` method takes at most one parameter (besides an optional `&Ctx`)",
+            )
+            .to_compile_error()
+            .into();
+        }
+        let decode = primary.first().map(|ty| {
+            quote! {
+                let __arg: #ty = ::seiva_mcp_server::__private::from_args(
+                    &__args,
+                    &<#facade_path as ::seiva::contract::Facade>::DESCRIPTOR,
+                    #method_name,
+                )?;
+            }
+        });
+        arms.push(quote! {
+            #method_name => {
+                #decode
+                match <#self_ty as #trait_path>::#method_ident(&__service #(, #ordered_call)*).await {
+                    ::core::result::Result::Ok(__value) => ::seiva_mcp_server::__private::to_value(&__value),
+                    ::core::result::Result::Err(__err) => ::core::result::Result::Err(
+                        ::seiva_mcp_server::__private::failed(__err),
+                    ),
+                }
+            }
+        });
+    }
+
+    let (impl_generics, _type_generics, where_clause) = item_impl.generics.split_for_impl();
+    let user_predicates = where_clause.map(|wc| {
+        let predicates = &wc.predicates;
+        quote!(#predicates)
+    });
+    let fn_doc = format!(
+        "The agent tools of the `{trait_ident}` facade: the methods it marked \
+         `#[tool(..)]`, dispatched to this service with the caller's context. \
+         Generated by `#[seiva::tools]`; serve them with `seiva_mcp_server`."
+    );
+    quote! {
+        #item_impl
+
+        #[doc = #fn_doc]
+        pub fn #fn_name #impl_generics (service: #self_ty) -> ::seiva_mcp_server::FacadeTools
+        where
+            #self_ty: ::core::clone::Clone
+                + ::core::marker::Send
+                + ::core::marker::Sync
+                + 'static,
+            #user_predicates
+        {
+            ::seiva_mcp_server::FacadeTools::new(
+                <#facade_path as ::seiva::contract::Facade>::DESCRIPTOR,
+                <#facade_path as ::seiva::contract::Facade>::TOOLS,
+                move |__ctx: ::seiva_mcp_server::__private::Ctx,
+                      __method: ::std::string::String,
+                      __args: ::seiva_mcp_server::__private::Value| {
+                    let __service = ::core::clone::Clone::clone(&service);
+                    let __future: ::seiva_mcp_server::__private::ToolFuture =
+                        ::std::boxed::Box::pin(async move {
+                            match __method.as_str() {
+                                #(#arms)*
+                                __other => ::core::result::Result::Err(
+                                    ::seiva_mcp_server::__private::unknown(__other),
+                                ),
+                            }
+                        });
+                    __future
+                },
+            )
         }
     }
     .into()
