@@ -165,12 +165,11 @@ impl HttpTransport for RouterTransport {
             builder = builder.header(name.as_str(), value.as_str());
         }
         let req = builder.body(axum::body::Body::from(request.body)).unwrap();
-        let res = self
-            .0
-            .clone()
-            .oneshot(req)
-            .await
-            .map_err(|e| LlmError::Transport(e.to_string()))?;
+        // An axum router never fails to answer (its error type is `Infallible`).
+        let res = match self.0.clone().oneshot(req).await {
+            Ok(res) => res,
+            Err(never) => match never {},
+        };
         let status = res.status().as_u16();
         let headers: Vec<(String, String)> = res
             .headers()

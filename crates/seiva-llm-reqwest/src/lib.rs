@@ -98,7 +98,12 @@ impl HttpTransport for ReqwestTransport {
         let headers: Vec<(String, String)> = response
             .headers()
             .iter()
-            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str().to_owned(), v.to_owned())))
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_owned(), v.to_owned()))
+            })
             .collect();
         let body = response.bytes_stream().map(|chunk| {
             chunk
