@@ -238,6 +238,9 @@ seiva-macros = { version = "0.2.1", path = "crates/seiva-macros" }
 async-trait = "0.1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+# Dynamic shell completion for the `seiva` CLI (`seiva completion <shell>`):
+# commands, flags AND values (module names, kinds, data layers) on TAB.
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 tokio = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 toml = { version = "0.9" }

@@ -6,7 +6,8 @@
 //! lands, its body becomes a thin call into a public `seiva` function
 //! with a typed result (the "CLI as a library" rule, mirrored from DORM).
 
-use clap::{Parser, Subcommand};
+use clap::{FromArgMatches, Parser, Subcommand};
+use clap_complete::engine::ArgValueCandidates;
 use seiva::scaffold::{self, GeneratedFile};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,6 +17,10 @@ use std::process::ExitCode;
 /// `examples/` crates — see [`demo`].
 #[cfg(feature = "demo")]
 mod demo;
+
+mod complete;
+mod help;
+mod manual;
 
 /// The facades this `seiva` binary can render, discovered through the link-time
 /// inventory ([`seiva::contract::registered_facades`]) rather than a
@@ -38,40 +43,41 @@ fn cli_facades() -> Vec<seiva::contract::FacadeDescriptor> {
 #[command(
     name = "seiva",
     version,
-    about = "Delonix Seiva — a Rust backend framework for robust, high-criticality systems."
+    about = "Delonix Seiva — a Rust backend framework for robust, high-criticality systems.",
+    long_about = "Delonix Seiva — a Rust backend framework for robust, high-criticality systems.\n\n\
+                  A project is built from modules that own their data. Each module is five \
+                  crates — facade (the versioned contract), domain, application, infrastructure \
+                  and interface — and one facade contract drives the HTTP routes, the OpenAPI 3.1 \
+                  document and the gRPC proto at compile time. The same modules run as a modular \
+                  monolith or as microservices, by composition alone."
 )]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 }
 
+/// The variants are declared in workflow order: the order clap lists them in,
+/// and so the order inside each help section (see `help.rs`).
 #[derive(Subcommand)]
 enum Command {
+    // --- Project ---
     /// Create a new Seiva project.
     Project {
         #[command(subcommand)]
         action: ProjectAction,
     },
-    /// Manage modules within a project.
+    /// Add, split and merge the project's modules.
     Module {
         #[command(subcommand)]
         action: ModuleAction,
     },
-    /// Add or manage optional extensions (e.g. the admin console).
+    /// Add optional extensions (e.g. the admin console).
     Ext {
         #[command(subcommand)]
         action: ExtAction,
     },
-    /// Data-layer commands (DORM modules only).
-    Db {
-        #[command(subcommand)]
-        action: DbAction,
-    },
-    /// Run the architecture fitness functions locally.
-    Lint,
-    /// Show what the Seiva macros expand to.
-    Expand,
-    /// Run the project locally (dev loop).
+    // --- Development ---
+    /// Run the project locally, with hot-reload.
     ///
     /// Rebuilds and restarts on change when `cargo watch` is available (the
     /// FastAPI `--reload` equivalent). `--watch` requires it (and errors if it is
@@ -85,8 +91,17 @@ enum Command {
         #[arg(long)]
         no_watch: bool,
     },
-    /// Report the environment: framework version and which data layer is linked.
-    Doctor,
+    /// The data layer: setup, migrations, seed data, studio.
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
+    },
+    /// Manage user credential records.
+    User {
+        #[command(subcommand)]
+        action: UserAction,
+    },
+    // --- Contract ---
     /// Print the OpenAPI 3.1 document.
     ///
     /// Inside a project (a `seiva.toml` is present) this documents THAT project's
@@ -107,23 +122,46 @@ enum Command {
     /// facades via `SEIVA_EMIT=proto` on the composition root; outside a project it
     /// falls back to the framework's built-in demonstration facade.
     Proto,
-    /// Manage user credential records.
-    User {
-        #[command(subcommand)]
-        action: UserAction,
+    /// Show what the Seiva macros expand to (planned).
+    Expand,
+    // --- Quality ---
+    /// Check the architecture rules (the fitness functions).
+    ///
+    /// Scans `./modules` for the five-layer dependency rule and the other
+    /// fitness functions (ADR 0003). Also available as `cargo seiva lint`.
+    Lint,
+    /// Report the environment: framework version and linked data layer.
+    Doctor,
+    // --- Tooling ---
+    /// Print the shell completion script (bash, zsh, fish, elvish, powershell).
+    ///
+    /// Completion is dynamic: the script calls back into `seiva` on every TAB, so
+    /// it completes commands and flags AND values — `--kind`, `--data`,
+    /// `--backend`, the known extensions, and the modules of the project in the
+    /// current directory (`seiva module split <TAB>`). Load it once per shell (see
+    /// the examples); it stays correct when `seiva` is upgraded.
+    Completion {
+        /// The shell to register completion for.
+        #[arg(value_enum)]
+        shell: complete::Shell,
+    },
+    /// Print the version, build and how to start (= `--version`).
+    Version {
+        /// Only `seiva <version>` (= `-V`), for scripts.
+        #[arg(long)]
+        short: bool,
     },
 }
 
 #[derive(Subcommand)]
 enum UserAction {
-    /// Create a user credential record: `seiva user create --username <NAME>`.
+    /// Create a user credential record (password from STDIN).
     ///
     /// The password is read as one line from STDIN (never from an argv flag,
-    /// which would leak into shell history); pipe it in to run non-interactively,
-    /// e.g. `printf 'secret\n' | seiva user create --username alice`. The record
-    /// is printed as JSON to stdout with the Argon2id PHC hash of the password.
-    /// A later phase persists the record; this cut proves the hashing path from
-    /// the CLI.
+    /// which would leak into shell history); pipe it in to run non-interactively.
+    /// The record is printed as JSON to stdout with the Argon2id PHC hash of the
+    /// password. A later phase persists the record; this cut proves the hashing
+    /// path from the CLI.
     Create {
         /// The username for the new credential record.
         #[arg(long)]
@@ -133,28 +171,30 @@ enum UserAction {
 
 #[derive(Subcommand)]
 enum ProjectAction {
-    /// Scaffold a new project: `seiva project new <name> [--kind <kind>]`.
+    /// Scaffold a new project.
     New {
+        /// The project name (also the workspace and `apps/<name>-api` name).
         name: String,
         /// The project's nature (ADR 0024): `api` (default — HTTP+gRPC server that
         /// hosts modules), `worker` (background jobs), `gateway` (HTTP edge/BFF) or
         /// `event` (event-processor). It shapes the generated composition root.
-        #[arg(long)]
+        #[arg(long, add = ArgValueCandidates::new(complete::kinds))]
         kind: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
 enum ModuleAction {
-    /// Scaffold a new module: `seiva module new <name> [--data <layer>] [--admin]`.
+    /// Scaffold a new five-layer module that owns its data.
     New {
+        /// The module name (also its `modules/<name>` directory and namespace).
         name: String,
         /// The data layer this module binds to (ADR 0030): `dorm` (default,
         /// batteries-included), `sqlx`, `seaorm`, or `external` (you own
         /// persistence). The choice is recorded in seiva.toml and steers which
         /// native tool `seiva db` delegates to; the pure layers stay ORM-free
         /// either way.
-        #[arg(long)]
+        #[arg(long, add = ArgValueCandidates::new(complete::data_layers))]
         data: Option<String>,
         /// Register the module with the admin console (ADR 0009): the generated
         /// interface declares an `AdminResource`, so the optional
@@ -163,54 +203,74 @@ enum ModuleAction {
         #[arg(long)]
         admin: bool,
     },
-    /// Promote a module to a microservice: scaffold a standalone
-    /// `apps/<name>-service` binary that mounts only this module, register it in
-    /// the workspace and set `mode = "service"`. The module still runs inside the
-    /// monolith — this adds a deployment shape, it moves no code.
-    Split { name: String },
-    /// Fold a split module's service back into the monolith: remove
-    /// `apps/<name>-service`, drop its workspace member and reset
+    /// Also deploy a module as its own microservice.
+    ///
+    /// Scaffolds a standalone `apps/<name>-service` binary that mounts only this
+    /// module, registers it in the workspace and sets `mode = "service"`. The
+    /// module still runs inside the monolith — this adds a deployment shape, it
+    /// moves no code.
+    Split {
+        /// A module of this project (TAB lists those not yet split).
+        #[arg(add = ArgValueCandidates::new(complete::splittable_modules))]
+        name: String,
+    },
+    /// Fold a split module's service back into the monolith.
+    ///
+    /// Removes `apps/<name>-service`, drops its workspace member and resets
     /// `mode = "library"`. The module's five crates are untouched.
-    Merge { name: String },
+    Merge {
+        /// A split module of this project (TAB lists those with a service).
+        #[arg(add = ArgValueCandidates::new(complete::split_modules))]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum ExtAction {
-    /// Integrate an optional extension into the composition root (ADR 0010):
-    /// `seiva ext add seiva-console-admin`. Adds the dependency and inserts the
+    /// Wire an optional extension into the composition root.
+    ///
+    /// Integrates the extension (ADR 0010): adds the dependency and inserts the
     /// mount at the managed composition point, then you recompile. Explicit and
     /// idempotent — running it twice changes nothing — and it executes no install
     /// script. For a project without the managed anchors, it prints the exact
     /// patch to apply by hand and reports integration as pending.
-    Add { name: String },
+    Add {
+        /// The extension crate (TAB lists the known ones).
+        #[arg(add = ArgValueCandidates::new(complete::extensions))]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum DbAction {
-    /// Set up the project's DORM data layer: scaffold a DORM project under `data/`
-    /// (schema, migrations, the migrate binaries) that `seiva db dev`/`migrate`
-    /// drive. Delegates to `dorm init`; run once per project. See `seiva db dev`.
+    /// Set up the project's DORM data layer (once per project).
+    ///
+    /// Scaffolds a DORM project under `data/` (schema, migrations, the migrate
+    /// binaries) that `seiva db dev`/`migrate` drive. Delegates to `dorm init`.
     Init {
         /// The directory to create the DORM project in (default `data`).
         #[arg(long)]
         dir: Option<String>,
         /// The database backend: `postgres` (default), `mysql` or `sqlite`. Sets
         /// the DORM feature and the schema's `provider`; use a matching DSN.
-        #[arg(long, default_value = "postgres")]
+        #[arg(long, default_value = "postgres", add = ArgValueCandidates::new(complete::backends))]
         backend: String,
     },
-    /// Author the next migration from the schema and apply it — the dev loop
-    /// (`prisma migrate dev` / Django `makemigrations` + `migrate`). Delegates to
-    /// `dorm migrate dev` inside the project's `data/` DORM project.
+    /// Author the next migration from the schema and apply it.
+    ///
+    /// The dev loop (`prisma migrate dev` / Django `makemigrations` + `migrate`).
+    /// Delegates to `dorm migrate dev` inside the project's `data/` DORM project.
     Dev {
         /// A short name for the migration (e.g. `add_price`).
         #[arg(default_value = "migration")]
         name: String,
     },
-    /// Apply the recorded migration chain (`prisma migrate deploy`). Delegates to
-    /// `dorm migrate` inside the project's `data/` DORM project.
+    /// Apply the recorded migration chain (deploy time).
+    ///
+    /// The `prisma migrate deploy` equivalent. Delegates to `dorm migrate` inside
+    /// the project's `data/` DORM project.
     Migrate,
-    /// Introspect an existing database into a schema file (brownfield adoption).
+    /// Introspect an existing database into a schema file (brownfield).
     ///
     /// Delegates to the DORM CLI (`dorm db pull`): it reads the live PostgreSQL
     /// `public` schema and writes approximate `model` blocks you fold into your
@@ -224,9 +284,11 @@ enum DbAction {
         #[arg(long)]
         dsn: Option<String>,
     },
-    /// Browse and edit the database in your browser — the data admin, Django/Prisma
-    /// Studio style. Delegates to `dorm studio` (native: reads the live schema, no
-    /// project build). Read-only unless `--write`. Binds 127.0.0.1 only.
+    /// Browse and edit the database in your browser.
+    ///
+    /// The data admin, Django/Prisma Studio style. Delegates to `dorm studio`
+    /// (native: reads the live schema, no project build). Read-only unless
+    /// `--write`. Binds 127.0.0.1 only.
     Studio {
         /// TCP port to serve on (default 5555).
         #[arg(long)]
@@ -238,11 +300,13 @@ enum DbAction {
         #[arg(long)]
         dsn: Option<String>,
     },
-    /// Apply the project's per-module seed data (ADR 0022). Builds and runs the
-    /// composition root with `SEIVA_SEED=1`: each module loads its `seed/` CSV
-    /// through an idempotent upsert, then the binary exits before serving. The data
-    /// persists only as far as the module's adapter does (the default in-memory
-    /// adapter makes this a smoke test; a DORM-backed adapter persists it).
+    /// Load each module's seed data (ADR 0022).
+    ///
+    /// Builds and runs the composition root with `SEIVA_SEED=1`: each module
+    /// loads its `seed/` CSV through an idempotent upsert, then the binary exits
+    /// before serving. The data persists only as far as the module's adapter does
+    /// (the default in-memory adapter makes this a smoke test; a DORM-backed
+    /// adapter persists it).
     Seed {
         /// Also load each module's `demo/` data (through the facade), as a dev boot
         /// would. Off by default so `db seed` applies reference data only.
@@ -1666,9 +1730,113 @@ fn doctor() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The `--version` card (`-V` keeps the short, stable `seiva <version>` line for
+/// scripts): build identity, what this binary links, how a Seiva project is
+/// shaped, and what to run first. clap prints `seiva <long_version>`, so the text
+/// does not repeat the name.
+fn long_version_text() -> String {
+    let since = match env!("SEIVA_GIT_SINCE").split_once('|') {
+        Some((n, tag)) => {
+            let noun = if n == "1" { "commit" } else { "commits" };
+            format!(" (+{n} {noun} since {tag})")
+        }
+        None => String::new(),
+    };
+    let dirty = if env!("SEIVA_GIT_DIRTY").is_empty() {
+        ""
+    } else {
+        ", modified"
+    };
+    let data_layer = if seiva::DORM_ENABLED {
+        "DORM linked (feature `dorm`)"
+    } else {
+        "external only (feature `dorm` off)"
+    };
+    let demo = if cfg!(feature = "demo") {
+        "on (built-in openapi facade + user create)"
+    } else {
+        "off (feature `demo`)"
+    };
+    format!(
+        "{version}\n\
+         Delonix Seiva — a Rust backend framework for robust, high-criticality systems\n\
+         commit: {hash}{since}{dirty} · built: {date} · rustc {rustc} · MIT OR Apache-2.0\n\
+         \n\
+         this build:\n\
+         \x20 data layer      {data_layer}\n\
+         \x20 demo commands   {demo}\n\
+         \x20 scaffolds       new projects on seiva = \"{framework}\"\n\
+         \n\
+         how a Seiva project is shaped:\n\
+         \x20 modules that own their data, each five crates: facade (the versioned\n\
+         \x20 contract) · domain · application · infrastructure · interface. One facade\n\
+         \x20 drives the HTTP routes, OpenAPI 3.1 and the gRPC proto at compile time;\n\
+         \x20 the same modules run as a modular monolith or as microservices.\n\
+         \n\
+         get started:\n\
+         \x20 seiva project new shop          # an API project (or --kind worker|gateway|event)\n\
+         \x20 seiva module new orders         # a five-layer module that owns its data\n\
+         \x20 seiva db init && seiva db dev   # the data layer and its first migration\n\
+         \x20 seiva start                     # run it locally, with hot-reload\n\
+         \x20 seiva lint                      # check the architecture rules\n\
+         \n\
+         docs: https://ngolacloud.github.io/seiva/ · seiva <command> --help · seiva completion --help",
+        version = env!("CARGO_PKG_VERSION"),
+        hash = env!("SEIVA_GIT_HASH"),
+        date = env!("SEIVA_BUILD_DATE"),
+        rustc = env!("SEIVA_RUSTC_VERSION"),
+        framework = scaffold::FRAMEWORK_VERSION,
+    )
+}
+
+/// The fully-dressed command tree: the derive, the rich `--version`, and the
+/// manual (`EXAMPLES:`/`SEE ALSO:`/`WORKFLOW:`). Parsing, help rendering and
+/// shell completion all use this one tree, so they cannot drift apart.
+fn cli_command() -> clap::Command {
+    let cmd = <Cli as clap::CommandFactory>::command().long_version(long_version_text());
+    manual::apply(cmd)
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // Dynamic completion: when the shell asks for candidates (`COMPLETE` set by
+    // the script `seiva completion <shell>` prints), answer and exit.
+    clap_complete::CompleteEnv::with_factory(cli_command).complete();
+
+    let argv: Vec<String> = std::env::args().collect();
+    let mut command = cli_command();
+    if help::wants_top_help(&argv) {
+        print!("{}", help::render(command));
+        return ExitCode::SUCCESS;
+    }
+    let matches = match command.try_get_matches_from_mut(&argv) {
+        Ok(m) => m,
+        Err(e) => {
+            if e.kind() == clap::error::ErrorKind::DisplayHelp {
+                if let Some(path) = help::group_help_path(&argv, &command) {
+                    print!("{}", help::render_group(&e.render().to_string(), &path));
+                    return ExitCode::SUCCESS;
+                }
+            }
+            e.exit();
+        }
+    };
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     match cli.command {
+        Command::Completion { shell } => match complete::print_registration(shell) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("seiva: writing the completion script: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Version { short } => {
+            if short {
+                println!("seiva {}", env!("CARGO_PKG_VERSION"));
+            } else {
+                println!("seiva {}", long_version_text());
+            }
+            ExitCode::SUCCESS
+        }
         Command::Doctor => doctor(),
         Command::Project { action } => match action {
             ProjectAction::New { name, kind } => project_new(&name, kind.as_deref()),

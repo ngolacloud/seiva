@@ -896,11 +896,12 @@ pub const CONSOLE_ADMIN_EXTENSION: ExtensionManifest = ExtensionManifest {
 /// same shape as a `seiva-extension.toml`, which the independent DX reads.
 #[must_use]
 pub fn extension_manifest(name: &str) -> Option<ExtensionManifest> {
-    match name {
-        "seiva-console-admin" => Some(CONSOLE_ADMIN_EXTENSION),
-        _ => None,
-    }
+    EXTENSIONS.iter().copied().find(|e| e.crate_name == name)
 }
+
+/// Every first-party extension [`extension_manifest`] resolves — the list the
+/// CLI completes `seiva ext add <TAB>` from.
+pub const EXTENSIONS: &[ExtensionManifest] = &[CONSOLE_ADMIN_EXTENSION];
 
 /// Adds `ext`'s dependency to the app crate's `[dependencies]` at the managed
 /// extension anchor. **Idempotent**: if the crate is already a dependency the
@@ -1521,8 +1522,9 @@ fn module_toml(module: &str) -> String {
 /// The crates.io version requirement a generated project uses for the framework
 /// crates (`seiva = "0.2"`, …). Generated manifests depend on the
 /// framework by version, so a project compiles standalone once the crates are
-/// published; it is not tied to a local framework checkout.
-const FRAMEWORK_VERSION: &str = "0.2";
+/// published; it is not tied to a local framework checkout. Public so the CLI's
+/// `--version` card can say what a scaffold emits.
+pub const FRAMEWORK_VERSION: &str = "0.2";
 
 /// The framework crates a generated project names as dependencies
 /// (`seiva = "0.2"`, …). Every other framework crate they pull in is

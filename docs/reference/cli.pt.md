@@ -29,17 +29,66 @@ $ seiva --help
 ## Os comandos num relance
 
 ```
-project  Create a new Seiva project
-module   Manage modules within a project (new / split / merge)
-ext      Integrate an optional extension (e.g. the admin console)
-db       Data-layer commands (DORM modules only)
-start    Run the project locally (the dev loop)
-openapi  Print the OpenAPI 3.1 document for the project (or the demo facade)
-proto    Print the proto3 service document
-lint     Run the architecture fitness functions locally
-expand   Show what the Seiva macros expand to
-doctor   Report the environment: framework version and linked data layer
-user     Manage user credential records (Argon2id)
+Project Commands:
+  project     Create a new Seiva project
+  module      Add, split and merge the project's modules
+  ext         Add optional extensions (e.g. the admin console)
+
+Development Commands:
+  start       Run the project locally, with hot-reload
+  db          The data layer: setup, migrations, seed data, studio
+  user        Manage user credential records
+
+Contract Commands:
+  openapi     Print the OpenAPI 3.1 document
+  proto       Print the proto3 service document
+  expand      Show what the Seiva macros expand to (planned)
+
+Quality Commands:
+  lint        Check the architecture rules (the fitness functions)
+  doctor      Report the environment: framework version and linked data layer
+
+Tooling Commands:
+  completion  Print the shell completion script (bash, zsh, fish, elvish, powershell)
+  version     Print the version, build and how to start (= `--version`)
+```
+
+O `seiva --help` lista os comandos por secção, com o fluxo de trabalho habitual no
+fim. Cada grupo é seccionado da mesma forma (`seiva db --help`: Setup / Migration /
+Data). O `-h` é o resumo de uma linha; o `--help` acrescenta **EXAMPLES** e
+**SEE ALSO** desse comando — por exemplo `seiva module new --help`.
+
+## Autocompletar na shell — `seiva completion <shell>`
+
+O autocompletar é dinâmico: o script chama o `seiva` a cada TAB, por isso completa
+comandos e flags **e valores** — `--kind`, `--data`, `--backend`, as extensões
+conhecidas, e os módulos do projecto no directório actual (`seiva module split
+<TAB>` oferece os módulos ainda não separados, `module merge <TAB>` os que já o
+estão). Continua correcto quando o `seiva` é actualizado.
+
+```console
+$ echo 'source <(seiva completion bash)' >> ~/.bashrc                 # bash
+$ echo 'source <(seiva completion zsh)' >> ~/.zshrc                   # zsh, depois do compinit
+$ seiva completion fish > ~/.config/fish/completions/seiva.fish      # fish
+```
+
+O `elvish` e o `powershell` também são suportados.
+
+## Versão e build — `seiva --version`
+
+O `seiva --version` (ou `seiva version`) é o cartão do build: o commit (e quantos
+commits passou da última tag de release), a data do build e o compilador, o que
+este binário liga (camada de dados, comandos de demonstração), a versão do
+framework sobre a qual os projectos novos são gerados, como é a forma de um
+projecto Seiva, e o que correr primeiro. O `seiva -V` (ou `seiva version --short`)
+imprime só `seiva <versão>`, para scripts.
+
+```console
+$ seiva --version
+seiva 0.2.0
+Delonix Seiva — a Rust backend framework for robust, high-criticality systems
+commit: ae83f7a72 · built: 2026-11-26 · rustc 1.99.1 · MIT OR Apache-2.0
+…
 ```
 
 ## 1. Criar um projecto — `seiva project new <name>`

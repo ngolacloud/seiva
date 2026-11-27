@@ -26,7 +26,8 @@ seiva = { workspace = true }
 # The architecture lint, extracted into its own crate (also the `cargo seiva`
 # subcommand). `seiva lint` delegates to it.
 cargo-seiva = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, features = ["string", "wrap_help"] }
+clap_complete = { workspace = true }
 serde_json = "1"
 # Demonstration-only, behind the `demo` feature (default off). Both are published
 # to crates.io, so their `version` lets `cargo publish` resolve them even though
