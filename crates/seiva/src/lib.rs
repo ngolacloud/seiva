@@ -72,6 +72,12 @@ pub use seiva_macros::WireSchema;
 /// `#[seiva::controller]`; the HTTP primitives it emits live in `seiva-http`.
 pub use seiva_macros::controller;
 
+/// Generates the agent tools of a facade from an `impl <Facade> for <Service>`
+/// block: the methods the facade marked `#[tool(effect = ..)]`, dispatched to the
+/// service with the caller's context (ADR 0048 §3). Applied as
+/// `#[seiva::tools]`; served by `seiva-mcp-server`.
+pub use seiva_macros::tools;
+
 /// The framework version, surfaced to the CLI and to `health` endpoints.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

@@ -296,6 +296,17 @@ companheira para agentes que planeiam e usam ferramentas.
   das etapas do gateway é afirmada por um teste, como a fronteira da transacção no
   ADR 0020.
 
+## Notas de implementação
+
+- **G4 (2026-11-27).** O servidor MCP autentica o token da própria pessoa com o
+  `Authenticator` do framework e corre cada ferramenta com o `Ctx` dessa pessoa. A troca de
+  tokens (RFC 8693) espera pelo servidor OAuth do ADR 0038; até lá, o cliente apresenta
+  directamente o token da pessoa — nunca um token largo de agente. A aprovação humana de uma
+  escrita é uma confirmação fora de banda: a aplicação anfitriã chama
+  `POST /mcp/approvals/{id}` com o token da pessoa depois de lhe mostrar os argumentos
+  exactos, e a nova chamada do modelo leva o id da aprovação; não se usa a elicitation do
+  MCP, que precisa de um stream aberto pelo servidor.
+
 ## Relacionadas
 
 - [ADR 0005](0005-object-level-authorization-bola.md) · [ADR 0006](0006-identity-and-authentication.md) · [ADR 0013](0013-admin-mutation-audit.md) · [ADR 0015](0015-distributed-rate-limit.md) · [ADR 0019](0019-fail-closed-authorization.md) · [ADR 0020](0020-command-bus-and-pipeline-behaviors.md) · [ADR 0025](0025-wire-schema-serde-fidelity.md) · [ADR 0027](0027-native-observability.md) · [ADR 0038](0038-oauth-authz-server.md) · [ADR 0043](0043-append-only-audit.md) · [ADR 0045](0045-egress-ssrf-guard.md)

@@ -3061,6 +3061,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-ai-gateway"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "futures-core",
+ "futures-util",
+ "regex",
+ "seiva-identity",
+ "seiva-llm",
+ "seiva-ports",
+ "seiva-testing",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-auth"
 version = "0.2.2"
 dependencies = [
@@ -3223,12 +3244,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "seiva-llm"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "futures-core",
+ "futures-util",
+ "seiva-resilience",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "seiva-macros"
 version = "0.2.2"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "seiva-mcp-server"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "seiva",
+ "seiva-contract",
+ "seiva-http",
+ "seiva-identity",
+ "seiva-ports",
+ "seiva-testing",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -3360,7 +3416,9 @@ name = "seiva-testing"
 version = "0.2.2"
 dependencies = [
  "async-trait",
+ "seiva-llm",
  "seiva-ports",
+ "serde_json",
  "tokio",
 ]
 

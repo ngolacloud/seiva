@@ -1,0 +1,40 @@
+# seiva-mcp-server — module facades as MCP tools, on behalf of a person (ADR 0048, G4).
+#
+# `#[tool(effect = ..)]` on a facade method + `#[seiva::tools]` on its impl give a
+# `FacadeTools`; this crate gathers them into a `ToolSet` and serves it over MCP's
+# Streamable HTTP transport behind Seiva authentication. The caller is the person
+# whose token was presented (never a broad agent token); each tool's `#[requires]`
+# is enforced here; a write tool waits for that person's approval by default. DORM-
+# free — unlike `seiva-mcp`, which serves DORM's database tools and stays excluded.
+[package]
+name = "seiva-mcp-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Delonix Seiva module facades as MCP tools: Streamable HTTP, the caller's own identity and permissions, human approval for writes, and audit."
+readme = "README.md"
+keywords = ["mcp", "model-context-protocol", "agents", "seiva"]
+categories = ["web-programming::http-server", "asynchronous"]
+
+[dependencies]
+seiva = { workspace = true }
+seiva-contract = { path = "../seiva-contract", version = "0.2.1" }
+seiva-http = { path = "../seiva-http", version = "0.2.1" }
+seiva-identity = { path = "../seiva-identity", version = "0.2.1" }
+seiva-ports = { workspace = true }
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"] }
+serde = { workspace = true }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { workspace = true, features = ["time"] }
+tracing = { version = "0.1" }
+
+[dev-dependencies]
+seiva-testing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+tower = { version = "0.5", features = ["util"] }

@@ -4,6 +4,59 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-27) — ADR 0048 G4: ferramentas MCP a partir das facades (`seiva-mcp-server`)
+
+`#[tool(effect = "read" | "write")]` nos métodos da facade (efeito e descrição obrigatórios,
+escrita nunca `#[public]`, erros de compilação), `Facade::TOOLS` com valor por omissão (não
+parte nenhuma facade) e `#[seiva::tools]` no impl, que gera o despacho como o
+`#[seiva::controller]` gera as rotas. Crate novo `seiva-mcp-server` (membro, sem DORM):
+Streamable HTTP com respostas JSON (`initialize`, `ping`, `tools/list`, `tools/call`), o
+token da própria pessoa pelo `Authenticator` do framework, `#[requires]` verificado e o `Ctx`
+da pessoa (o scope do tenant aplica-se), aprovação humana das escritas fora de banda
+(`/mcp/approvals/{id}`, uso único, argumentos fixados por digest), `auto_approve` explícito,
+auditoria (a escrita antes de correr), `Origin` verificado e metadados RFC 9728. A troca de
+tokens (RFC 8693) espera pelo ADR 0038. **Falta:** G5 (`seiva-agent` e o cliente MCP), G6.
+
+## Estado (2026-11-27) — ADR 0048 G3: o gateway como servidor (`apps/ai-gateway`)
+
+`seiva-ai-gateway` ganha a feature `server`: `POST /v1/chat/completions` (OpenAI),
+`POST /v1/messages` e `/v1/messages/count_tokens` (Anthropic) e `GET /v1/models`, inteiros e
+em stream; chaves do gateway guardadas só em SHA-256 (`GatewayKeys`), que decidem o principal
+e a área; erros no formato de cada cliente; `any_tool(permissão)` para agentes de programação.
+App nova `apps/ai-gateway` (excluída, job de CI próprio): `seiva-ai-gateway serve | check |
+hash-key`, um TOML com `deny_unknown_fields`, `seiva-server` com as sondas de saúde, auditoria
+em JSON lines (0600), chamadas pelo `seiva-llm-reqwest`; teste ponta a ponta com HTTP real e
+clientes dos dois formatos. **Falta:** G4 (`#[tool]`, `seiva-mcp-server`), G5, G6; revogar
+chaves sem reiniciar; um `BudgetStore` partilhado.
+
+## Estado (2026-11-27) — ADR 0048 G2: o gateway in-process (`seiva-ai-gateway`)
+
+Crate novo `seiva-ai-gateway` (membro, sem DORM e sem cliente HTTP): as etapas Identify →
+Authorize → Budget.reserve → Mask → Guard.input → modelo → Guard.output → Unmask →
+Budget.settle → Audit, por ordem fixa (afirmada por teste) e cada uma a falhar fechado; o que
+cada etapa faz entra por trait (`Detector`, `Guardrail`, `BudgetStore`, `AuditSink`). Prova
+por cada linha OWASP desta fase em `tests/gateway.rs`: LLM01 (documento injectado não chega a
+um estorno), LLM02 (o modelo falso recebe `‹TAX_ID_1›`), LLM05 (`JsonOutput`), LLM06
+(ferramentas pelas permissões do chamador), LLM07 (credencial no pedido e na resposta), LLM10
+(orçamento gasto e base em baixo). Streaming com retenção de 256 caracteres. **Falta:** G3
+(forma servidor, chaves do gateway), G4 (`#[tool]`, `seiva-mcp-server`), G5, G6; um
+`BudgetStore` Redis para várias réplicas.
+
+## Estado (2026-11-27) — ADR 0048 G1: o port do modelo (`seiva-llm`)
+
+Crate novo `seiva-llm` (membro do workspace, sem DORM e sem cliente HTTP): tipos neutros
+(mensagens, ferramentas, streaming, uso com a cache à parte), traits `ChatProvider` /
+`ChatModel` / `Embedder`, `Router` com rotas verificadas no `build()` (fornecedor
+desconhecido, rota `in_country` com upstream `abroad`, rota sem `.requires(..)` nem
+`.public()` são recusados), retry com o backoff do framework, timeout por tentativa e
+fallback; `CredentialSource` com `Secret` que nunca se imprime (e a chave apagada dos erros
+mesmo quando o fornecedor a ecoa); codecs Anthropic e OpenAI-compatível (OpenAI, Azure, vLLM,
+Ollama, Gemini) pelo port `HttpTransport`. O transporte reqwest/rustls é o crate excluído
+`seiva-llm-reqwest` (job de CI próprio, teste ponta a ponta com HTTP real e `cargo deny` do
+seu lockfile). `seiva-testing` ganha `llm::ScriptedModel` e `llm::HashEmbedder` (feature
+`llm`, passo próprio no `check`). Guia: `docs/topics/language-models.md`. **Falta:** G2 (as
+etapas do gateway) e a ligação do `Embedder` ao do DORM no `seiva-rag-worker`.
+
 ## Estado (2026-11-27) — gateway de IA e harness de LLM (ADR 0048, Proposto)
 
 [ADR 0048](adr/0048-ai-gateway-and-llm-harness.md) propõe um só caminho controlado

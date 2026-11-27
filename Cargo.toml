@@ -45,6 +45,16 @@ exclude = [
     # it is excluded from the default workspace and built by its own job via
     # `--manifest-path`. Nothing in `cargo check --workspace` links it.
     "apps/seiva-jobs",
+    # The real reqwest/TLS `HttpTransport` for `seiva-llm` (ADR 0048, G1). DORM-free,
+    # but reqwest + rustls are heavy, so — like `webhook-delivery-e2e` — it is
+    # excluded and built by its own CI job via `--manifest-path`; the default
+    # `cargo check --workspace` stays http-client-free.
+    "crates/seiva-llm-reqwest",
+    # The runnable AI gateway (ADR 0048, G3): one TOML file → the OpenAI- and
+    # Anthropic-compatible endpoints on seiva-server, model calls over
+    # seiva-llm-reqwest. Excluded for the same reason (reqwest + rustls); its own
+    # CI job builds and tests it end to end over real HTTP.
+    "apps/ai-gateway",
 ]
 members = [
     # Trait-only boundary the application layer codes against: UnitOfWork,
@@ -123,6 +133,22 @@ members = [
     # a retry policy with exponential backoff (the SAME schedule as the outbox
     # relay's RelayPolicy) and a timeout wrapper. Data-layer-free, so a member.
     "crates/seiva-resilience",
+    # The provider-neutral language-model port of the AI gateway (ADR 0048, G1):
+    # types, routes with data residency and fallback, credentials, and the
+    # Anthropic / OpenAI-compatible codecs over an injected HttpTransport. Links no
+    # HTTP client (the reqwest transport is the excluded `seiva-llm-reqwest`), so
+    # a default member. DORM-free.
+    "crates/seiva-llm",
+    # The AI gateway (ADR 0048, G2): identity, authorization, budget, masking,
+    # guardrails and audit around every `seiva-llm` call, in a fixed order, each
+    # failing closed. In-process (the server shape is G3). DORM-free and
+    # http-client-free, so a default member.
+    "crates/seiva-ai-gateway",
+    # Module facades as MCP tools (ADR 0048, G4): `#[tool]` + `#[seiva::tools]`
+    # give the tools; this crate serves them over MCP's Streamable HTTP with the
+    # person's own identity, permission checks, human approval for writes and
+    # audit. DORM-free (unlike `seiva-mcp`, DORM's database tools, excluded).
+    "crates/seiva-mcp-server",
     # The inter-service client: how one module calls another module's service once
     # split into microservices, wrapping every call in seiva-resilience's breaker +
     # retry + timeout over an injected transport. The first real consumer of the

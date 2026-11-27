@@ -28,6 +28,45 @@ CLI from the tag:
   layer and demo commands, the framework version new projects are scaffolded on,
   how a project is shaped, and a get-started list. `-V` / `version --short` keep
   the one-line `seiva <version>` for scripts.
+- **Language models** (ADR 0048, phase G1): the new `seiva-llm` crate — a
+  provider-neutral model port (`ChatProvider`, `ChatModel`, `Embedder`; messages,
+  tool use, streaming, normalised usage), routes with data residency that are
+  checked when the router is built (an `in_country` route cannot reach an
+  `abroad` upstream; a route needs `.requires(..)` or `.public()`), retry,
+  per-attempt timeouts and fallback, a `CredentialSource` whose `Secret` never
+  prints, and the Anthropic and OpenAI-compatible codecs (OpenAI, Azure, vLLM,
+  Ollama, Gemini's compatible endpoint). The codecs talk through an
+  `HttpTransport` port and link no HTTP client; the reqwest/rustls transport is
+  the new `seiva-llm-reqwest` crate (excluded from the workspace, own CI job).
+  `seiva-testing` gains `llm::ScriptedModel` and `llm::HashEmbedder` behind the
+  `llm` feature.
+- **AI gateway** (ADR 0048, phase G2): the new `seiva-ai-gateway` crate runs every model
+  call through the same stages, in a fixed order, each failing closed — identity, the
+  route's permission and residency per area, the tools offered checked against the
+  caller's permissions, a token budget per principal, tenant and area (a store outage
+  stops the call), masking of personal data into typed placeholders (built-in detectors
+  for the Angolan identity card and NIF, IBANs, payment cards, e-mail, phones), refusal of
+  credentials, tool output labelled as untrusted, input and output guardrails (`JsonOutput`,
+  `SizeLimit`, and built-in credential and tool-policy checks), unmasking by a reveal
+  policy, and one audit record per call — refusals included — that never carries a value.
+  `stream(..)` holds text back so a credential is caught before it is released.
+- **AI gateway server** (ADR 0048, phase G3): `seiva-ai-gateway`'s `server` feature serves
+  OpenAI-compatible `POST /v1/chat/completions`, Anthropic-compatible `POST /v1/messages`
+  and `/v1/messages/count_tokens`, and `GET /v1/models` (the routes the caller may use),
+  whole or streamed, authenticated by gateway keys stored only as SHA-256; errors in each
+  client's own shape. The gateway gains `any_tool(permission)` for coding agents whose
+  tools run on the client. The new `apps/ai-gateway` app is the runnable binary
+  (`seiva-ai-gateway serve | check | hash-key`): one TOML file, `seiva-server` with health
+  probes, a JSON-lines audit record, model calls over `seiva-llm-reqwest`.
+- **Agent tools over MCP** (ADR 0048, phase G4): `#[tool(effect = "read" | "write")]` on a
+  facade method opts it in as an agent tool (the effect and a description are required,
+  and a write tool cannot be `#[public]` — compile errors otherwise); `Facade::TOOLS`
+  lists them; `#[seiva::tools]` on the impl generates the dispatcher, like
+  `#[seiva::controller]`. The new `seiva-mcp-server` crate serves them over MCP's
+  Streamable HTTP: the caller is the person whose token is presented, each tool's
+  `#[requires]` is enforced and the method runs with their `Ctx`; a write waits for that
+  person's approval (`/mcp/approvals/{id}`) and runs once; every call is audited, a write
+  before it runs; `Origin` is checked and a 401 points to the RFC 9728 metadata.
 
 ### Changed
 
