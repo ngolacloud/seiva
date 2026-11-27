@@ -1,0 +1,61 @@
+# seiva-kms — envelope encryption with a key-encryption key held by a guardian
+# (ADR 0049).
+#
+# A `KeyWrapper` port (the guardian of the KEK: a local key file, or HashiCorp
+# Vault's transit engine), a pure `KeyRing` that seals with AAD (`sv1:`,
+# XChaCha20-Poly1305) and still opens dxstorage's `kms1:` (AES-256-GCM), the
+# `RingStore` / `Reseal` ports through which the caller keeps the wrapped ring and
+# re-seals its secrets, and a `RingKeeper` that loads, rotates and retires a ring.
+# Extracted from dxstorage (F8 `4e23bc7`, F11 `fb98cf6`). DORM-free.
+#
+# The `local` adapter needs nothing beyond the cipher crates, so it is a default
+# feature. The `vault` adapter links reqwest + rustls (ring), so it is opt-in: the
+# default `cargo test --workspace` stays http-client-free, and the `kms-vault` CI
+# job runs its tests against a real `vault server -dev`.
+[package]
+name = "seiva-kms"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Envelope encryption for Delonix Seiva: data keys wrapped by a guardian (local key file or Vault transit), a key ring that seals with associated data, rotation and re-sealing."
+readme = "README.md"
+keywords = ["kms", "envelope-encryption", "vault", "secrets", "seiva"]
+categories = ["cryptography"]
+
+[features]
+default = ["local"]
+# The KEK in a file (one base64 key per line; the first wraps, the rest unwrap).
+local = []
+# HashiCorp Vault / OpenBao transit (token, AppRole or Kubernetes auth).
+vault = ["dep:reqwest"]
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+# The new format (sv1:). `default-features = false` drops aead's OsRng (nonces
+# come from `getrandom` below) and keeps `alloc` for the Vec-returning API.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# Only to open dxstorage's kms1: (never to seal).
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+getrandom = "0.2"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+tokio = { workspace = true, features = ["time"] }
+# `default-features = false` + `rustls-tls` keeps it off native-tls/OpenSSL (the
+# same choice as seiva-llm-reqwest); `json` for Vault's request/response bodies.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[[test]]
+name = "vault_live"
+required-features = ["vault"]
