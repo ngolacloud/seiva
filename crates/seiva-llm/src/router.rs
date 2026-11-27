@@ -269,6 +269,13 @@ impl Router {
         RouterBuilder::default()
     }
 
+    /// Every route, by name.
+    pub fn routes(&self) -> Vec<&Route> {
+        let mut routes: Vec<&Route> = self.inner.routes.values().collect();
+        routes.sort_by(|a, b| a.name.cmp(&b.name));
+        routes
+    }
+
     /// The route called `name`, for the gateway's checks.
     pub fn route_info(&self, name: &str) -> Option<&Route> {
         self.inner.routes.get(name)

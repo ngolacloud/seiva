@@ -38,6 +38,9 @@ jobs:
       # The model doubles (ADR 0048) sit behind seiva-testing's `llm` feature.
       - name: Test (seiva-testing feature llm)
         run: cargo test -p seiva-testing --features llm
+      # The gateway's server shape (ADR 0048 G3) sits behind its `server` feature.
+      - name: Test (seiva-ai-gateway feature server)
+        run: cargo test -p seiva-ai-gateway --features server
       - name: Smoke-test the CLI
         run: cargo run -q -p seiva-cli --bin seiva -- doctor
 
@@ -186,6 +189,36 @@ jobs:
       - name: Lint
         run: cargo clippy --manifest-path "$MANIFEST" --all-targets --all-features -- -D warnings
       - name: Test (real HTTP round trips against a local server)
+        run: cargo test --manifest-path "$MANIFEST" --all-features
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo-deny — the excluded lockfile
+        run: cargo deny --manifest-path "$MANIFEST" check advisories bans licenses sources
+
+  # The runnable AI gateway (ADR 0048, G3): one TOML file → the OpenAI- and
+  # Anthropic-compatible endpoints on seiva-server. The end-to-end test builds the
+  # app from a TOML file and calls it over real HTTP with clients of both shapes,
+  # against a fake upstream (masking, keys, streaming, health). Excluded from the
+  # workspace like `llm-reqwest` (reqwest + rustls); its lockfile is audited here.
+  ai-gateway:
+    name: ai-gateway
+    runs-on: ubuntu-latest
+    env:
+      MANIFEST: apps/ai-gateway/Cargo.toml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/ai-gateway
+      - name: Format
+        run: cargo fmt --manifest-path "$MANIFEST" --all --check
+      - name: Lint
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --all-features -- -D warnings
+      - name: Test (the app over real HTTP, both client shapes)
         run: cargo test --manifest-path "$MANIFEST" --all-features
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2

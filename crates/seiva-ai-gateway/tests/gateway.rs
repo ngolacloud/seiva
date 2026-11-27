@@ -698,3 +698,53 @@ async fn a_credential_in_a_stream_ends_it_before_it_is_released() {
     assert!(matches!(events.last(), Some(Err(_))));
     assert_eq!(audit.entries()[0].outcome, "blocked");
 }
+
+/// A coding agent offers the tools it runs itself; `any_tool` lets a caller with
+/// one permission offer them, while a registered tool keeps its own permission.
+#[tokio::test]
+async fn any_tool_admits_client_side_tools_but_not_registered_ones() {
+    let (f, b) = fixture(ScriptedModel::new("cloud").reply_text("ok"));
+    let gw = b.any_tool("llm.code").build().unwrap();
+    let coder = Caller::new(Principal::new("ide-ana", ["llm.chat", "llm.code"]));
+    let bash = ToolSpec::new(
+        "Bash",
+        "Run a command on the developer's machine",
+        json!({"type": "object"}),
+    );
+    gw.complete(
+        &coder,
+        "chat",
+        ChatRequest::new(10).user("x").tool(bash.clone()),
+    )
+    .await
+    .unwrap();
+    let err = gw
+        .complete(&ana(), "chat", ChatRequest::new(10).user("x").tool(bash))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        GatewayError::ToolNotAllowed {
+            tool: "Bash".into()
+        }
+    );
+    let refund = ToolSpec::new("refund", "Refund", json!({"type": "object"}));
+    let err = gw
+        .complete(&coder, "chat", ChatRequest::new(10).user("x").tool(refund))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        GatewayError::ToolNotAllowed {
+            tool: "refund".into()
+        }
+    );
+    assert_eq!(
+        f.audit.entries()[0]
+            .details
+            .iter()
+            .find(|(k, _)| k == "tools_offered")
+            .map(|(_, v)| v.as_str()),
+        Some("Bash")
+    );
+}
