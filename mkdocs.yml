@@ -360,4 +360,5 @@ nav:
           - 0045 · Egress / SSRF guard: adr/0045-egress-ssrf-guard.md
           - 0046 · Typed event contract: adr/0046-typed-event-contract.md
           - 0047 · Mutual TLS: adr/0047-mutual-tls.md
+          - 0048 · AI gateway and LLM harness: adr/0048-ai-gateway-and-llm-harness.md
   - API reference: https://ngolacloud.github.io/seiva/api/
