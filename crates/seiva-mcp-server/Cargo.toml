@@ -17,7 +17,7 @@ homepage.workspace = true
 rust-version.workspace = true
 description = "Delonix Seiva module facades as MCP tools: Streamable HTTP, the caller's own identity and permissions, human approval for writes, and audit."
 readme = "README.md"
-keywords = ["mcp", "model-context-protocol", "agents", "seiva"]
+keywords = ["mcp", "agents", "ai", "seiva"]
 categories = ["web-programming::http-server", "asynchronous"]
 
 [dependencies]
