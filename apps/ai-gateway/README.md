@@ -2,9 +2,9 @@
 
 The server shape of [ADR 0048](../../docs/adr/0048-ai-gateway-and-llm-harness.md) (G3):
 one TOML file in, the OpenAI- and Anthropic-compatible endpoints out, on `seiva-server`
-with `/health/live` and `/health/ready`. Every call goes through the gateway stages of
-`seiva-ai-gateway` (identity, route permission, residency, budget, masking, guardrails,
-audit). Model calls go out through `seiva-llm-reqwest`.
+with `/health/live` and `/health/ready`. Every call — chat or embeddings — goes through the
+gateway stages of `seiva-ai-gateway` (identity, route permission, residency, budget,
+masking, guardrails, audit). Model calls go out through `seiva-llm-reqwest`.
 
 ```console
 $ cargo run --release --manifest-path apps/ai-gateway/Cargo.toml -- check gateway.toml
@@ -53,6 +53,13 @@ residency = "in_country"      # can only use in_country providers
 requires = "llm.hr"
 upstreams = ["local/llama3.3"]
 
+[[routes]]
+name = "docs-embed"           # for POST /v1/embeddings
+kind = "embedding"            # chat (default) | embedding | chat+embedding
+residency = "in_country"
+requires = "llm.embed"
+upstreams = ["local/bge-m3"]  # openai, gemini, openai-compatible providers embed; anthropic does not
+
 [gateway]
 areas_in_country = ["hr"]                    # callers of these areas never reach abroad routes
 tools = { customer_lookup = "customers.read" }
@@ -74,6 +81,9 @@ with no `[[keys]]` is refused: every request would be.
 
 - **OpenAI clients** (SDKs, Open WebUI, LibreChat…): base URL `http://<host>:4000/v1`, API
   key = the gateway key, model = a route name.
+- **Embedding clients** (an OpenAI SDK's `embeddings.create`, a RAG indexer, `seiva-llm`'s
+  `OpenAiCompatible` embedder): the same base URL and key, model = an **embedding** route.
+  `GET /v1/models` lists each route's `capabilities` (`chat`, `embeddings`).
 - **Anthropic clients**: base URL `http://<host>:4000`, the gateway key as `x-api-key` (or
   `Authorization: Bearer`), model = a route name. A coding agent such as Claude Code needs
   the model it requests mapped to a route name, and a key whose permissions include the

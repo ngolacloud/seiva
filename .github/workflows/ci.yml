@@ -259,6 +259,54 @@ jobs:
       - name: cargo-deny — the excluded lockfile
         run: cargo deny --manifest-path "$MANIFEST" check advisories bans licenses sources
 
+  # The Postgres + pgvector `VectorIndex` of seiva-rag (ADR 0048, G7): the reader's
+  # tenant and permissions in the SQL WHERE before the nearest-neighbour ORDER BY,
+  # transactional document replacement, the HNSW iterative scan under a selective
+  # filter, and the same scores as the in-memory index — proven against a real
+  # `pgvector/pgvector:pg16` service. DORM-free, but it links sqlx and a Postgres
+  # client, so it is EXCLUDED from the workspace like `seiva-data-sqlx`; the live
+  # tests read `SEIVA_PGVECTOR_TEST_DSN` (they skip without it, so the offline
+  # fmt/clippy still pass). Its lockfile is audited here.
+  rag-pgvector:
+    name: rag-pgvector
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seiva_rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MANIFEST: crates/seiva-rag-pgvector/Cargo.toml
+      SEIVA_PGVECTOR_TEST_DSN: "postgres://postgres:postgres@localhost:5432/seiva_rag"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/seiva-rag-pgvector
+      - name: Format
+        run: cargo fmt --manifest-path "$MANIFEST" --all --check
+      - name: Lint
+        run: cargo clippy --manifest-path "$MANIFEST" --all-targets --all-features -- -D warnings
+      - name: Test (live searches against pgvector)
+        # Each live test owns its table, so they run in parallel on one database.
+        run: cargo test --manifest-path "$MANIFEST" --all-features
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo-deny — the excluded lockfile
+        run: cargo deny --manifest-path "$MANIFEST" check advisories bans licenses sources
+
   # The git-coupled crates (the DORM data-layer gateway and its relay/RAG/MCP
   # companions) are EXCLUDED from the workspace, so the jobs above stay DORM-free
   # and need no credentials. This job builds and tests them against the private

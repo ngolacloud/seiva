@@ -25,7 +25,8 @@
 //! - **Routes** — [`Router`], [`Route`], [`Residency`]: checked when built
 //!   (unknown providers, an `in_country` route with an `abroad` upstream, a route
 //!   with no access policy are refused), then retry, per-attempt timeouts and
-//!   fallback at run time.
+//!   fallback at run time. A route serves chat or embeddings ([`RouteKind`]);
+//!   the router is itself an [`Embedder`] whose `model` is an embedding route.
 //! - **Credentials** — [`CredentialSource`] ([`EnvCredentials`] by default) and
 //!   [`Secret`], which never prints its value.
 //! - **Codecs** — [`providers::anthropic::Anthropic`] and
@@ -89,7 +90,7 @@ mod types;
 pub use credentials::{CredentialSource, EnvCredentials, Secret, StaticCredentials};
 pub use error::LlmError;
 pub use model::{replay, ChatModel, ChatProvider, Embedder};
-pub use router::{Residency, Route, RouteHandle, Router, RouterBuilder, Upstream};
+pub use router::{Residency, Route, RouteHandle, RouteKind, Router, RouterBuilder, Upstream};
 /// The retry schedule of each upstream ([`RouterBuilder::retry`]), re-exported
 /// from `seiva-resilience` so a composition root needs no extra dependency.
 pub use seiva_resilience::RetryPolicy;

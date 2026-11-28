@@ -53,6 +53,25 @@ pub trait Guardrail: Send + Sync {
     ) -> Result<Verdict, String> {
         Ok(Verdict::Allow)
     }
+
+    /// Check the texts of an embedding call, after masking. An embedding has no
+    /// answer to check, so this is its only hook.
+    ///
+    /// By default the texts are handed to [`check_input`](Self::check_input) as one
+    /// user message each, so a guardrail written for chat (a size limit, a topic
+    /// classifier) covers embeddings without a change; override it to treat them
+    /// differently.
+    async fn check_embedding_input(
+        &self,
+        ctx: &GuardContext<'_>,
+        inputs: &[String],
+    ) -> Result<Verdict, String> {
+        let mut request = ChatRequest::new(1);
+        for text in inputs {
+            request = request.user(text.clone());
+        }
+        self.check_input(ctx, &request).await
+    }
 }
 
 /// Refuses a request whose text is larger than `max_chars` (system prompt,

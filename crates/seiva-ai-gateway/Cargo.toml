@@ -49,10 +49,18 @@ sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 seiva-testing = { workspace = true, features = ["llm"] }
+# The OpenAI-compatible codec, for the proof that its `Embedder` works against the
+# gateway's `/v1/embeddings` (and as the fake upstream behind it).
+seiva-llm = { version = "0.2.3", path = "../seiva-llm", default-features = false, features = ["openai-compatible"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tower = { version = "0.5", features = ["util"] }
 
 # The server endpoints, request by request.
 [[test]]
 name = "server"
+required-features = ["server"]
+
+# `POST /v1/embeddings`, and seiva-llm's OpenAI-compatible embedder pointed at it.
+[[test]]
+name = "server_embeddings"
 required-features = ["server"]

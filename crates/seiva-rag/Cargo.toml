@@ -4,7 +4,7 @@
 # permissions, applied IN the query, never after it), an ingestor that refuses a
 # document without provenance, a retriever that searches as the caller, and an
 # answer that cites its sources — or says it has none. An in-memory index ships;
-# the DORM/pgvector adapter implements the same port. DORM-free.
+# `seiva-rag-pgvector` implements the same port on Postgres. DORM-free.
 [package]
 name = "seiva-rag"
 version.workspace = true

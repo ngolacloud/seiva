@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ai-gateway"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -1058,7 +1058,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "seiva"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "inventory",
  "seiva-macros",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-ai-gateway"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -1090,11 +1090,11 @@ dependencies = [
 
 [[package]]
 name = "seiva-config"
-version = "0.2.2"
+version = "0.2.3"
 
 [[package]]
 name = "seiva-contract"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "http",
  "seiva-ports",
@@ -1104,14 +1104,14 @@ dependencies = [
 
 [[package]]
 name = "seiva-cqrs"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "seiva-ports",
 ]
 
 [[package]]
 name = "seiva-http"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "metrics",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-identity"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "jsonwebtoken",
  "serde",
@@ -1142,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-llm"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-llm-reqwest"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-macros"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-openapi"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "seiva",
  "serde",
@@ -1184,14 +1184,14 @@ dependencies = [
 
 [[package]]
 name = "seiva-ports"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
 ]
 
 [[package]]
 name = "seiva-resilience"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "thiserror",
  "tokio",
@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-server"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "seiva",
@@ -1213,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-testing"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "seiva-ports",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "seiva-worker"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "seiva-ports",
  "tokio",

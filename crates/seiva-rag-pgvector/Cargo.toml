@@ -1,0 +1,45 @@
+# seiva-rag-pgvector — the Postgres + pgvector `VectorIndex` of `seiva-rag`
+# (ADR 0048, G7).
+#
+# The reader's `AccessFilter` (tenant and permissions) is in the SQL `WHERE`,
+# before `ORDER BY embedding <=> $q LIMIT k`, so the top `k` are counted among the
+# chunks the reader may see and an invisible chunk never leaves the database.
+# `replace_document` is one transaction; provenance columns are `NOT NULL`; the
+# column's dimension is checked; `migrate` creates the extension, the table and an
+# HNSW (or IVFFlat) index.
+#
+# It links sqlx and a Postgres client, so — like `seiva-data-sqlx` — it is
+# EXCLUDED from the default workspace (root `exclude`) and built by its own CI job
+# against a `pgvector/pgvector` service. Nothing in `cargo check --workspace` links
+# it.
+[package]
+name = "seiva-rag-pgvector"
+version = "0.2.3"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["NgolaCloud <angolar.devops@gmail.com>"]
+repository = "https://github.com/ngolacloud/seiva"
+homepage = "https://github.com/ngolacloud/seiva"
+rust-version = "1.75"
+description = "The Postgres + pgvector VectorIndex for seiva-rag: the reader's tenant and permissions in the SQL WHERE before the nearest-neighbour ORDER BY, transactional document replacement, provenance kept."
+readme = "README.md"
+keywords = ["rag", "pgvector", "postgres", "seiva"]
+categories = ["database"]
+
+[dependencies]
+# The port this crate implements. Without `agent`: an index needs no agent tool.
+seiva-rag = { version = "0.2.3", path = "../seiva-rag", default-features = false }
+async-trait = "0.1"
+# The same query layer as `seiva-data-sqlx` (ADR 0030): the runtime query API
+# only, no compile-time macros, so no DATABASE_URL at build time. Vectors travel
+# as `real[]` and are cast to `vector` in SQL: no pgvector client crate needed.
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "postgres",
+] }
+
+[dev-dependencies]
+seiva-identity = { path = "../seiva-identity" }
+seiva-testing = { path = "../seiva-testing", features = ["llm"] }
+seiva-llm = { path = "../seiva-llm", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

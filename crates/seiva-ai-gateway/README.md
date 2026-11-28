@@ -23,6 +23,15 @@ Identify → Authorize → Budget.reserve → Mask → Guard.input
 
 The order is fixed (a correctness invariant, asserted by a test); what each stage does is
 pluggable: `Detector`, `Guardrail`, `BudgetStore`, and the `AuditSink` of `seiva-ports`.
+
+**Embeddings** (G7) take the same path: `Gateway::embed` (or `gateway.embedder(caller)`,
+an `Embedder` for `seiva-rag`) runs Identify → Authorize (permission, the route's kind,
+residency) → Budget → Mask → Guard (in) → model → Settle → Audit. A chat route is not an
+embedding route unless declared for both. Masking follows the chat rule, so the vector is
+the masked text's (a search by a masked identifier's exact value will not find it; embed
+on an `in_country` route with in-country masking off where that matters). The audit
+record (`llm.embed`) keeps counts, the upstream and the dimension — never a text or a
+vector.
 Built-in detectors: the Angolan identity card and NIF, IBANs (mod-97), payment cards
 (Luhn), e-mail, phone numbers, credentials. A gateway is not built without a budget store
 and an audit sink.
@@ -30,8 +39,10 @@ and an audit sink.
 ## The server shape (feature `server`)
 
 `server::router(ServerState)` serves `POST /v1/chat/completions` (OpenAI),
-`POST /v1/messages` and `/v1/messages/count_tokens` (Anthropic) and `GET /v1/models`
-(the routes the caller may use, readable by both clients), whole or streamed. The
+`POST /v1/messages` and `/v1/messages/count_tokens` (Anthropic), `POST /v1/embeddings`
+(OpenAI, vectors as numbers or base64) and `GET /v1/models` (the routes the caller may
+use, readable by both clients, each with its `capabilities`: `chat`, `embeddings`), whole
+or streamed. The
 client's `model` is a route; the client authenticates with a gateway key
 (`Authorization: Bearer` or `x-api-key`) stored only as its SHA-256 (`GatewayKeys`),
 which decides the principal and the area. Errors come back in the client's own shape.

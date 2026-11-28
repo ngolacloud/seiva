@@ -50,6 +50,11 @@ exclude = [
     # excluded and built by its own CI job via `--manifest-path`; the default
     # `cargo check --workspace` stays http-client-free.
     "crates/seiva-llm-reqwest",
+    # The Postgres + pgvector `VectorIndex` of seiva-rag (ADR 0048, G7). DORM-free,
+    # but it links sqlx and a Postgres client, so — like `seiva-data-sqlx` — it is
+    # kept out of the default members (the core build pulls no Postgres client);
+    # its own CI job tests it against a `pgvector/pgvector` service.
+    "crates/seiva-rag-pgvector",
     # The runnable AI gateway (ADR 0048, G3): one TOML file → the OpenAI- and
     # Anthropic-compatible endpoints on seiva-server, model calls over
     # seiva-llm-reqwest. Excluded for the same reason (reqwest + rustls); its own
@@ -155,7 +160,8 @@ members = [
     "crates/seiva-agent",
     # Retrieval with permissions (ADR 0048, G6): an index port whose only search
     # takes the caller's access filter, provenance required at ingestion, answers
-    # that cite their sources. DORM-free; the pgvector adapter implements the port.
+    # that cite their sources. DORM-free; the excluded `seiva-rag-pgvector` implements
+    # the port on Postgres.
     "crates/seiva-rag",
     # Envelope encryption (ADR 0049): the `KeyWrapper` port (KEK in a local file or
     # in Vault transit), a pure `KeyRing` that seals with associated data, the

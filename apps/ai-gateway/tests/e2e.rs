@@ -73,6 +73,18 @@ async fn openai_up(
     Json(json!({"model": "llama", "choices": [{"message": {"content": "local"}, "finish_reason": "stop"}]})).into_response()
 }
 
+async fn embeddings_up(State(seen): State<Seen>, Json(body): Json<Value>) -> Response {
+    seen.lock()
+        .unwrap()
+        .push(("embeddings".into(), String::new(), body.clone()));
+    let n = body["input"].as_array().map_or(1, Vec::len);
+    let data: Vec<Value> = (0..n)
+        .map(|i| json!({"object": "embedding", "index": i, "embedding": [1.0, 0.0, i as f32]}))
+        .collect();
+    Json(json!({"object": "list", "data": data, "usage": {"prompt_tokens": 5 * n, "total_tokens": 5 * n}}))
+        .into_response()
+}
+
 async fn spawn(app: axum::Router) -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -93,6 +105,7 @@ async fn start() -> Running {
         axum::Router::new()
             .route("/v1/messages", post(anthropic_up))
             .route("/local/v1/chat/completions", post(openai_up))
+            .route("/local/v1/embeddings", post(embeddings_up))
             .with_state(seen.clone()),
     )
     .await;
@@ -130,13 +143,20 @@ residency = "in_country"
 public = true
 upstreams = ["local/llama"]
 
+[[routes]]
+name = "docs-embed"
+kind = "embedding"
+residency = "in_country"
+requires = "llm.embed"
+upstreams = ["local/bge-m3"]
+
 [gateway]
 areas_in_country = ["hr"]
 
 [[keys]]
 subject = "support-desk"
 sha256 = "{hash}"
-permissions = ["llm.support"]
+permissions = ["llm.support", "llm.embed"]
 tenant = "acme"
 area = "support"
 "#,
@@ -263,6 +283,57 @@ async fn a_wrong_key_never_reaches_a_provider_and_health_is_served() {
     assert_eq!(ready.status(), 200);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn seiva_llms_embedder_reaches_an_embedding_route_over_real_http() {
+    use seiva_llm::providers::openai::OpenAiCompatible;
+    use seiva_llm::{Embedder, Endpoint};
+    let g = start().await;
+    // The product's embedder: base URL = the gateway, key = a gateway key, model =
+    // the route.
+    let embedder = OpenAiCompatible::new(
+        "gateway",
+        Endpoint::allow_plaintext(&format!("{}/v1", g.gateway)).unwrap(),
+        Arc::new(ReqwestTransport::with_defaults().unwrap()),
+        Arc::new(StaticCredentials::new().with("GATEWAY_KEY", GATEWAY_KEY)),
+    )
+    .with_credential("GATEWAY_KEY");
+    let e = embedder
+        .embed("docs-embed", &[format!("NIF {NIF}"), "estorno".into()])
+        .await
+        .unwrap();
+    assert_eq!(e.vectors, vec![vec![1.0, 0.0, 0.0], vec![1.0, 0.0, 1.0]]);
+    assert_eq!(e.usage.input_tokens, 10);
+    let seen = g.seen.lock().unwrap().clone();
+    let (path, _, body) = &seen[0];
+    assert_eq!(path, "embeddings");
+    assert_eq!(body["model"], "bge-m3");
+    assert_eq!(body["input"], json!(["NIF ‹TAX_ID_1›", "estorno"]));
+    let line = entry_json(&g.audit.entries()[0]).to_string();
+    assert!(line.contains("\"operation\":\"llm.embed\""), "{line}");
+    assert!(!line.contains(NIF), "{line}");
+
+    // The chat route is not an embedding route, and the model list says which is which.
+    let err = embedder.embed("internal", &["a".into()]).await.unwrap_err();
+    assert!(err.to_string().contains("400"), "{err}");
+    let models = client()
+        .get(format!("{}/v1/models", g.gateway))
+        .header("authorization", format!("Bearer {GATEWAY_KEY}"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let models: Value = serde_json::from_str(&models).unwrap();
+    let docs = models["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "docs-embed")
+        .unwrap();
+    assert_eq!(docs["capabilities"], json!(["embeddings"]));
+}
+
 #[test]
 fn a_wrong_configuration_is_refused_with_its_reason() {
     assert!(
@@ -308,4 +379,16 @@ fn a_wrong_configuration_is_refused_with_its_reason() {
     .unwrap_err();
     assert!(err.contains("sha256"), "{err}");
     assert!(try_build(base(&format!("{ok_route}{key}"))).is_ok());
+    // An unknown route kind, and an embedding route over a provider without
+    // embeddings (Anthropic).
+    let kinded = |kind: &str| {
+        ok_route.replace(
+            "public = true",
+            &format!("public = true\nkind = \"{kind}\""),
+        )
+    };
+    let err = try_build(base(&format!("{}{key}", kinded("embeddings")))).unwrap_err();
+    assert!(err.contains("kind must be"), "{err}");
+    let err = try_build(base(&format!("{}{key}", kinded("embedding")))).unwrap_err();
+    assert!(err.contains("has no embeddings"), "{err}");
 }

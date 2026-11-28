@@ -1,9 +1,10 @@
 # Language models
 
-> **Status: phases G1–G3 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** The
-> model port, routes and provider codecs ship in `seiva-llm`; the gateway stages
+> **Status: phases G1–G3 and G7 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).**
+> The model port, routes and provider codecs ship in `seiva-llm`; the gateway stages
 > (identity, budget, masking, guardrails, audit) in `seiva-ai-gateway`, in-process or
-> behind OpenAI- and Anthropic-compatible endpoints (the `apps/ai-gateway` binary).
+> behind OpenAI- and Anthropic-compatible endpoints (the `apps/ai-gateway` binary), for
+> chat and for embeddings.
 
 A use case that needs a model depends on a **route**, never on a provider. The route
 says which upstreams may serve it, in fallback order, and where the data may go.
@@ -32,6 +33,34 @@ let router = Router::builder()
 - a route with neither `.requires("permission")` nor `.public()` — the same fail-closed
   rule as a facade method without `#[requires]` ([ADR 0019](../adr/0019-fail-closed-authorization.md));
 - an unknown provider, a route with no upstream, a name used twice.
+
+## Embedding routes
+
+A route serves one kind of call: chat by default, or embeddings. A chat route never
+answers an embedding call, nor the other way round, unless it was declared for both.
+
+```rust
+use seiva_llm::{Residency, Route, RouteKind, Router};
+
+let router = Router::builder()
+    .provider(openai.clone(), Residency::Abroad)
+    .embedder("openai", openai, Residency::Abroad)      // the same provider, its embeddings side
+    .embedder("local", local_embedder, Residency::InCountry)
+    .route(
+        Route::new("docs-embed", Residency::InCountry)
+            .with_kind(RouteKind::Embedding)             // or RouteKind::ChatAndEmbedding
+            .requires("llm.embed")
+            .upstream("local", "bge-m3"),
+    )
+    .build()?;
+
+let vectors = router.embed("docs-embed", &texts).await?;
+```
+
+An embedding route's upstreams must be registered with `.embedder(..)` (`build()` says so
+otherwise), and the residency rule is the same. The router is itself an `Embedder` whose
+`model` is the route, so an ingestor holds the router and names the route. For calls made
+on behalf of people, embed through the gateway instead (below).
 
 ## Calling a model
 
@@ -122,6 +151,33 @@ it does not make a prompt anonymous. On an `abroad` route it always runs.
 `stream(..)` holds text back by up to 256 characters so a credential is caught before it
 reaches the caller, and never releases half a placeholder.
 
+### Embeddings through the gateway
+
+```rust
+let gated = gateway.embed(&caller, "docs-embed", texts).await?;
+let embedder = gateway.embedder(caller);   // an `Embedder` for seiva-rag, in-process
+```
+
+An embedding call goes through the same stages, minus the two that have nothing to work
+on: Identify → Authorize (the route's permission, its **kind**, the caller's residency) →
+Budget → Mask → Guard (in) → model → Settle → Audit. A vector carries no text, so there is
+no output guard and nothing to unmask; the answer is checked instead (one vector per
+input, one dimension, finite numbers).
+
+- **Masking changes the vector.** It runs under the chat rule — always on an `abroad`
+  route, on an `in_country` route unless `mask_in_country(false)` — so the model embeds
+  `O NIF ‹TAX_ID_1›`, not the number, and a search for the exact value of a masked
+  identifier will not find it. That is the price of not sending the value abroad. Where
+  exact identifiers must be searchable, embed on an `in_country` route with in-country
+  masking off. A credential is refused either way.
+- **Guardrails** get `check_embedding_input(texts)`; by default it hands the texts to
+  `check_input` as user messages, so a chat guardrail (a `SizeLimit`) covers embeddings
+  unchanged.
+- **Budget**: the texts' size (characters ÷ 4) is held; the provider's input tokens are
+  settled — the estimate when the provider reports none.
+- **Audit**: one `llm.embed` record — number of texts, upstream, dimension, masked counts;
+  never a text or a vector.
+
 ## The gateway as a server
 
 The same gateway serves OpenAI- and Anthropic-compatible endpoints (`seiva-ai-gateway`,
@@ -133,12 +189,20 @@ file declares providers, routes, the gateway keys (only their SHA-256) and the b
 |---|---|
 | `POST /v1/chat/completions` | OpenAI clients, whole or streamed |
 | `POST /v1/messages`, `/v1/messages/count_tokens` | Anthropic clients, whole or streamed |
-| `GET /v1/models` | the routes this caller may use |
+| `POST /v1/embeddings` | OpenAI embedding clients (`input` a string or strings; vectors as numbers, or base64 when asked) |
+| `GET /v1/models` | the routes this caller may use, each with its `capabilities`: `chat`, `embeddings` |
 
 The client sends a **route** as `model` and a **gateway key** — never a provider key — as
 `Authorization: Bearer` or `x-api-key`; the key decides who the caller is and in which
 area. Provider keys stay in the gateway's environment. A coding agent (Claude Code, an
 IDE) offers the tools it runs itself: give its key the gateway's `any_tool` permission.
+
+In the TOML file a route says `kind = "embedding"` (or `"chat+embedding"`); OpenAI,
+Gemini and OpenAI-compatible providers serve both kinds, Anthropic only chat. Any OpenAI
+embeddings client works against `/v1/embeddings` — `seiva-llm`'s own
+`OpenAiCompatible` embedder included: base URL the gateway, credential a gateway key,
+model a route. Token arrays as `input` are refused (the gateway masks text), and so is
+`dimensions` (the route decides the model).
 
 ## Testing
 

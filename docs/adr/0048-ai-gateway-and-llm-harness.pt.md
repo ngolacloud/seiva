@@ -288,8 +288,9 @@ companheira para agentes que planeiam e usam ferramentas.
   OWASP: G1 `seiva-llm` + adaptadores + modelo falso; G2 as etapas do gateway
   in-process; G3 a forma servidor (compatível com OpenAI e Anthropic); G4 `#[tool]`,
   `seiva-mcp-server`, identidade em nome da pessoa e aprovação das escritas;
-  G5 `seiva-agent` e o cliente MCP; G6 recuperação com permissões e citações. Até à
-  G4, um agente só usa ferramentas locais.
+  G5 `seiva-agent` e o cliente MCP; G6 recuperação com permissões e citações; G7
+  embeddings pelo gateway e o índice pgvector. Até à G4, um agente só usa ferramentas
+  locais.
 - **Imposição.** Cada linha da tabela OWASP é um teste no crate que fecha o risco; uma
   fitness function que verifica que cada adaptador do `seiva-llm` liga pelo cliente de
   egress; uma verificação de que uma facade com `#[tool]` declara o `effect`; a ordem
@@ -311,6 +312,35 @@ companheira para agentes que planeiam e usam ferramentas.
   memória, e o adaptador DORM/pgvector (`seiva-rag-worker`) vai implementar o mesmo port. As
   chamadas de embeddings ainda não passam pelas etapas do gateway: até lá, o guia recomenda
   um modelo de embeddings no país para dados pessoais.
+- **G7 (2026-11-28).** Os embeddings passam pelo gateway. Uma rota declara o seu tipo —
+  `chat` por omissão, `embedding`, ou os dois só quando a configuração o diz — e uma
+  chamada do outro tipo é recusada no Authorize; os upstreams de uma rota de embeddings são
+  fornecedores registados como `Embedder`, com a mesma regra de residência. O
+  `Gateway::embed` in-process e o `POST /v1/embeddings` no servidor (forma OpenAI, vectores
+  em números ou em base64) correm Identify → Authorize (permissão, tipo, residência) →
+  Budget.reserve → Mask → Guard.input → modelo → Budget.settle → Audit, cada etapa a falhar
+  fechada. **O mascaramento segue a regra do chat** (sempre numa rota `abroad`, numa
+  `in_country` salvo se a instalação o desligar), por isso o vector é o do texto
+  mascarado: uma pesquisa pelo valor exacto de um identificador mascarado não o encontra —
+  é o preço de não enviar o valor. Uma instalação que precise de identificadores exactos
+  nos vectores faz os embeddings numa rota `in_country` com o mascaramento no país
+  desligado; uma credencial é recusada em qualquer caso. Não há guarda de saída nem nada a
+  desmascarar (um vector não leva texto); em vez disso verifica-se a forma da resposta. O
+  orçamento reserva o tamanho dos textos e liquida os tokens de entrada do fornecedor (a
+  estimativa quando ele não os indica); o registo de auditoria `llm.embed` leva contagens,
+  o upstream e a dimensão, nunca um texto nem um vector. O `GET /v1/models` dá a cada rota
+  as suas `capabilities` (`chat`, `embeddings`), e o gateway é também um `Embedder` para
+  quem chama, por isso o `Ingestor` e o `Retriever` fazem embeddings através dele
+  in-process tal como o embedder compatível com OpenAI do `seiva-llm` faz contra o
+  servidor. O índice pgvector é o novo crate `seiva-rag-pgvector` (sqlx, o cliente do
+  adaptador `seiva-data-sqlx`; fora dos membros por omissão, com o seu próprio job de CI
+  contra `pgvector/pgvector:pg16`): o filtro de acesso está no `WHERE` antes do
+  `ORDER BY embedding <=> $q LIMIT k`, com as pesquisas iterativas de índice do pgvector
+  ligadas (pgvector ≥ 0.8) para que um filtro selectivo continue a encher os `k` pelo
+  HNSW; a pontuação de um resultado é o `seiva_rag::cosine` do vector guardado — a função
+  do índice em memória — e o `replace_document` é uma só transacção sob um advisory lock
+  no documento. O worker DORM (`seiva-rag-worker`) pode implementar o mesmo port mais
+  tarde.
 
 ## Relacionadas
 

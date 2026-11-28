@@ -399,12 +399,18 @@ pub struct Embeddings {
     pub vectors: Vec<Vec<f32>>,
     /// What it cost.
     pub usage: Usage,
+    /// `provider/model` that answered, stamped by the [`Router`](crate::Router).
+    pub upstream: Option<String>,
 }
 
 impl Embeddings {
     /// Embeddings with their usage.
     pub fn new(vectors: Vec<Vec<f32>>, usage: Usage) -> Self {
-        Self { vectors, usage }
+        Self {
+            vectors,
+            usage,
+            upstream: None,
+        }
     }
 }
 

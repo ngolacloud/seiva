@@ -277,8 +277,8 @@ the companion list for agents that plan and use tools.
   G1 `seiva-llm` + adapters + fake model; G2 the in-process gateway stages;
   G3 the server shape (OpenAI- and Anthropic-compatible); G4 `#[tool]`,
   `seiva-mcp-server`, on-behalf-of and write approval; G5 `seiva-agent` and the
-  MCP client; G6 permission-aware retrieval and citations. Until G4, an agent can
-  only use local tools.
+  MCP client; G6 permission-aware retrieval and citations; G7 embeddings through
+  the gateway and the pgvector index. Until G4, an agent can only use local tools.
 - **Enforcement.** Each row of the OWASP table is a test in the crate that closes
   it; a fitness check that every `seiva-llm` adapter dials through the egress
   client; a check that a facade with `#[tool]` declares `effect`; the gateway's
@@ -298,6 +298,32 @@ the companion list for agents that plan and use tools.
   index ships, and the DORM/pgvector adapter (`seiva-rag-worker`) is to implement the same
   port. Embedding calls do not go through the gateway stages yet: the guide recommends an
   in-country embedder for personal data until they do.
+- **G7 (2026-11-28).** Embeddings go through the gateway. A route declares its kind —
+  `chat` by default, `embedding`, or both only when its configuration says so — and a call
+  of the other kind is refused at Authorize; an embedding route's upstreams are providers
+  registered as `Embedder`s, under the same residency rule. `Gateway::embed` in-process and
+  `POST /v1/embeddings` on the server (OpenAI shape, vectors as numbers or base64) run
+  Identify → Authorize (permission, kind, residency) → Budget.reserve → Mask → Guard.input →
+  model → Budget.settle → Audit, each failing closed. **Masking follows the chat rule**
+  (always on an `abroad` route, on an `in_country` one unless the deployment turns it off),
+  so the vector is the masked text's: a search by the exact value of a masked identifier
+  does not find it — the price of not sending the value. A deployment that needs exact
+  identifiers in its vectors embeds on an `in_country` route with in-country masking off;
+  a credential is refused either way. There is no output guard and nothing to unmask (a
+  vector carries no text); the answer is checked for shape instead. The budget holds the
+  texts' size and settles the provider's input tokens (the estimate when it reports none);
+  the `llm.embed` audit record carries counts, the upstream and the dimension, never a
+  text or a vector. `GET /v1/models` gives each route its `capabilities` (`chat`,
+  `embeddings`), and the gateway is also an `Embedder` for one caller, so the `Ingestor`
+  and the `Retriever` embed through it in-process exactly as `seiva-llm`'s
+  OpenAI-compatible embedder does against the server. The pgvector index is the new
+  `seiva-rag-pgvector` crate (sqlx, the client of the `seiva-data-sqlx` adapter; out of the
+  default members, with its own CI job against `pgvector/pgvector:pg16`): the access filter
+  is in the `WHERE` before `ORDER BY embedding <=> $q LIMIT k`, with pgvector's iterative
+  index scans turned on (pgvector ≥ 0.8) so a selective filter still fills `k` through
+  HNSW; a hit's score is `seiva_rag::cosine` of the stored vector — the in-memory index's
+  function — and `replace_document` is one transaction under an advisory lock on the
+  document. The DORM worker (`seiva-rag-worker`) may implement the same port later.
 
 ## Related
 

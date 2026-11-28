@@ -8,6 +8,34 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ## [Unreleased]
 
+### Added
+
+- **Embeddings through the gateway and RAG on Postgres** (ADR 0048, phase G7). Routes
+  have a kind (`seiva_llm::RouteKind`: chat by default, embedding, or both only when
+  declared); `RouterBuilder::embedder` registers an embedding provider and
+  `Router::embed` serves an embedding route with the same residency rule, retry and
+  fallback — the router is itself an `Embedder` whose model is the route.
+  `seiva-ai-gateway` adds `Gateway::embed` and `Gateway::embedder(caller)` (an `Embedder`
+  for `seiva-rag`): Identify → Authorize (permission, route kind, residency) → Budget →
+  Mask → Guard (in) → model → Settle → Audit, failing closed. Masking follows the chat
+  rule, so vectors are of the masked text; the budget settles the provider's input tokens;
+  the `llm.embed` audit record has counts, upstream and dimension, never content.
+  `Guardrail::check_embedding_input` (defaulting to `check_input`). The server serves
+  `POST /v1/embeddings` (OpenAI shape, float or base64), and `GET /v1/models` lists each
+  route's `capabilities`. `apps/ai-gateway` reads `kind` on a route and registers the
+  OpenAI-compatible providers as embedders. The new, excluded `seiva-rag-pgvector` crate
+  implements `VectorIndex` on Postgres + pgvector with sqlx: the access filter in the SQL
+  `WHERE` before `ORDER BY embedding <=> $q LIMIT k` (iterative HNSW/IVFFlat scans so a
+  selective filter still fills `k`), transactional `replace_document`, provenance columns,
+  dimension checks, `migrate` (extension, table, HNSW or IVFFlat index), and the same
+  cosine scores as `InMemoryIndex`; its own CI job runs against `pgvector/pgvector:pg16`.
+
+### Changed
+
+- `seiva_llm::Embeddings` carries the `upstream` that answered (stamped by the router).
+  `seiva_ai_gateway::GatewayError` gains `WrongRouteKind` and `http_status()`;
+  `seiva_llm::LlmError` gains `WrongRouteKind`.
+
 ## [0.2.3] - 2026-11-28
 
 Published on crates.io — every framework crate at 0.2.3. New crates on crates.io
