@@ -170,7 +170,7 @@ the `seiva-server` runtime, the scaffolder, and two reference modules (`notes`,
 `accounts`). Persistence through DORM is wired behind the `dorm` feature and
 activates once the private-repo CI token is configured.
 
-The library crates are **published on crates.io** (v0.1.0) under a dual
+The library crates are **published on crates.io** (v0.2.3) under a dual
 MIT/Apache licence. This is an early release: the API may still change before
 1.0, and the ecosystem is nascent — feedback and contributions are welcome (see
 [CONTRIBUTING.md](CONTRIBUTING.md)).

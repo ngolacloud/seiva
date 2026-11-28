@@ -10,7 +10,7 @@
 # async-trait — `impl Future` carries the asynchrony.
 [package]
 name = "seiva-cqrs"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ngolacloud/seiva"
@@ -20,7 +20,7 @@ description = "Application-layer CQRS dispatch for Delonix Seiva: a statically-w
 [dependencies]
 # The single dependency: the result/error boundary (`PortResult`, `BoxError`).
 # No runtime, no framework, no data layer rides in through this.
-seiva-ports = { version = "0.2.2", path = "../seiva-ports" }
+seiva-ports = { version = "0.2.3", path = "../seiva-ports" }
 
 [dev-dependencies]
 # The tests drive async handlers on a current-thread runtime. A dev-dependency
@@ -29,4 +29,4 @@ tokio = { version = "1", features = ["rt", "macros"] }
 # The in-memory port doubles (`InMemoryUnitOfWork`, …) back the behavior tests.
 # Dev-only, and no dependency cycle: `seiva-testing` depends on `seiva-ports`,
 # never on `seiva-cqrs`.
-seiva-testing = { version = "0.2.2", path = "../seiva-testing" }
+seiva-testing = { version = "0.2.3", path = "../seiva-testing" }

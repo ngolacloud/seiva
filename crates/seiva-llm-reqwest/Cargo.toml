@@ -7,7 +7,7 @@
 # `--manifest-path`. Nothing in the default `cargo check --workspace` links it.
 [package]
 name = "seiva-llm-reqwest"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["NgolaCloud <angolar.devops@gmail.com>"]
@@ -21,7 +21,7 @@ categories = ["api-bindings", "web-programming::http-client"]
 
 [dependencies]
 # The port this crate implements.
-seiva-llm = { version = "0.2.2", path = "../seiva-llm" }
+seiva-llm = { version = "0.2.3", path = "../seiva-llm" }
 # `default-features = false` + `rustls-tls` keeps it off native-tls/OpenSSL; the
 # `stream` feature gives the body as it arrives, for server-sent events.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
