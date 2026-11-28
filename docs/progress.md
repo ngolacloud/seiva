@@ -21,6 +21,21 @@ sem elas, 0 linhas), `replace_document` numa transacção com advisory lock, pro
 dimensão, `migrate`, as mesmas pontuações do `InMemoryIndex`. **Falta:** o worker DORM
 (`seiva-rag-worker`) a implementar o mesmo port.
 
+## Estado (2026-11-27) — ADR 0049: cifra por envelope (`seiva-kms`)
+
+Crate novo `seiva-kms` (membro, sem DORM), extraído do dxstorage (F8 `4e23bc7`, F11
+`fb98cf6`) para o cofre do Device Sentinel (fatia V0a): o porto `KeyWrapper` com `KmsError`
+próprio; o `KeyRing` puro que sela `sv1:<id>:<base64>` com XChaCha20-Poly1305 e dados
+associados (`Aad::new(org, propósito, registo)`) e só abre o `kms1:` do dxstorage por uma
+chamada explícita (`open_kms1`); o `WrappedRing` validado na leitura (falha fechada) e legível
+a partir do anel do dxstorage; os portos `RingStore` (compare-and-swap) e `Reseal`; o
+`RingKeeper` (criar, desembrulhar, re-embrulhar após rotação da KEK, `boot` com prazo,
+`rotate`, `retire`). Adaptadores: `local` (por omissão; ficheiro com uma chave por linha) e
+`vault` (opt-in; transit com token, AppRole e Kubernetes, CA própria, `wait_ready`). Job de CI
+novo `kms-vault` contra um contentor `hashicorp/vault`. **Falta:** AWS/GCP/Azure (V2, portados
+do dxstorage); auth Kubernetes e Vault com CA privada testados só até à configuração; o
+Sentinel subir o Seiva (V0b) e o dxstorage adoptar o crate depois da sua F15.
+
 ## Estado (2026-11-27) — ADR 0048 G6: recuperação com permissões e citações (`seiva-rag`)
 
 Crate novo `seiva-rag` (membro, sem DORM): o port `VectorIndex` com uma só pesquisa, que
