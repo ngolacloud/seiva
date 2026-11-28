@@ -22,9 +22,9 @@ categories = ["web-programming::http-server", "asynchronous"]
 
 [dependencies]
 seiva = { workspace = true }
-seiva-contract = { path = "../seiva-contract", version = "0.2.2" }
-seiva-http = { path = "../seiva-http", version = "0.2.2" }
-seiva-identity = { path = "../seiva-identity", version = "0.2.2" }
+seiva-contract = { path = "../seiva-contract", version = "0.2.3" }
+seiva-http = { path = "../seiva-http", version = "0.2.3" }
+seiva-identity = { path = "../seiva-identity", version = "0.2.3" }
 seiva-ports = { workspace = true }
 axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"] }
 serde = { workspace = true }
