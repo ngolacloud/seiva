@@ -4,6 +4,23 @@
 > este ficheiro. O lado DORM da campanha tem o seu tracker em
 > `../DORM/docs/progress-dorm-seiva.md`.
 
+## Estado (2026-11-28) — ADR 0048 G7: embeddings pelo gateway e RAG em Postgres (`seiva-rag-pgvector`)
+
+As rotas têm tipo (`RouteKind`: chat por omissão, embedding, ou os dois só quando declarado);
+`RouterBuilder::embedder` + `Router::embed` (mesma residência, retry e fallback; o router é um
+`Embedder` cujo modelo é a rota). O gateway ganha `Gateway::embed`/`Gateway::embedder(caller)`
+com as mesmas etapas (Identify → Authorize com o tipo da rota → Budget → Mask → Guard (entrada)
+→ modelo → Settle → Audit `llm.embed`, sem conteúdo); o mascaramento segue a regra do chat
+(vectores do texto mascarado). O servidor serve `POST /v1/embeddings` (forma OpenAI, float ou
+base64) e o `/v1/models` dá as `capabilities` de cada rota; a app lê `kind` nas rotas. O
+`OpenAiCompatible` do `seiva-llm` apontado ao gateway funciona ponta a ponta (in-process e por
+HTTP real). Crate novo `seiva-rag-pgvector` (excluído, sqlx, job de CI com
+`pgvector/pgvector:pg16`): o filtro no `WHERE` antes do `ORDER BY embedding <=> $q LIMIT k`,
+pesquisas iterativas HNSW/IVFFlat (um filtro selectivo continua a encher os `k` — provado:
+sem elas, 0 linhas), `replace_document` numa transacção com advisory lock, proveniência,
+dimensão, `migrate`, as mesmas pontuações do `InMemoryIndex`. **Falta:** o worker DORM
+(`seiva-rag-worker`) a implementar o mesmo port.
+
 ## Estado (2026-11-27) — ADR 0048 G6: recuperação com permissões e citações (`seiva-rag`)
 
 Crate novo `seiva-rag` (membro, sem DORM): o port `VectorIndex` com uma só pesquisa, que

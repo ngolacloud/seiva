@@ -1,10 +1,10 @@
 # Modelos de linguagem
 
-> **Estado: fases G1–G3 do [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** O port
-> do modelo, as rotas e os codecs dos fornecedores estão no `seiva-llm`; as etapas do gateway
-> (identidade, orçamento, mascaramento, guardrails, auditoria) no `seiva-ai-gateway`,
-> in-process ou atrás de endpoints compatíveis com OpenAI e Anthropic (o binário
-> `apps/ai-gateway`).
+> **Estado: fases G1–G3 e G7 do [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md).** O
+> port do modelo, as rotas e os codecs dos fornecedores estão no `seiva-llm`; as etapas do
+> gateway (identidade, orçamento, mascaramento, guardrails, auditoria) no
+> `seiva-ai-gateway`, in-process ou atrás de endpoints compatíveis com OpenAI e Anthropic (o
+> binário `apps/ai-gateway`), para chat e para embeddings.
 
 Um caso de uso que precisa de um modelo depende de uma **rota**, nunca de um fornecedor. A
 rota diz que upstreams a podem servir, por ordem de fallback, e para onde os dados podem ir.
@@ -33,6 +33,34 @@ O `build()` recusa uma tabela errada em vez de falhar na altura do pedido:
 - uma rota sem `.requires("permission")` nem `.public()` — a mesma regra fail-closed de um
   método de facade sem `#[requires]` ([ADR 0019](../adr/0019-fail-closed-authorization.md));
 - um fornecedor desconhecido, uma rota sem upstream, um nome repetido.
+
+## Rotas de embeddings
+
+Uma rota serve um tipo de chamada: chat por omissão, ou embeddings. Uma rota de chat nunca
+responde a uma chamada de embeddings, nem o contrário, salvo se foi declarada para os dois.
+
+```rust
+use seiva_llm::{Residency, Route, RouteKind, Router};
+
+let router = Router::builder()
+    .provider(openai.clone(), Residency::Abroad)
+    .embedder("openai", openai, Residency::Abroad)      // o mesmo fornecedor, o lado dos embeddings
+    .embedder("local", local_embedder, Residency::InCountry)
+    .route(
+        Route::new("docs-embed", Residency::InCountry)
+            .with_kind(RouteKind::Embedding)             // ou RouteKind::ChatAndEmbedding
+            .requires("llm.embed")
+            .upstream("local", "bge-m3"),
+    )
+    .build()?;
+
+let vectors = router.embed("docs-embed", &texts).await?;
+```
+
+Os upstreams de uma rota de embeddings têm de estar registados com `.embedder(..)` (senão o
+`build()` di-lo), e a regra de residência é a mesma. O próprio router é um `Embedder` cujo
+`model` é a rota, por isso um ingestor guarda o router e nomeia a rota. Para chamadas feitas
+em nome de pessoas, faz os embeddings pelo gateway (abaixo).
 
 ## Chamar um modelo
 
@@ -124,6 +152,34 @@ rota `abroad` corre sempre.
 O `stream(..)` retém o texto até 256 caracteres para apanhar uma credencial antes de ela
 chegar ao chamador, e nunca liberta meio marcador.
 
+### Embeddings pelo gateway
+
+```rust
+let gated = gateway.embed(&caller, "docs-embed", texts).await?;
+let embedder = gateway.embedder(caller);   // um `Embedder` para o seiva-rag, in-process
+```
+
+Uma chamada de embeddings passa pelas mesmas etapas, menos as duas que não têm sobre que
+trabalhar: Identify → Authorize (a permissão da rota, o seu **tipo**, a residência de quem
+chama) → Budget → Mask → Guard (entrada) → modelo → Settle → Audit. Um vector não leva
+texto, por isso não há guarda de saída nem nada a desmascarar; em vez disso verifica-se a
+resposta (um vector por texto, uma só dimensão, números finitos).
+
+- **O mascaramento muda o vector.** Corre com a regra do chat — sempre numa rota
+  `abroad`, numa rota `in_country` salvo `mask_in_country(false)` —, por isso o modelo faz o
+  embedding de `O NIF ‹TAX_ID_1›`, não do número, e uma pesquisa pelo valor exacto de um
+  identificador mascarado não o encontra. É o preço de não enviar o valor para fora. Onde
+  os identificadores exactos tenham de ser pesquisáveis, faz os embeddings numa rota
+  `in_country` com o mascaramento no país desligado. Uma credencial é recusada em qualquer
+  caso.
+- **Os guardrails** recebem `check_embedding_input(texts)`; por omissão passa os textos ao
+  `check_input` como mensagens do utilizador, por isso um guardrail de chat (um `SizeLimit`)
+  cobre os embeddings sem mudar.
+- **Orçamento**: reserva-se o tamanho dos textos (caracteres ÷ 4) e liquidam-se os tokens
+  de entrada do fornecedor — a estimativa quando ele não os indica.
+- **Auditoria**: um registo `llm.embed` — número de textos, upstream, dimensão, contagens
+  mascaradas; nunca um texto nem um vector.
+
 ## O gateway como servidor
 
 O mesmo gateway serve endpoints compatíveis com OpenAI e Anthropic (`seiva-ai-gateway`,
@@ -136,13 +192,21 @@ apontam o seu URL base para ele e herdam todas as etapas. O binário é a app
 |---|---|
 | `POST /v1/chat/completions` | clientes OpenAI, resposta inteira ou em stream |
 | `POST /v1/messages`, `/v1/messages/count_tokens` | clientes Anthropic, inteira ou em stream |
-| `GET /v1/models` | as rotas que este chamador pode usar |
+| `POST /v1/embeddings` | clientes de embeddings OpenAI (`input` um texto ou vários; vectores em números, ou em base64 quando pedido) |
+| `GET /v1/models` | as rotas que este chamador pode usar, cada uma com as suas `capabilities`: `chat`, `embeddings` |
 
 O cliente envia uma **rota** como `model` e uma **chave do gateway** — nunca a de um
 fornecedor — como `Authorization: Bearer` ou `x-api-key`; a chave diz quem é o chamador e
 de que área. As chaves dos fornecedores ficam no ambiente do gateway. Um agente de
 programação (Claude Code, um IDE) oferece as ferramentas que ele próprio corre: dá à sua
 chave a permissão `any_tool` do gateway.
+
+No ficheiro TOML, uma rota diz `kind = "embedding"` (ou `"chat+embedding"`); os
+fornecedores OpenAI, Gemini e compatíveis com OpenAI servem os dois tipos, o Anthropic só
+chat. Qualquer cliente de embeddings OpenAI funciona contra `/v1/embeddings` — incluindo o
+embedder `OpenAiCompatible` do próprio `seiva-llm`: URL base o gateway, credencial uma chave
+do gateway, modelo uma rota. Um `input` em arrays de tokens é recusado (o gateway mascara
+texto), tal como o `dimensions` (a rota decide o modelo).
 
 ## Testes
 

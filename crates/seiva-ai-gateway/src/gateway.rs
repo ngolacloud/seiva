@@ -14,11 +14,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use futures_util::StreamExt;
 use seiva_identity::Principal;
 use seiva_llm::{
-    ChatRequest, ChatResponse, Content, EventStream, LlmError, Residency, Router, StreamEvent,
-    Usage,
+    ChatRequest, ChatResponse, Content, Embedder, Embeddings, EventStream, LlmError, Residency,
+    Route, RouteKind, Router, StreamEvent, Usage,
 };
 use seiva_ports::{AuditEntry, AuditSink};
 use tracing::Instrument;
@@ -153,6 +154,44 @@ pub struct Gated {
     pub response: ChatResponse,
     /// What happened.
     pub report: CallReport,
+}
+
+/// Gated vectors.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct GatedEmbeddings {
+    /// One vector per input, in order, with the provider's usage and upstream.
+    pub embeddings: Embeddings,
+    /// What happened.
+    pub report: CallReport,
+}
+
+/// The gateway as an [`Embedder`] for one caller: `model` is an embedding route,
+/// and every call goes through [`Gateway::embed`]. What an ingestor or a retriever
+/// holds when it runs in the same process as the gateway.
+///
+/// A refusal becomes [`LlmError::Status`] with the server shape's status
+/// ([`GatewayError::http_status`]), so the in-process and the remote gateway look
+/// the same to the code that embeds.
+#[derive(Clone)]
+pub struct GatewayEmbedder {
+    gateway: Gateway,
+    caller: Caller,
+}
+
+#[async_trait]
+impl Embedder for GatewayEmbedder {
+    async fn embed(&self, model: &str, inputs: &[String]) -> Result<Embeddings, LlmError> {
+        match self
+            .gateway
+            .embed(&self.caller, model, inputs.to_vec())
+            .await
+        {
+            Ok(gated) => Ok(gated.embeddings),
+            Err(GatewayError::Model(e)) => Err(e),
+            Err(e) => Err(LlmError::status(e.http_status(), e.to_string())),
+        }
+    }
 }
 
 /// The gateway could not be built.
@@ -374,6 +413,15 @@ impl Gateway {
     /// (or public ones), minus `abroad` routes for an area that keeps its data in
     /// the country. Sorted by name.
     pub fn routes_for(&self, caller: &Caller) -> Vec<String> {
+        self.routes_available_to(caller)
+            .into_iter()
+            .map(|r| r.name().to_owned())
+            .collect()
+    }
+
+    /// The same routes as [`routes_for`](Self::routes_for), whole — with their
+    /// [`RouteKind`], so a listing can tell chat routes from embedding routes.
+    pub fn routes_available_to(&self, caller: &Caller) -> Vec<Route> {
         let in_country_only = caller
             .area
             .as_ref()
@@ -384,8 +432,16 @@ impl Gateway {
             .into_iter()
             .filter(|r| r.permission().map_or(true, |p| caller.principal.has(p)))
             .filter(|r| !(in_country_only && r.residency() == Residency::Abroad))
-            .map(|r| r.name().to_owned())
+            .cloned()
             .collect()
+    }
+
+    /// This gateway as an [`Embedder`] that calls as `caller`.
+    pub fn embedder(&self, caller: Caller) -> GatewayEmbedder {
+        GatewayEmbedder {
+            gateway: self.clone(),
+            caller,
+        }
     }
 
     /// A whole answer from `route`, through every stage.
@@ -491,33 +547,9 @@ impl Gateway {
         let inner = &self.inner;
         let principal = &caller.principal;
 
-        // Identify.
-        if principal.subject.is_empty() {
-            return Err(GatewayError::Unauthenticated);
-        }
-        report.stages.push(Stage::Identify);
-
-        // Authorize: the route, the caller's residency, every tool offered.
-        let info = inner
-            .router
-            .route_info(route)
-            .ok_or_else(|| GatewayError::Model(LlmError::UnknownRoute(route.to_owned())))?;
-        if let Some(permission) = info.permission() {
-            if !principal.has(permission) {
-                return Err(GatewayError::Forbidden {
-                    route: route.to_owned(),
-                    permission: permission.to_owned(),
-                });
-            }
-        }
-        if let Some(area) = &caller.area {
-            if inner.in_country_areas.contains(area) && info.residency() == Residency::Abroad {
-                return Err(GatewayError::Residency {
-                    route: route.to_owned(),
-                    area: area.clone(),
-                });
-            }
-        }
+        // Identify, then Authorize: the route, its kind, the caller's residency…
+        let info = self.admit(caller, route, RouteKind::Chat, report)?;
+        // …and every tool offered.
         for tool in &request.tools {
             match inner.tools.get(&tool.name).or(inner.any_tool.as_ref()) {
                 Some(p) if principal.has(p) => {}
@@ -532,27 +564,13 @@ impl Gateway {
         report.stages.push(Stage::Authorize);
 
         // Budget: hold the estimate in every budget of this caller.
-        let mut keys = vec![BudgetKey::new(
-            BudgetScope::Principal,
-            principal.subject.clone(),
-        )];
-        if let Some(t) = &principal.tenant {
-            keys.push(BudgetKey::new(BudgetScope::Tenant, t.clone()));
-        }
-        if let Some(a) = &caller.area {
-            keys.push(BudgetKey::new(BudgetScope::Area, a.clone()));
-        }
+        let keys = budget_keys(caller);
         let estimate = (request_chars(request) as u64) / 4 + 1 + u64::from(request.max_tokens);
         let reservation = inner
             .budget
             .reserve(&keys, estimate)
             .await
-            .map_err(|e| match e {
-                BudgetError::Exceeded(key) => GatewayError::BudgetExceeded {
-                    scope: key.to_string(),
-                },
-                BudgetError::Unavailable(m) => GatewayError::BudgetUnavailable(m),
-            })?;
+            .map_err(budget_refusal)?;
         report.reserved = estimate;
         report.stages.push(Stage::BudgetReserve);
 
@@ -610,6 +628,58 @@ impl Gateway {
             vault,
             reservation,
         })
+    }
+
+    /// Identify the caller, then the shared part of Authorize: the route exists,
+    /// the caller holds its permission, it serves `wanted`, and the caller's area
+    /// may send data where it goes. Pushes [`Stage::Identify`] only — the caller
+    /// pushes [`Stage::Authorize`] when its own checks are done.
+    fn admit(
+        &self,
+        caller: &Caller,
+        route: &str,
+        wanted: RouteKind,
+        report: &mut CallReport,
+    ) -> Result<&Route, GatewayError> {
+        let principal = &caller.principal;
+        if principal.subject.is_empty() {
+            return Err(GatewayError::Unauthenticated);
+        }
+        report.stages.push(Stage::Identify);
+        let info = self
+            .inner
+            .router
+            .route_info(route)
+            .ok_or_else(|| GatewayError::Model(LlmError::UnknownRoute(route.to_owned())))?;
+        if let Some(permission) = info.permission() {
+            if !principal.has(permission) {
+                return Err(GatewayError::Forbidden {
+                    route: route.to_owned(),
+                    permission: permission.to_owned(),
+                });
+            }
+        }
+        // After the permission, so a caller who may not use the route learns
+        // nothing about it.
+        let serves = match wanted {
+            RouteKind::Embedding => info.kind().serves_embeddings(),
+            _ => info.kind().serves_chat(),
+        };
+        if !serves {
+            return Err(GatewayError::WrongRouteKind {
+                route: route.to_owned(),
+                wanted,
+            });
+        }
+        if let Some(area) = &caller.area {
+            if self.inner.in_country_areas.contains(area) && info.residency() == Residency::Abroad {
+                return Err(GatewayError::Residency {
+                    route: route.to_owned(),
+                    area: area.clone(),
+                });
+            }
+        }
+        Ok(info)
     }
 
     /// Give the held units back and pass `error` on.
@@ -801,6 +871,241 @@ impl Gateway {
             if let Some(a) = masked_answer {
                 entry = entry.with_detail("answer_masked", cut(&a.text(), 2000));
             }
+        }
+        self.inner
+            .audit
+            .record(&entry.redacted())
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Vectors from the embedding route `route`, one per input, through the same
+    /// stages as a chat call:
+    ///
+    /// ```text
+    /// Identify → Authorize → Budget.reserve → Mask → Guard.input
+    ///         → model (the route) → Budget.settle → Audit
+    /// ```
+    ///
+    /// - **Authorize** also checks the route's kind: a chat route refuses an
+    ///   embedding call unless it was declared [`RouteKind::ChatAndEmbedding`].
+    /// - **Mask** runs under the same rule as chat — always on an `abroad` route,
+    ///   on an `in_country` one unless [`mask_in_country(false)`](GatewayBuilder::mask_in_country)
+    ///   — and a credential refuses the call. The vector is therefore the vector
+    ///   of the **masked** text (`O NIF ‹TAX_ID_1›`): a search by the exact value
+    ///   of a masked identifier does not find it. A deployment that needs that
+    ///   embeds with an `in_country` route on a gateway that does not mask in the
+    ///   country.
+    /// - **Guard** runs [`Guardrail::check_embedding_input`] on the masked texts.
+    ///   A vector carries no text, so there is no output guard and nothing to
+    ///   unmask; the answer is checked for shape (one vector per input, one
+    ///   dimension, finite numbers).
+    /// - **Budget** holds the texts' size (characters ÷ 4) and settles the
+    ///   provider's input tokens — the estimate when the provider reports none.
+    /// - **Audit** writes one `llm.embed` record — counts, the upstream, the
+    ///   dimension; never a text, a vector or a masked value.
+    pub async fn embed(
+        &self,
+        caller: &Caller,
+        route: &str,
+        inputs: Vec<String>,
+    ) -> Result<GatedEmbeddings, GatewayError> {
+        let span = tracing::info_span!(
+            "gen_ai.embeddings",
+            gen_ai.operation.name = "embeddings",
+            seiva.route = route,
+            gen_ai.response.model = tracing::field::Empty,
+            gen_ai.usage.input_tokens = tracing::field::Empty,
+            seiva.outcome = tracing::field::Empty,
+        );
+        let mut report = CallReport::default();
+        let outcome = self
+            .run_embed(caller, route, &inputs, &mut report)
+            .instrument(span.clone())
+            .await;
+        span.record(
+            "seiva.outcome",
+            outcome.as_ref().map_or_else(|e| e.code(), |_| "ok"),
+        );
+        let embeddings = match outcome {
+            Ok(e) => e,
+            Err(e) => {
+                // A refusal is audited too; its error stands whatever the audit does.
+                let _ = self
+                    .record_embed(caller, route, inputs.len(), None, &report, Err(&e))
+                    .await;
+                return Err(e);
+            }
+        };
+        span.record("gen_ai.usage.input_tokens", report.usage.total_input());
+        if let Some(up) = &report.upstream {
+            span.record("gen_ai.response.model", up.as_str());
+        }
+        report.stages.push(Stage::Audit);
+        let dimensions = embeddings.vectors.first().map_or(0, Vec::len);
+        match self
+            .record_embed(
+                caller,
+                route,
+                inputs.len(),
+                Some(dimensions),
+                &report,
+                Ok(()),
+            )
+            .await
+        {
+            Ok(()) => {}
+            Err(e) if self.inner.audit_mode == AuditMode::Required => {
+                return Err(GatewayError::AuditFailed(e))
+            }
+            Err(e) => tracing::error!(route, error = %e, "the audit record could not be written"),
+        }
+        Ok(GatedEmbeddings { embeddings, report })
+    }
+
+    async fn run_embed(
+        &self,
+        caller: &Caller,
+        route: &str,
+        inputs: &[String],
+        report: &mut CallReport,
+    ) -> Result<Embeddings, GatewayError> {
+        let inner = &self.inner;
+        let principal = &caller.principal;
+
+        // Identify, Authorize.
+        let info = self.admit(caller, route, RouteKind::Embedding, report)?;
+        let abroad = info.residency() == Residency::Abroad;
+        if inputs.is_empty() {
+            return Err(GatewayError::Blocked {
+                stage: "request".into(),
+                reason: "there is nothing to embed".into(),
+            });
+        }
+        report.stages.push(Stage::Authorize);
+
+        // Budget: an embedding produces no tokens, so the texts' size is the hold.
+        let keys = budget_keys(caller);
+        let chars: usize = inputs.iter().map(|t| t.chars().count()).sum();
+        let estimate = (chars as u64) / 4 + 1;
+        let reservation = inner
+            .budget
+            .reserve(&keys, estimate)
+            .await
+            .map_err(budget_refusal)?;
+        report.reserved = estimate;
+        report.stages.push(Stage::BudgetReserve);
+
+        // Mask: one vault for the call, so a value repeated across inputs gets one
+        // placeholder.
+        let refuse = inner.credentials == CredentialPolicy::Refuse;
+        let mut vault = Vault::default();
+        let mut masked = Vec::with_capacity(inputs.len());
+        for text in inputs {
+            let m = if abroad || inner.mask_in_country {
+                inner.masker.mask_text(text, &mut vault, refuse)
+            } else if refuse && inner.masker.has_credential(text) {
+                Err(crate::mask::CredentialFound)
+            } else {
+                Ok(text.clone())
+            };
+            match m {
+                Ok(m) => masked.push(m),
+                Err(_) => return Err(self.release(&reservation, credential_blocked()).await),
+            }
+        }
+        report.masked = vault.counts().clone();
+        report.stages.push(Stage::Mask);
+
+        // Input guardrails.
+        let ctx = GuardContext { route, principal };
+        for g in &inner.guards {
+            let refusal = match g.check_embedding_input(&ctx, &masked).await {
+                Ok(Verdict::Allow) => continue,
+                Ok(Verdict::Block(reason)) => GatewayError::Blocked {
+                    stage: g.name().to_owned(),
+                    reason,
+                },
+                Err(reason) => GatewayError::GuardFailed {
+                    guard: g.name().to_owned(),
+                    reason,
+                },
+            };
+            return Err(self.release(&reservation, refusal).await);
+        }
+        report.stages.push(Stage::GuardInput);
+
+        // The model.
+        let embeddings = match inner.router.embed(route, &masked).await {
+            Ok(e) => e,
+            Err(e) => return Err(self.release(&reservation, GatewayError::Model(e)).await),
+        };
+        report.upstream = embeddings.upstream.clone();
+        report.usage = embeddings.usage;
+        let reported = embeddings.usage.total_input();
+        // Unmetered spend is spend nobody approved: without the provider's count,
+        // the estimate is what was spent.
+        let spent = if reported > 0 { reported } else { estimate };
+        if let Err(reason) = vector_shape(&embeddings, inputs.len()) {
+            let _ = inner.budget.settle(&reservation, spent).await;
+            return Err(GatewayError::Model(LlmError::Decode(reason)));
+        }
+        report.stages.push(Stage::Model);
+
+        // Settle.
+        if let Err(e) = inner.budget.settle(&reservation, spent).await {
+            let message = match e {
+                BudgetError::Unavailable(m) => m,
+                BudgetError::Exceeded(k) => format!("settling {k}"),
+            };
+            return Err(GatewayError::BudgetUnavailable(message));
+        }
+        report.stages.push(Stage::BudgetSettle);
+        Ok(embeddings)
+    }
+
+    /// The audit entry of an embedding call: counts, the upstream, the
+    /// dimension — never a text or a vector.
+    async fn record_embed(
+        &self,
+        caller: &Caller,
+        route: &str,
+        inputs: usize,
+        dimensions: Option<usize>,
+        report: &CallReport,
+        outcome: Result<(), &GatewayError>,
+    ) -> Result<(), String> {
+        let code = match outcome {
+            Ok(()) => "ok",
+            Err(e) => e.code(),
+        };
+        let p = &caller.principal;
+        let mut entry = AuditEntry::new(p.subject.clone(), "llm.embed", code)
+            .in_tenant(p.tenant.clone())
+            .on_object(Some(route.to_owned()))
+            .with_request_id(caller.request_id.clone())
+            .with_detail("inputs", inputs.to_string());
+        if let Some(area) = &caller.area {
+            entry = entry.with_detail("area", area.clone());
+        }
+        if let Some(up) = &report.upstream {
+            entry = entry.with_detail("upstream", up.clone());
+        }
+        entry = entry.with_detail("usage_in", report.usage.input_tokens.to_string());
+        if let Some(d) = dimensions {
+            entry = entry.with_detail("dimensions", d.to_string());
+        }
+        if !report.masked.is_empty() {
+            let masked = report
+                .masked
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            entry = entry.with_detail("masked", masked);
+        }
+        if let Err(e) = outcome {
+            entry = entry.with_detail("reason", e.to_string());
         }
         self.inner
             .audit
@@ -1067,6 +1372,53 @@ impl StreamState {
         self.out.push_back(Ok(StreamEvent::Completed(response)));
         self.done = true;
     }
+}
+
+/// Every budget the caller spends from: theirs, their tenant's, their area's.
+fn budget_keys(caller: &Caller) -> Vec<BudgetKey> {
+    let principal = &caller.principal;
+    let mut keys = vec![BudgetKey::new(
+        BudgetScope::Principal,
+        principal.subject.clone(),
+    )];
+    if let Some(t) = &principal.tenant {
+        keys.push(BudgetKey::new(BudgetScope::Tenant, t.clone()));
+    }
+    if let Some(a) = &caller.area {
+        keys.push(BudgetKey::new(BudgetScope::Area, a.clone()));
+    }
+    keys
+}
+
+fn budget_refusal(e: BudgetError) -> GatewayError {
+    match e {
+        BudgetError::Exceeded(key) => GatewayError::BudgetExceeded {
+            scope: key.to_string(),
+        },
+        BudgetError::Unavailable(m) => GatewayError::BudgetUnavailable(m),
+    }
+}
+
+/// One vector per input, every vector of one non-zero dimension, every number
+/// finite — what a vector index can store.
+fn vector_shape(e: &Embeddings, inputs: usize) -> Result<(), String> {
+    if e.vectors.len() != inputs {
+        return Err(format!(
+            "expected {inputs} embeddings, got {}",
+            e.vectors.len()
+        ));
+    }
+    let dimensions = e.vectors.first().map_or(0, Vec::len);
+    if dimensions == 0 {
+        return Err("the provider returned an empty vector".into());
+    }
+    if e.vectors.iter().any(|v| v.len() != dimensions) {
+        return Err("the provider returned vectors of different dimensions".into());
+    }
+    if e.vectors.iter().flatten().any(|x| !x.is_finite()) {
+        return Err("the provider returned a number that is not finite".into());
+    }
+    Ok(())
 }
 
 fn credential_blocked() -> GatewayError {

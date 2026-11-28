@@ -36,6 +36,15 @@ pub enum LlmError {
     /// No route with this name.
     #[error("unknown route `{0}`")]
     UnknownRoute(String),
+    /// The route does not serve this kind of call: a chat call to an embedding
+    /// route, or the other way round.
+    #[error("route `{route}` does not serve {wanted} calls")]
+    WrongRouteKind {
+        /// The route.
+        route: String,
+        /// The kind of call that was made.
+        wanted: crate::RouteKind,
+    },
     /// Every upstream of the route failed; `last` is the final error.
     #[error("every upstream of route `{route}` failed; last: {last}")]
     AllUpstreamsFailed {

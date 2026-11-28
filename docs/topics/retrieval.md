@@ -1,7 +1,7 @@
 # Retrieval (RAG)
 
-> **Status: phase G6 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md)**, in
-> `seiva-rag`.
+> **Status: phases G6 and G7 of [ADR 0048](../adr/0048-ai-gateway-and-llm-harness.md)**,
+> in `seiva-rag` and `seiva-rag-pgvector`.
 
 Retrieval-augmented generation answers from the organisation's own documents. Two things
 make it safe to put in front of people: a search that only ever finds what the reader may
@@ -24,7 +24,12 @@ A document without a source and a writer is refused, and every chunk keeps both 
 poisoned chunk can be traced and removed (OWASP LLM04). Ingesting the same id again
 replaces the document; `remove` deletes it.
 
-The embedding model sees the text: prefer an in-country embedder for personal data.
+The embedding model sees the text. Embed through the [gateway](language-models.md#embeddings-through-the-gateway)
+— `gateway.embedder(caller)` in-process, or `seiva-llm`'s OpenAI-compatible embedder
+pointed at the gateway server — and the texts are masked, budgeted and audited like any
+model call. Masking changes what is embedded (`‹TAX_ID_1›`, not the number), so a search
+for the exact value of a masked identifier will not find it; where that matters, embed on
+an `in_country` route with in-country masking off.
 
 ## Search as the reader
 
@@ -39,6 +44,29 @@ caller's principal: chunks of their tenant (or shared ones, `tenant: None`) whos
 before the `ORDER BY … LIMIT k` — so the top `k` are counted among visible chunks and an
 invisible chunk never leaves the store (OWASP LLM08). A principal with no tenant sees only
 shared documents.
+
+## On Postgres: pgvector
+
+```rust
+use seiva_rag_pgvector::{sqlx::PgPool, AnnIndex, PgVectorConfig, PgVectorIndex};
+
+let pool = PgPool::connect(&database_url).await?;
+let index = PgVectorIndex::new(pool, PgVectorConfig::new(1024)?);   // HNSW, cosine
+index.migrate().await?;   // CREATE EXTENSION IF NOT EXISTS vector, the table, the indexes
+let index: Arc<dyn VectorIndex> = Arc::new(index);
+```
+
+`seiva-rag-pgvector` keeps the chunks in one table (provenance columns `NOT NULL`, the
+column's dimension checked on every write and query) and puts the reader's filter in the
+SQL `WHERE`, before `ORDER BY embedding <=> $query LIMIT k`. With an approximate index it
+turns on pgvector's iterative index scans (pgvector 0.8 or later), so a selective filter —
+one tenant among many — still fills `k` instead of returning fewer rows;
+`AnnIndex::Exact` skips the approximate index for exact results, `AnnIndex::IvfFlat` builds
+IVFFlat instead of HNSW. Scores are the same cosine as `InMemoryIndex`'s, and
+`replace_document` is one transaction, so a reader sees one version of a document or the
+other. `migrate` refuses a table of another dimension rather than altering it; the DDL is
+also available (`PgVectorConfig::migrations`) for a deployment that runs its own
+migrations. The crate links sqlx, so it stays out of Seiva's default build.
 
 ## Answers that cite
 

@@ -8,9 +8,11 @@
 //! | `POST /v1/chat/completions` | OpenAI Chat Completions, whole or streamed |
 //! | `POST /v1/messages` | Anthropic Messages, whole or streamed |
 //! | `POST /v1/messages/count_tokens` | Anthropic token count (an estimate) |
-//! | `GET /v1/models` | the routes this caller may use, in a shape both clients read |
+//! | `POST /v1/embeddings` | OpenAI Embeddings, through [`Gateway::embed`] |
+//! | `GET /v1/models` | the routes this caller may use, in a shape both clients read, each with its `capabilities` (`chat`, `embeddings`) |
 //!
-//! The `model` a client sends is a gateway **route**. The client authenticates
+//! The `model` a client sends is a gateway **route** — a chat route for the chat
+//! endpoints, an embedding route for `/v1/embeddings`. The client authenticates
 //! with a gateway key (`Authorization: Bearer <key>` or `x-api-key: <key>`), never
 //! a provider key; the key decides the principal and the area. Errors come back
 //! in the client's own error shape, and never carry a prompt, an answer or a
@@ -38,6 +40,7 @@ use crate::guard::request_chars;
 use crate::{Caller, Gateway, GatewayError};
 
 mod anthropic;
+mod embeddings;
 mod keys;
 mod openai;
 
@@ -97,6 +100,7 @@ pub fn router(state: ServerState) -> axum::Router {
         .route("/v1/chat/completions", post(openai_chat))
         .route("/v1/messages", post(anthropic_messages))
         .route("/v1/messages/count_tokens", post(anthropic_count))
+        .route("/v1/embeddings", post(openai_embeddings))
         .route("/v1/models", get(models))
         .layer(DefaultBodyLimit::max(limit))
         .with_state(state)
@@ -192,23 +196,15 @@ impl ApiError {
     }
 
     fn from_gateway(e: &GatewayError) -> Self {
-        let (status, kind) = match e {
-            GatewayError::Unauthenticated => (StatusCode::UNAUTHORIZED, "authentication_error"),
-            GatewayError::Forbidden { .. }
-            | GatewayError::ToolNotAllowed { .. }
-            | GatewayError::Residency { .. } => (StatusCode::FORBIDDEN, "permission_error"),
-            GatewayError::BudgetExceeded { .. } => {
-                (StatusCode::TOO_MANY_REQUESTS, "rate_limit_error")
-            }
-            GatewayError::Blocked { .. } => (StatusCode::BAD_REQUEST, "invalid_request_error"),
-            GatewayError::Model(LlmError::UnknownRoute(_)) => {
-                (StatusCode::NOT_FOUND, "not_found_error")
-            }
-            GatewayError::Model(_) => (StatusCode::BAD_GATEWAY, "api_error"),
-            GatewayError::BudgetUnavailable(_) | GatewayError::GuardFailed { .. } => {
-                (StatusCode::SERVICE_UNAVAILABLE, "api_error")
-            }
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "api_error"),
+        let status =
+            StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let kind = match status.as_u16() {
+            401 => "authentication_error",
+            403 => "permission_error",
+            429 => "rate_limit_error",
+            400 => "invalid_request_error",
+            404 => "not_found_error",
+            _ => "api_error",
         };
         Self {
             status,
@@ -392,6 +388,34 @@ async fn anthropic_messages(
     }
 }
 
+async fn openai_embeddings(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let rid = request_id(&headers);
+    let result: Result<Response, ApiError> = async {
+        let caller = authenticate(&state, &headers, &rid)?;
+        let parsed = embeddings::parse(&read_json(&body)?).map_err(ApiError::bad_request)?;
+        let gated = state
+            .gateway
+            .embed(&caller, &parsed.route, parsed.inputs)
+            .await
+            .map_err(|e| ApiError::from_gateway(&e))?;
+        Ok(Json(embeddings::render(
+            &parsed.route,
+            &gated.embeddings,
+            parsed.encoding,
+        ))
+        .into_response())
+    }
+    .await;
+    match result {
+        Ok(r) => with_request_id(r, &rid),
+        Err(e) => e.render(Shape::OpenAi, &rid),
+    }
+}
+
 /// An estimate (characters ÷ 4): no model is called and nothing leaves.
 async fn anthropic_count(
     State(state): State<ServerState>,
@@ -422,7 +446,9 @@ async fn anthropic_count(
 }
 
 /// The routes this caller may use, in a shape both the OpenAI and the Anthropic
-/// clients read (`object` for one, `type`/`display_name` for the other).
+/// clients read (`object` for one, `type`/`display_name` for the other), each with
+/// `capabilities`: `["chat"]`, `["embeddings"]` or both, so a client tells a chat
+/// route from an embedding route.
 async fn models(State(state): State<ServerState>, headers: HeaderMap) -> Response {
     let rid = request_id(&headers);
     let caller = match authenticate(&state, &headers, &rid) {
@@ -436,13 +462,23 @@ async fn models(State(state): State<ServerState>, headers: HeaderMap) -> Respons
             return e.render(shape, &rid);
         }
     };
-    let names = state.gateway.routes_for(&caller);
-    let data: Vec<Value> = names
+    let routes = state.gateway.routes_available_to(&caller);
+    let names: Vec<&str> = routes.iter().map(|r| r.name()).collect();
+    let data: Vec<Value> = routes
         .iter()
-        .map(|n| {
+        .map(|r| {
+            let n = r.name();
+            let mut capabilities = Vec::new();
+            if r.kind().serves_chat() {
+                capabilities.push("chat");
+            }
+            if r.kind().serves_embeddings() {
+                capabilities.push("embeddings");
+            }
             json!({
                 "id": n, "object": "model", "owned_by": "seiva-ai-gateway", "created": 0,
                 "type": "model", "display_name": n, "created_at": "1970-01-01T00:00:00Z",
+                "capabilities": capabilities,
             })
         })
         .collect();

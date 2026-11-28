@@ -29,6 +29,13 @@
 //! requires = "llm.support"
 //! upstreams = ["anthropic/claude-sonnet-5-5", "local/llama3.3"]
 //!
+//! [[routes]]
+//! name = "docs-embed"
+//! kind = "embedding"                     # chat (default) | embedding | chat+embedding
+//! residency = "in_country"
+//! requires = "llm.embed"
+//! upstreams = ["local/bge-m3"]           # openai, gemini, openai-compatible providers
+//!
 //! [gateway]
 //! areas_in_country = ["hr"]
 //! tools = { customer_lookup = "customers.read" }
@@ -56,7 +63,8 @@ use seiva_identity::Principal;
 use seiva_llm::providers::anthropic::Anthropic;
 use seiva_llm::providers::openai::OpenAiCompatible;
 use seiva_llm::{
-    ChatProvider, CredentialSource, Endpoint, HttpTransport, Residency, Route, Router,
+    ChatProvider, CredentialSource, Embedder, Endpoint, HttpTransport, Residency, Route, RouteKind,
+    Router,
 };
 use seiva_ports::{AuditEntry, AuditSink, Clock, PortResult};
 use serde::Deserialize;
@@ -159,6 +167,9 @@ pub struct RouteConfig {
     pub name: String,
     /// `abroad` or `in_country`.
     pub residency: String,
+    /// `chat` (the default), `embedding`, or `chat+embedding` — a route serves
+    /// one kind unless it says both.
+    pub kind: Option<String>,
     /// The permission a caller needs.
     pub requires: Option<String>,
     /// Any authenticated caller may use it.
@@ -228,11 +239,15 @@ fn residency(s: &str, what: &str) -> Result<Residency, String> {
     }
 }
 
+/// A configured provider: its chat side and, when its API has one, its
+/// embeddings side (OpenAI-compatible APIs do; Anthropic's does not).
+type Built = (Arc<dyn ChatProvider>, Option<Arc<dyn Embedder>>);
+
 fn provider(
     p: &ProviderConfig,
     transport: &Arc<dyn HttpTransport>,
     creds: &Arc<dyn CredentialSource>,
-) -> Result<Arc<dyn ChatProvider>, String> {
+) -> Result<Built, String> {
     let what = format!("provider `{}`", p.name);
     let endpoint = |url: &str| {
         if p.plaintext {
@@ -253,7 +268,7 @@ fn provider(
             if let Some(cred) = &p.credential {
                 a = a.with_credential(cred);
             }
-            Arc::new(a)
+            (Arc::new(a), None)
         }
         "openai" | "gemini" => {
             let default_credential = if p.kind == "openai" {
@@ -271,10 +286,14 @@ fn provider(
                 o = o.with_credential(cred);
             }
             // The presets name themselves `openai`/`gemini`: the configured name wins.
-            Arc::new(NamedProvider {
-                name: p.name.clone(),
-                inner: Arc::new(o),
-            })
+            let o = Arc::new(o);
+            (
+                Arc::new(NamedProvider {
+                    name: p.name.clone(),
+                    inner: o.clone(),
+                }),
+                Some(o as Arc<dyn Embedder>),
+            )
         }
         "openai-compatible" => {
             let url = p
@@ -285,7 +304,8 @@ fn provider(
             if let Some(cred) = &p.credential {
                 o = o.with_credential(cred);
             }
-            Arc::new(o)
+            let o = Arc::new(o);
+            (o.clone(), Some(o as Arc<dyn Embedder>))
         }
         other => return Err(format!("{what}: unknown kind `{other}`")),
     })
@@ -331,16 +351,28 @@ pub fn build(
         config.limits.attempt_timeout_secs.max(1),
     ));
     for p in &config.providers {
-        rb = rb.provider(
-            provider(p, &transport, &credentials)?,
-            residency(&p.residency, &format!("provider `{}`", p.name))?,
-        );
+        let (chat, embedder) = provider(p, &transport, &credentials)?;
+        let where_ = residency(&p.residency, &format!("provider `{}`", p.name))?;
+        rb = rb.provider(chat, where_);
+        if let Some(e) = embedder {
+            rb = rb.embedder(&p.name, e, where_);
+        }
     }
     for r in &config.routes {
+        let kind = match r.kind.as_deref() {
+            None => RouteKind::Chat,
+            Some(k) => RouteKind::parse(k).ok_or_else(|| {
+                format!(
+                    "route `{}`: kind must be `chat`, `embedding` or `chat+embedding`, not `{k}`",
+                    r.name
+                )
+            })?,
+        };
         let mut route = Route::new(
             &r.name,
             residency(&r.residency, &format!("route `{}`", r.name))?,
-        );
+        )
+        .with_kind(kind);
         if let Some(p) = &r.requires {
             route = route.requires(p);
         }

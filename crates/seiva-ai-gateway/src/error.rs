@@ -1,6 +1,6 @@
 //! Why the gateway refused or stopped a call.
 
-use seiva_llm::LlmError;
+use seiva_llm::{LlmError, RouteKind};
 
 /// A call the gateway did not let through, or could not finish.
 ///
@@ -37,6 +37,16 @@ pub enum GatewayError {
         route: String,
         /// The caller's area.
         area: String,
+    },
+    /// The route does not serve this kind of call: an embedding call to a chat
+    /// route, or the other way round. A route serves both only when its
+    /// configuration says so.
+    #[error("route `{route}` does not serve {wanted} calls")]
+    WrongRouteKind {
+        /// The route.
+        route: String,
+        /// The kind of call that was made.
+        wanted: RouteKind,
     },
     /// A budget is spent.
     #[error("the {scope} budget is spent")]
@@ -81,12 +91,29 @@ impl GatewayError {
             Self::Forbidden { .. } => "forbidden",
             Self::ToolNotAllowed { .. } => "tool_not_allowed",
             Self::Residency { .. } => "residency",
+            Self::WrongRouteKind { .. } => "wrong_route_kind",
             Self::BudgetExceeded { .. } => "budget_exceeded",
             Self::BudgetUnavailable(_) => "budget_unavailable",
             Self::Blocked { .. } => "blocked",
             Self::GuardFailed { .. } => "guard_failed",
             Self::AuditFailed(_) => "audit_failed",
             Self::Model(_) => "model_error",
+        }
+    }
+
+    /// The HTTP status this refusal answers with — the server shape's, and the
+    /// one an in-process [`GatewayEmbedder`](crate::GatewayEmbedder) reports, so a
+    /// client sees the same outcome whichever shape it calls.
+    pub fn http_status(&self) -> u16 {
+        match self {
+            Self::Unauthenticated => 401,
+            Self::Forbidden { .. } | Self::ToolNotAllowed { .. } | Self::Residency { .. } => 403,
+            Self::BudgetExceeded { .. } => 429,
+            Self::Blocked { .. } | Self::WrongRouteKind { .. } => 400,
+            Self::Model(LlmError::UnknownRoute(_)) => 404,
+            Self::Model(_) => 502,
+            Self::BudgetUnavailable(_) | Self::GuardFailed { .. } => 503,
+            Self::AuditFailed(_) => 500,
         }
     }
 }

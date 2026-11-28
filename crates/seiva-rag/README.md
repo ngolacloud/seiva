@@ -5,7 +5,7 @@ Retrieval with permissions, and answers that cite — phase G6 of
 DORM-free.
 
 ```rust
-let index = Arc::new(InMemoryIndex::new());          // or the pgvector adapter
+let index = Arc::new(InMemoryIndex::new());          // or seiva-rag-pgvector's PgVectorIndex
 let ingestor = Ingestor::new(embedder.clone(), "embed-model", index.clone());
 ingestor.ingest(&Document {
     id: "hr-leave-policy".into(),
@@ -29,6 +29,11 @@ if a.uncited { /* show it as unsupported */ }
 
 With the `agent` feature (default), `SearchTool` is a `search_documents` tool for
 `seiva-agent` that searches as the person.
+
+The Postgres index is [`seiva-rag-pgvector`](../seiva-rag-pgvector): the same port, the
+filter in the SQL `WHERE` before the nearest-neighbour `ORDER BY … LIMIT k`. Embed through
+the AI gateway (`gateway.embedder(caller)`, or `seiva-llm`'s OpenAI-compatible embedder
+pointed at its `/v1/embeddings`) so the texts are masked, budgeted and audited.
 
 ## License
 

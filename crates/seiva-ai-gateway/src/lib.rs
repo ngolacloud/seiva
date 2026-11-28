@@ -53,9 +53,15 @@
 //! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(demo());
 //! ```
 //!
+//! Embeddings take the same path (G7): [`Gateway::embed`] — or
+//! [`Gateway::embedder`], an [`Embedder`](seiva_llm::Embedder) for retrieval —
+//! runs Identify, Authorize (the route's kind too), Budget, Mask, Guard (in),
+//! the model, Settle and Audit. A vector carries no text, so there is no output
+//! guard and nothing to unmask.
+//!
 //! With the `server` feature, `server::router` puts the same gateway behind
-//! OpenAI- and Anthropic-compatible endpoints (G3); the runnable binary is the
-//! `apps/ai-gateway` app.
+//! OpenAI- and Anthropic-compatible endpoints (G3), `/v1/embeddings` included;
+//! the runnable binary is the `apps/ai-gateway` app.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -73,8 +79,8 @@ pub use budget::{BudgetError, BudgetKey, BudgetScope, BudgetStore, InMemoryBudge
 pub use detect::{Detector, PatternDetector};
 pub use error::GatewayError;
 pub use gateway::{
-    AuditMode, BuildError, CallReport, Caller, CredentialPolicy, Gated, Gateway, GatewayBuilder,
-    RevealPolicy, Stage,
+    AuditMode, BuildError, CallReport, Caller, CredentialPolicy, Gated, GatedEmbeddings, Gateway,
+    GatewayBuilder, GatewayEmbedder, RevealPolicy, Stage,
 };
 pub use guard::{GuardContext, Guardrail, JsonOutput, SizeLimit, Verdict, UNTRUSTED_NOTICE};
 pub use mask::{unmask_response, CredentialFound, Masker, Vault};

@@ -87,9 +87,10 @@ pub struct IngestReport {
 
 /// Cuts, embeds and indexes documents.
 ///
-/// The embedding model sees the document text. A model outside the country gets
-/// it in clear unless the deployment masks first — prefer an in-country embedder
-/// for personal data.
+/// The embedding model sees the document text. Hand the ingestor the gateway's
+/// embedder (`Gateway::embedder`, or an OpenAI-compatible embedder pointed at the
+/// gateway server) and the text is masked, budgeted and audited on its way out;
+/// an embedder called directly sends it as it is.
 pub struct Ingestor {
     embedder: Arc<dyn Embedder>,
     model: String,

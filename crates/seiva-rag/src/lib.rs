@@ -21,8 +21,10 @@
 //! - **For agents.** With the `agent` feature, `SearchTool` is a
 //!   `search_documents` tool for `seiva-agent`, searching as the person.
 //!
-//! [`InMemoryIndex`] ships; the DORM/pgvector adapter (`seiva-rag-worker`)
-//! implements the same [`VectorIndex`].
+//! [`InMemoryIndex`] ships; `seiva-rag-pgvector` implements the same
+//! [`VectorIndex`] on Postgres + pgvector (G7). Embed through the gateway
+//! (`seiva_ai_gateway::Gateway::embedder`) so the texts are masked, budgeted and
+//! audited like any model call.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
