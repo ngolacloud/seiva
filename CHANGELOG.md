@@ -30,6 +30,20 @@ While the project is pre-1.0, the public API may change in a minor release.
   dimension checks, `migrate` (extension, table, HNSW or IVFFlat index), and the same
   cosine scores as `InMemoryIndex`; its own CI job runs against `pgvector/pgvector:pg16`.
 
+### Changed
+
+- `seiva_llm::Embeddings` carries the `upstream` that answered (stamped by the router).
+  `seiva_ai_gateway::GatewayError` gains `WrongRouteKind` and `http_status()`;
+  `seiva_llm::LlmError` gains `WrongRouteKind`.
+
+## [0.2.3] - 2026-11-28
+
+Published on crates.io — every framework crate at 0.2.3. New crates on crates.io
+for the first time: `seiva-kms` (envelope encryption), `seiva-agent` and
+`seiva-rag`. Projects with `"0.2"` requirements pick it up with `cargo update`.
+
+### Added
+
 - **Envelope encryption** (ADR 0049): the new `seiva-kms` crate, extracted from
   dxstorage. A `KeyWrapper` port for the guardian of the key-encryption key, with two
   adapters: `LocalKek` (feature `local`, on by default; one base64 key per line, the first
@@ -61,12 +75,10 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ### Changed
 
-- `seiva_llm::Embeddings` carries the `upstream` that answered (stamped by the router).
-  `seiva_ai_gateway::GatewayError` gains `WrongRouteKind` and `http_status()`;
-  `seiva_llm::LlmError` gains `WrongRouteKind`.
 - `seiva_llm::HttpResponse` carries the response headers (`headers`, `header(..)`,
   `with_header(..)`) and is `#[non_exhaustive]`: build it with `new`/`from_bytes`. The
-  reqwest transport fills them in.
+  reqwest transport fills them in. A custom `HttpTransport` written against 0.2.2 that
+  built `HttpResponse { status, body }` by struct literal must switch to the constructors.
 
 ## [0.2.2] - 2026-11-27
 
@@ -243,7 +255,8 @@ dual MIT/Apache licence.
   store, in-process event choreography.
 - Two reference five-layer modules (`notes`, `accounts`) and a shop tutorial.
 
-[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/ngolacloud/seiva/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/ngolacloud/seiva/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/ngolacloud/seiva/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/ngolacloud/seiva/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ngolacloud/seiva/compare/v0.1.0...v0.2.0

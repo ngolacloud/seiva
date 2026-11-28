@@ -40,8 +40,8 @@ tokio = { version = "1", default-features = false, features = ["sync", "time", "
 # The authenticated caller the socket is bound to, and the isolation scope — the
 # same identity model every Seiva transport builds on (ADR 0006). Both are core,
 # data-layer-free crates: no runtime rides in through them.
-seiva-identity = { version = "0.2.2", path = "../seiva-identity" }
-seiva-ports = { version = "0.2.2", path = "../seiva-ports" }
+seiva-identity = { version = "0.2.3", path = "../seiva-identity" }
+seiva-ports = { version = "0.2.3", path = "../seiva-ports" }
 # Hash the dev connection-token at rest, exactly like `seiva-identity`'s token map.
 sha2 = "0.10"
 

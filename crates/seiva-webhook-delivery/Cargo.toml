@@ -37,12 +37,12 @@ testing = []
 [dependencies]
 # The engine, the ledger port, the signer port and the delivery row types
 # (ADR 0033). `delivery` is on by default; this crate uses only those ports.
-seiva-webhooks = { version = "0.2.2", path = "../seiva-webhooks" }
+seiva-webhooks = { version = "0.2.3", path = "../seiva-webhooks" }
 # The `EventSubscriber` trait the subscriber plugs into (ADR 0021). DORM-free.
-seiva-events = { version = "0.2.2", path = "../seiva-events", default-features = false }
+seiva-events = { version = "0.2.3", path = "../seiva-events", default-features = false }
 # The CloudEvents envelope the subscriber reacts to — the SAME event the broker
 # path carries. `default-features = false` pulls no broker backend.
-seiva-messaging = { version = "0.2.2", path = "../seiva-messaging", default-features = false }
+seiva-messaging = { version = "0.2.3", path = "../seiva-messaging", default-features = false }
 # The tenant `Scope` a subscription (and thus every delivery) is keyed under, plus
 # the `PortResult`/`BoxError` boundary the subscriber and the job return on.
 seiva-ports = { workspace = true }

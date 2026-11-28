@@ -14,7 +14,7 @@
 # it.
 [package]
 name = "seiva-rag-pgvector"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["NgolaCloud <angolar.devops@gmail.com>"]
@@ -28,7 +28,7 @@ categories = ["database"]
 
 [dependencies]
 # The port this crate implements. Without `agent`: an index needs no agent tool.
-seiva-rag = { version = "0.2.2", path = "../seiva-rag", default-features = false }
+seiva-rag = { version = "0.2.3", path = "../seiva-rag", default-features = false }
 async-trait = "0.1"
 # The same query layer as `seiva-data-sqlx` (ADR 0030): the runtime query API
 # only, no compile-time macros, so no DATABASE_URL at build time. Vectors travel

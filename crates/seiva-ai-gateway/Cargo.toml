@@ -27,9 +27,9 @@ categories = ["asynchronous", "web-programming"]
 server = ["dep:axum", "dep:sha2"]
 
 [dependencies]
-seiva-llm = { version = "0.2.2", path = "../seiva-llm", default-features = false }
+seiva-llm = { version = "0.2.3", path = "../seiva-llm", default-features = false }
 # The caller is the framework's one identity model (ADR 0006).
-seiva-identity = { version = "0.2.2", path = "../seiva-identity" }
+seiva-identity = { version = "0.2.3", path = "../seiva-identity" }
 # The audit port (ADR 0013/0043) and the clock the budget windows read.
 seiva-ports = { workspace = true }
 async-trait = { workspace = true }
@@ -51,7 +51,7 @@ sha2 = { version = "0.10", optional = true }
 seiva-testing = { workspace = true, features = ["llm"] }
 # The OpenAI-compatible codec, for the proof that its `Embedder` works against the
 # gateway's `/v1/embeddings` (and as the fake upstream behind it).
-seiva-llm = { version = "0.2.2", path = "../seiva-llm", default-features = false, features = ["openai-compatible"] }
+seiva-llm = { version = "0.2.3", path = "../seiva-llm", default-features = false, features = ["openai-compatible"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tower = { version = "0.5", features = ["util"] }
 

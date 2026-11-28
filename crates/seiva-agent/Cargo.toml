@@ -28,10 +28,10 @@ facades = ["dep:seiva-mcp-server"]
 
 [dependencies]
 seiva = { workspace = true }
-seiva-llm = { version = "0.2.2", path = "../seiva-llm", default-features = false }
-seiva-ai-gateway = { version = "0.2.2", path = "../seiva-ai-gateway" }
-seiva-identity = { version = "0.2.2", path = "../seiva-identity" }
-seiva-mcp-server = { version = "0.2.2", path = "../seiva-mcp-server", optional = true }
+seiva-llm = { version = "0.2.3", path = "../seiva-llm", default-features = false }
+seiva-ai-gateway = { version = "0.2.3", path = "../seiva-ai-gateway" }
+seiva-identity = { version = "0.2.3", path = "../seiva-identity" }
+seiva-mcp-server = { version = "0.2.3", path = "../seiva-mcp-server", optional = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde_json = "1"

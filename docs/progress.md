@@ -21,6 +21,14 @@ sem elas, 0 linhas), `replace_document` numa transacção com advisory lock, pro
 dimensão, `migrate`, as mesmas pontuações do `InMemoryIndex`. **Falta:** o worker DORM
 (`seiva-rag-worker`) a implementar o mesmo port.
 
+## Estado (2026-11-28) — release 0.2.3
+
+Todos os crates do framework sobem para 0.2.3 (32 publicáveis). Pela primeira vez no
+crates.io: `seiva-kms` (ADR 0049), `seiva-agent` (G5) e `seiva-rag` (G6). Os requisitos
+`"0.2"` do scaffold ficam iguais. Nota de compatibilidade: o `seiva_llm::HttpResponse` passou
+a `#[non_exhaustive]` com `headers`; um `HttpTransport` próprio escrito contra a 0.2.2 que o
+construía por literal tem de usar `new`/`from_bytes`. Desbloqueia a V0b do Sentinel.
+
 ## Estado (2026-11-27) — ADR 0049: cifra por envelope (`seiva-kms`)
 
 Crate novo `seiva-kms` (membro, sem DORM), extraído do dxstorage (F8 `4e23bc7`, F11

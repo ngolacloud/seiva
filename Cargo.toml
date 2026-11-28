@@ -259,7 +259,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 # Dual-licensed as the Rust ecosystem is by convention, matching the Delonix
 # family (DORM, Delonix Engine), so a downstream crate can pick whichever fits.
@@ -270,16 +270,16 @@ homepage = "https://github.com/ngolacloud/seiva"
 rust-version = "1.75"
 
 [workspace.dependencies]
-seiva-ports = { version = "0.2.2", path = "crates/seiva-ports" }
+seiva-ports = { version = "0.2.3", path = "crates/seiva-ports" }
 # default-features off here (not at the member use site): next to `workspace =
 # true` the member-level `default-features` key is ignored, so the DORM toggle
 # must be declared off at the workspace root and re-enabled by `seiva-cli`'s
 # own `dorm` feature.
-seiva = { version = "0.2.2", path = "crates/seiva", default-features = false }
-seiva-worker = { version = "0.2.2", path = "crates/seiva-worker" }
-cargo-seiva = { version = "0.2.2", path = "crates/cargo-seiva" }
-seiva-testing = { version = "0.2.2", path = "crates/seiva-testing" }
-seiva-macros = { version = "0.2.2", path = "crates/seiva-macros" }
+seiva = { version = "0.2.3", path = "crates/seiva", default-features = false }
+seiva-worker = { version = "0.2.3", path = "crates/seiva-worker" }
+cargo-seiva = { version = "0.2.3", path = "crates/cargo-seiva" }
+seiva-testing = { version = "0.2.3", path = "crates/seiva-testing" }
+seiva-macros = { version = "0.2.3", path = "crates/seiva-macros" }
 async-trait = "0.1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }

@@ -15,7 +15,7 @@
 # client. CI builds it in the dedicated `adapters` matrix job.
 [package]
 name = "seiva-data-sqlx"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
