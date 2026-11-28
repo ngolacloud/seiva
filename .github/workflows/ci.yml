@@ -44,6 +44,38 @@ jobs:
       - name: Smoke-test the CLI
         run: cargo run -q -p seiva-cli --bin seiva -- doctor
 
+  # The Vault adapter of seiva-kms (ADR 0049) against a REAL Vault: transit
+  # wrapping, a transit key rotation and the re-wrap of the ring, a data-key
+  # rotation with re-sealing and retirement, AppRole with a re-login. The official
+  # image runs `vault server -dev` with no arguments; `REQUIRED=1` turns "Vault is
+  # not available" into a failure here instead of a skip.
+  kms-vault:
+    runs-on: ubuntu-latest
+    services:
+      vault:
+        image: hashicorp/vault:1.18
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: seiva-test
+        ports:
+          - 8200:8200
+        options: >-
+          --cap-add IPC_LOCK
+          --health-cmd "VAULT_ADDR=http://127.0.0.1:8200 vault status"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SEIVA_KMS_TEST_VAULT_ADDR: http://127.0.0.1:8200
+      SEIVA_KMS_TEST_VAULT_TOKEN: seiva-test
+      SEIVA_KMS_TEST_VAULT_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain
+        run: rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test seiva-kms (feature vault, live Vault)
+        run: cargo test -p seiva-kms --features vault
+
   # The CVE/KEV and supply-chain gate: cargo-deny's `advisories` check IS the
   # RUSTSEC scan (a superset of cargo-audit) and is feature-aware, so it gates on
   # exactly what a build pulls. Config in /deny.toml.

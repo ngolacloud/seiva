@@ -10,6 +10,17 @@ While the project is pre-1.0, the public API may change in a minor release.
 
 ### Added
 
+- **Envelope encryption** (ADR 0049): the new `seiva-kms` crate, extracted from
+  dxstorage. A `KeyWrapper` port for the guardian of the key-encryption key, with two
+  adapters: `LocalKek` (feature `local`, on by default; one base64 key per line, the first
+  wraps) and `VaultTransit` (feature `vault`; token, token file, AppRole or Kubernetes
+  auth, an extra CA, `wait_ready`). A pure `KeyRing` seals `sv1:<id>:<base64>` with
+  XChaCha20-Poly1305 bound to `Aad` (`org|purpose|record`) and opens dxstorage's `kms1:`
+  only through `open_kms1`. Also `RingStore` (compare-and-swap) and `Reseal` ports,
+  `MemoryRingStore`, and `RingKeeper` (load/boot with a deadline, re-wrap after a KEK
+  rotation, rotate, retire). The new `kms-vault` CI job runs the live tests against a
+  real Vault.
+
 - **Retrieval with permissions** (ADR 0048, phase G6): the new `seiva-rag` crate — a
   `VectorIndex` port whose only search takes an `AccessFilter` built from the caller's
   principal (tenant and permissions, applied in the query, so `k` counts visible chunks),
